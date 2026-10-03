@@ -1,4 +1,4 @@
-# JFLP
+# JFLP — Java Fault Localization Pipeline
 
 A modular experimental pipeline for **Spectrum-Based Fault Localization (SBFL)** on Java software.
 
