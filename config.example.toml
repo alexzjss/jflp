@@ -1,0 +1,23 @@
+[paths]
+jaguar_lib = "~/jaguar/br.usp.each.saeg.jaguar.plugin/lib" 
+workdir    = "./work"     
+results    = "./results"     
+
+[java]
+java_home = ""              
+
+[maven]
+local_repo = ""              
+
+[jaguar]
+heuristic  = "Ochiai"      
+test_scope = "all"         
+timeout_s  = 3600
+max_retries = 6
+
+[defects4j]
+home = "~/defects4j"
+projects = ["Lang", "Math", "Time", "Chart", "Closure", "Mockito"]
+
+[bugsjar]
+repos = ["~/bugs-dot-jar/maven"]
