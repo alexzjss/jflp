@@ -4,24 +4,17 @@ A modular experimental pipeline for **Spectrum-Based Fault Localization (SBFL)**
 
 JFLP automates the complete workflow required to execute and evaluate fault-localization experiments over real-world Java bugs:
 
-```text
-benchmark
-    ↓
-checkout
-    ↓
-build
-    ↓
-fault localization
-    ↓
-spectrum collection
-    ↓
-ground truth
-    ↓
-SBFL metrics
-    ↓
-evaluation
-    ↓
-reports
+```mermaid
+flowchart LR
+    A["Java Benchmarks<br/>Defects4J · Bugs.jar"]
+    B["Prepare & Build<br/>Checkout · Maven · Tests"]
+    C["Fault Localization<br/>Jaguar 2"]
+    D["Execution Spectrum<br/>cef · cep · cnf · cnp"]
+    E["SBFL Evaluation<br/>Ochiai · Tarantula · DStar<br/>Jaccard · Zoltar · ..."]
+    F["Evaluation<br/>EXAM · Top-N · Rankings"]
+    G["Results<br/>CSV · JSON · PNG"]
+
+    A --> B --> C --> D --> E --> F --> G
 ```
 
 The goal is to make fault-localization experiments **reproducible, extensible and comparable** across different Java benchmarks and projects.
