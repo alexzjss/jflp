@@ -7,10 +7,10 @@ import subprocess
 import time
 from pathlib import Path
 
-from .adapters.base import StageError
+from .errors import StageError
 from .diffgt import FaultLine, select_lines
 from .jaguar import run_jaguar
-from .proc import make_env
+from .proc import make_env, java_exe
 from .report import evaluate, parse_xml
 
 
@@ -24,10 +24,10 @@ def _save(path: Path, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def java_version(cfg) -> str:
+def java_version(cfg, java_home=None) -> str:
     try:
-        r = subprocess.run([cfg.get("java", "java"), "-version"], capture_output=True,
-                           text=True, env=make_env(cfg))
+        r = subprocess.run([java_exe(cfg, java_home), "-version"], capture_output=True,
+                           text=True, env=make_env(cfg, java_home))
         return (r.stderr or r.stdout).splitlines()[0]
     except Exception as e:
         return f"erro: {e}"
@@ -55,12 +55,13 @@ def process(cfg, adapter, bug, force=False, keep_workdir=False) -> dict:
     for old in d.glob("*"):
         old.unlink()
     meta = {"bug": bug.key, "started": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "java": java_version(cfg), "status": "error"}
+            "status": "error"}
     log = d / "jaguar.log"
     t0, ctx = time.time(), None
     try:
         ctx = adapter.prepare(bug, log)
         meta["prepare_seconds"] = round(time.time() - t0, 1)
+        meta["java"] = java_version(cfg, ctx.java_home)
         meta.update(n_test_classes=len(ctx.test_classes), **ctx.info)
         _save(d / "truth.json", [f.to_dict() for f in ctx.truth])
         jm = run_jaguar(cfg, ctx, d)

@@ -33,7 +33,10 @@ DEFAULTS = {
                        "op2", "zoltar", "barinel", "kulczynski2"],
     },
     "defects4j": {"home": "", "projects": []},
-    "bugsjar": {"repos": []},
+    "bugsjar": {"repos": [], "java_home": ""},
+    "bears": {"repo": "", "java_home": ""},
+    "gitbugjava": {"bin": "gitbug-java", "projects": [], "java_home": ""},
+    "manifest": {"files": []},
 }
 
 
@@ -43,6 +46,9 @@ class Config:
 
     def get(self, section: str, key: str):
         return self.data[section][key]
+
+    def section(self, name: str) -> dict:
+        return self.data.get(name, {})
 
     def path(self, section: str, key: str) -> Path:
         p = Path(str(self.data[section][key])).expanduser()

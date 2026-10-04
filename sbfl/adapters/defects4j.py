@@ -7,7 +7,8 @@ from pathlib import Path
 
 from ..diffgt import parse_left_hunks, faults_from_hunks
 from ..proc import run, make_env
-from .base import Adapter, Bug, Ctx, StageError, scan_test_classes
+from ..errors import StageError
+from .base import Adapter, Bug, Ctx, scan_test_classes
 
 
 class Defects4J(Adapter):

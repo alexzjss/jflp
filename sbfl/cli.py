@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import config as config_mod
-from .adapters import get_adapters
+from .adapters import get_adapters, NAMES
 from .pipeline import process, analyze_dir, java_version
 from .proc import make_env
 
@@ -17,8 +17,12 @@ def _bugs(cfg, args):
     names = None if args.benchmark == "all" else [args.benchmark]
     out = []
     for a in get_adapters(cfg, names):
-        for b in a.list_bugs(args.project, args.bug):
-            out.append((a, b))
+        try:
+            found = a.list_bugs(args.project, args.bug)
+        except Exception as e:   # um benchmark mal configurado não derruba os outros
+            print(f"[{a.name}] ignorado: {e}", file=sys.stderr)
+            continue
+        out += [(a, b) for b in found]
     return out[: args.limit] if args.limit else out
 
 
@@ -41,6 +45,13 @@ def cmd_doctor(cfg, args):
         chk("defects4j", (Path(d4j).expanduser() / "framework/bin/defects4j").exists())
     for r in cfg.get("bugsjar", "repos"):
         chk(f"repo bugs.jar {r}", (Path(r).expanduser() / ".git").exists())
+    b = cfg.get("bears", "repo")
+    if b:
+        chk(f"repo bears {b}", (Path(b).expanduser() / ".git").exists())
+    for f in cfg.get("manifest", "files"):
+        chk(f"manifest {f}", (cfg.base / f).exists() or Path(f).expanduser().exists())
+    if cfg.get("gitbugjava", "projects") or shutil.which(cfg.get("gitbugjava", "bin")):
+        chk("gitbug-java", shutil.which(cfg.get("gitbugjava", "bin")))
     return 0 if ok else 1
 
 
@@ -95,7 +106,7 @@ def main(argv=None):
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)
         if name in ("list", "run"):
-            p.add_argument("--benchmark", default="all", choices=["all", "d4j", "bugsjar"])
+            p.add_argument("--benchmark", default="all", choices=["all", *NAMES])
             p.add_argument("--project")
             p.add_argument("--bug")
             p.add_argument("--limit", type=int)

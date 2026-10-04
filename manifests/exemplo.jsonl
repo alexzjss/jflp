@@ -1,0 +1,4 @@
+# Um bug por linha. Qualquer repositório git com um commit com defeito e a correção (commit OU patch).
+{"project": "meu-projeto", "bug_id": "meu-projeto-1", "repo": "~/clones/meu-projeto", "buggy": "a1b2c3d", "fixed": "e4f5a6b"}
+{"project": "outro", "bug_id": "outro-7", "repo": "https://github.com/org/outro.git", "buggy": "v1.2.0", "fix_patch": "patches/outro-7.diff", "test_patch": "patches/outro-7.test.diff", "build": "gradle", "java_home": "/usr/lib/jvm/java-11-openjdk"}
+{"project": "legado-ant", "bug_id": "legado-3", "repo": "~/clones/legado", "buggy": "abc", "fixed": "def", "build": "custom", "custom": {"cmds": ["ant compile compile-tests"], "classes": "build/classes", "tests": "build/test-classes", "classpath": ["lib/*"]}}

@@ -4,7 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sbfl import config as C
 from sbfl.adapters.base import Ctx, scan_test_classes
-from sbfl.adapters.bugsjar import bugsjar_truth
+from sbfl.truth import git_truth, patch_truth, tree_truth
+from sbfl.build import detect, parse_gradle_info, gradle_path
+from sbfl.adapters.base import junit_flavor
 from sbfl.classfile import is_abstract_or_interface
 from sbfl.diffgt import FaultLine, faults_from_hunks, fqcn_from_path, parse_left_hunks, select_lines
 from sbfl.jaguar import run_jaguar
@@ -83,11 +85,142 @@ class T(unittest.TestCase):
             f.write_text("l1\nl2\nl3\nl4\n"); g("add", "."); g("commit", "-qm", "fix")
             fix = g("rev-parse", "HEAD")
             f.write_text("l1\nl2\nl4\n"); g("commit", "-qam", "reverse patch (buggy)")  # buggy removeu l3
-            faults, module = bugsjar_truth(t, "HEAD", fix)
+            faults, module = git_truth(t, "HEAD", fix)
             self.assertEqual(module, "mod")
             # fix ADICIONA l3 depois da linha 2 do buggy -> âncoras 2 e 3
             self.assertEqual({(x.cls, x.line, x.kind) for x in faults},
                              {("a.B", 2, "anchor"), ("a.B", 3, "anchor")})
+
+
+    # ------------------------------------------------ generalização
+    def _repo(self, t):
+        g = lambda *a: subprocess.run(["git", "-C", str(t), *a], check=True, capture_output=True, text=True).stdout.strip()
+        g("init", "-q"); g("config", "user.email", "a@b"); g("config", "user.name", "x")
+        return g
+
+    def test_bears_layout(self):
+        from sbfl.adapters.bears import Bears
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); g = self._repo(t)
+            f = t / "src/main/java/a/B.java"; f.parent.mkdir(parents=True)
+            f.write_text("l1\nl2\nl3\n"); g("add", "."); g("commit", "-qm", "#1 buggy")
+            (t / "src/test/java").mkdir(parents=True); (t / "src/test/java/BTest.java").write_text("t\n")
+            g("add", "."); g("commit", "-qm", "#2 tests")
+            f.write_text("l1\nl2\nl2b\nl3\n"); g("commit", "-qam", "#3 patched")
+            (t / "bears.json").write_text("{}"); g("add", "."); g("commit", "-qm", "#4 json")
+            g("branch", "INRIA-spoon-100-200")
+            (t / "cfg.toml").write_text(f'[bears]\nrepo="{t}"\n[paths]\nworkdir="{t}/w"\n')
+            a = Bears(C.load(t / "cfg.toml"))
+            bugs = a.list_bugs()
+            self.assertEqual([b.bug_id for b in bugs], ["INRIA-spoon-100-200"])
+            self.assertEqual(bugs[0].project, "INRIA-spoon")
+            e = bugs[0].extra
+            a.check_layout(t, bugs[0])  # layout ok, sem exceção
+            faults, module = git_truth(t, e["buggy"], e["fixed"])
+            self.assertEqual({(x.line, x.kind) for x in faults}, {(2, "anchor"), (3, "anchor")})
+            self.assertEqual(module, ".")
+
+    def test_patch_and_tree_truth(self):
+        faults, module = patch_truth_text = None, None
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            (t / "p.diff").write_text(DIFF)
+            faults, module = patch_truth(t / "p.diff")
+            self.assertEqual(module, "m")
+            self.assertIn(FaultLine("a.B", 20, "removed"), faults)
+            a, b = t / "a", t / "b"
+            for d, body in ((a, "x\ny\nz\n"), (b, "x\nY\nz\n")):
+                (d / "core/src/main/java/p").mkdir(parents=True); (d / "core/src/main/java/p/K.java").write_text(body)
+                (d / "core/src/test/java/p").mkdir(parents=True); (d / "core/src/test/java/p/KTest.java").write_text(body + "!" if d == b else body)
+            faults, module = tree_truth(a, b)
+            self.assertEqual(module, "core")
+            self.assertEqual([(x.cls, x.line, x.kind) for x in faults], [("p.K", 2, "removed")])
+
+    def test_manifest(self):
+        from sbfl.adapters.manifest import Manifest
+        from sbfl.errors import StageError
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            (t / "m.jsonl").write_text('# comentario\n{"project":"foo","bug_id":"foo-1","repo":"/r","buggy":"a","fix_patch":"f.diff"}\n')
+            (t / "cfg.toml").write_text('[manifest]\nfiles=["m.jsonl"]\n')
+            bugs = Manifest(C.load(t / "cfg.toml")).list_bugs()
+            self.assertEqual(bugs[0].key, "manifest/foo/foo-1")
+            self.assertTrue(bugs[0].extra["fix_patch"].endswith("f.diff"))
+            (t / "m.jsonl").write_text('{"project":"foo"}\n')
+            with self.assertRaises(StageError):
+                Manifest(C.load(t / "cfg.toml")).list_bugs()
+
+    def test_build_helpers(self):
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            self.assertIsNone(detect(t))
+            (t / "build.gradle").write_text(""); self.assertEqual(detect(t), "gradle")
+            (t / "pom.xml").write_text(""); self.assertEqual(detect(t), "maven")
+        info = parse_gradle_info("noise\nSBFL_MAIN=/x/build/classes/java/main\nSBFL_TEST=/x/build/classes/java/test\nSBFL_CP=a.jar:b.jar\n")
+        self.assertEqual(info["SBFL_TEST"], "/x/build/classes/java/test")
+        self.assertEqual((gradle_path("."), gradle_path("a/b")), ("", ":a:b:"))
+
+    def test_junit_flavor_and_scan(self):
+        from sbfl.adapters.base import scan_tests
+        self.assertEqual(junit_flavor(b"..org/junit/jupiter/api/Test.."), "junit5")
+        self.assertEqual(junit_flavor(b"org/junit/jupiter/ org/junit/Test"), "junit4")
+        self.assertEqual(junit_flavor(b"junit/framework/TestCase"), "junit3")
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t)
+            (t / "AJupiterTest.class").write_bytes(classfile(0x21) + b"org/junit/jupiter/api/Test")
+            (t / "BOldTest.class").write_bytes(classfile(0x21) + b"org/junit/Test")
+            classes, st = scan_tests(t)
+            self.assertEqual(classes, ["BOldTest"])
+            self.assertEqual(st["junit5_skipped"], 1)
+
+
+    def test_end_to_end_with_fakes(self):
+        """manifest -> worktree -> truth -> build (mvn falso) -> Jaguar (java falso) -> métricas."""
+        from sbfl.adapters.manifest import Manifest
+        from sbfl.pipeline import process
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); g = self._repo(t)
+            (t / "mod/src/main/java/a").mkdir(parents=True)
+            (t / "mod/pom.xml").write_text("<project/>")
+            f = t / "mod/src/main/java/a/B.java"; f.write_text("l1\nl2\nl3\n")
+            g("add", "."); g("commit", "-qm", "buggy"); buggy = g("rev-parse", "HEAD")
+            f.write_text("l1\nl2X\nl3\n"); g("commit", "-qam", "fix"); fixed = g("rev-parse", "HEAD")
+            mvn = t / "fakemvn"; mvn.write_text(textwrap.dedent(f'''\
+                #!/usr/bin/env python3
+                import sys, os
+                a = sys.argv; mod = a[a.index("-pl") + 1] if "-pl" in a else "."
+                if "install" in a:
+                    base = os.path.join(os.getcwd(), mod, "target")
+                    os.makedirs(base + "/classes", exist_ok=True); os.makedirs(base + "/test-classes/x", exist_ok=True)
+                    open(base + "/test-classes/x/FooTest.class", "wb").write({classfile(0x21)!r} + b"org/junit/Test")
+                else:
+                    os.makedirs("target/dependency", exist_ok=True)
+            ''')); mvn.chmod(mvn.stat().st_mode | stat.S_IEXEC)
+            java = t / "fakejava"; java.write_text(textwrap.dedent('''\
+                #!/usr/bin/env python3
+                import sys, os
+                a = sys.argv; out = a[a.index("-o") + 1]
+                print("10:00:00.000 [main] DEBUG JaguarLogger - Test t(x.FooTest) : Failed", flush=True)
+                os.makedirs(".jaguar", exist_ok=True); p = os.path.abspath(f".jaguar/{out}.xml")
+                open(p, "w").write("<F>" + "".join(
+                    f'<requirements location="{l}" cef="{ef}" cep="{ep}" cnf="0" cnp="3" name="a.B" suspicious-value="{s}"/>'
+                    for l, ef, ep, s in ((1, 1, 3, 0.5), (2, 1, 0, 1.0), (3, 1, 3, 0.5))) + "</F>")
+                print(f"10:00:01.000 [main] INFO JaguarLogger - Output xml created at: {p}")
+            ''')); java.chmod(java.stat().st_mode | stat.S_IEXEC)
+            (t / "m.jsonl").write_text(json.dumps({"project": "p", "bug_id": "p-1", "repo": str(t),
+                                                   "buggy": buggy, "fixed": fixed}) + "\n")
+            (t / "cfg.toml").write_text(f'[paths]\njaguar_lib="{t}"\nworkdir="{t}/w"\nresults="{t}/r"\n'
+                                        f'[java]\njava="{java}"\nmvn="{mvn}"\n[manifest]\nfiles=["m.jsonl"]\n')
+            cfg = C.load(t / "cfg.toml")
+            ad = Manifest(cfg); bug = ad.list_bugs()[0]
+            meta = process(cfg, ad, bug)
+            self.assertEqual(meta["status"], "ok", meta)
+            rows = json.loads((t / "r/manifest/p/p-1/metrics.json").read_text())
+            och = [r for r in rows if r["heuristic"] == "ochiai"][0]
+            self.assertEqual((och["rank_best"], och["top1"]), (1, 1))
+            self.assertTrue((t / "r/manifest/p/p-1/jaguar.log.gz").exists())
+            self.assertFalse((t / "w/manifest/p/p-1").exists())  # worktree limpo
+            self.assertEqual(meta["junit5_skipped"], 0)
 
     def test_crash_recovery_loop(self):
         with tempfile.TemporaryDirectory() as t:

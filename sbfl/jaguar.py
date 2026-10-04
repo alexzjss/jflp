@@ -6,7 +6,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .proc import run, make_env
+from .proc import run, make_env, java_exe
 
 TEST_RE = re.compile(r"Test (\S+?)\(([\w.$]+)\) : (Passed|Failed)")
 OUT_RE = re.compile(r"Output xml created at: (.+\.xml)\s*$")
@@ -25,7 +25,7 @@ def build_cmd(cfg, ctx, tf: Path, out_base: str, heuristic: str) -> list:
     sep = os.pathsep
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
     return [
-        cfg.get("java", "java"),
+        java_exe(cfg, ctx.java_home),
         f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",
@@ -68,7 +68,7 @@ def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
             return meta
         write_test_list(tf, remaining)
         r = run(build_cmd(cfg, ctx, tf, out_base, heuristic), cwd=ctx.project_dir,
-                env=make_env(cfg), timeout=cfg.get("jaguar", "timeout_s"), log_path=log,
+                env=make_env(cfg, ctx.java_home), timeout=cfg.get("jaguar", "timeout_s"), log_path=log,
                 drop=NOISE,
                 count={"analysis_exceptions": r"Exception during analysis"},
                 collect={"test": r"(Test \S+?\([\w.$]+\) : (?:Passed|Failed))"})
