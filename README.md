@@ -682,7 +682,3 @@ JFLP can be used as infrastructure for experiments such as:
 This is an experimental research tool.
 
 The core pipeline and evaluation logic are covered by automated tests. Before large-scale experiments, the integration with the selected Java benchmark and fault-localization engine should be validated on a small set of known bugs.
-
-## Citation
-
-If this project is used in academic work, add the corresponding citation here.
