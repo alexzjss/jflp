@@ -9,7 +9,7 @@ from .errors import StageError
 
 
 def git(repo, *args, check=True) -> str:
-    r = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,
+    r = subprocess.run(["git", "-c", "core.longpaths=true", "-C", str(repo), *args], capture_output=True,
                        text=True, encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise StageError("git_failed", f"git {' '.join(args)}: {r.stderr.strip()[:300]}")

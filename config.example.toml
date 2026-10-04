@@ -1,17 +1,19 @@
+# Copie para config.toml e ajuste.
 [paths]
-jaguar_lib = "~/jaguar/br.usp.each.saeg.jaguar.plugin/lib" 
-workdir    = "./work"     
-results    = "./results"     
+jaguar_lib = "~/jaguar/br.usp.each.saeg.jaguar.plugin/lib"   # onde está jacocoagent.jar etc.
+workdir    = "./work"        # checkouts temporários (apagados após cada bug)
+results    = "./results"     # XMLs, metrics.json, meta.json, logs .gz
 
 [java]
-java_home = ""              
+java_home = ""               # ex.: "/usr/lib/jvm/java-8-openjdk" (recomendado p/ projetos antigos)
+                             # Windows: use aspas simples ou barras normais, ex.: 'C:\Program Files\Java\jdk1.8.0_202' ou "C:/jdk8"
 
 [maven]
-local_repo = ""              
+local_repo = ""              # ex.: "./work/m2" isola do seu ~/.m2 (re-baixa dependências)
 
 [jaguar]
-heuristic  = "Ochiai"      
-test_scope = "all"         
+heuristic  = "Ochiai"        # as demais são recalculadas offline a partir de cef/cep/cnf/cnp
+test_scope = "all"           # all | changed (Bugs.jar) | relevant (Defects4J)
 timeout_s  = 3600
 max_retries = 6
 
@@ -20,4 +22,16 @@ home = "~/defects4j"
 projects = ["Lang", "Math", "Time", "Chart", "Closure", "Mockito"]
 
 [bugsjar]
+# um clone git por projeto (cada um com as branches bugs-dot-jar_*)
 repos = ["~/bugs-dot-jar/maven"]
+
+[bears]
+repo = "~/bears-benchmark"        # clone de github.com/bears-bugs/bears-benchmark (branches por bug)
+java_home = "/usr/lib/jvm/java-8-openjdk-amd64"   # o Bears é Java 8
+
+[gitbugjava]
+bin = "gitbug-java"
+projects = []                     # filtro por substring do bug id; vazio = todos
+
+[manifest]
+files = ["manifests/exemplo.jsonl"]   # qualquer outro benchmark/repositório

@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sbfl import config as C
 from sbfl.adapters.base import Ctx, scan_test_classes
 from sbfl.truth import git_truth, patch_truth, tree_truth
-from sbfl.build import detect, parse_gradle_info, gradle_path
+from sbfl.build import detect, parse_gradle_info, gradle_path, resolve_tool, split_cmd
 from sbfl.adapters.base import junit_flavor
 from sbfl.classfile import is_abstract_or_interface
 from sbfl.diffgt import FaultLine, faults_from_hunks, fqcn_from_path, parse_left_hunks, select_lines
@@ -159,6 +159,10 @@ class T(unittest.TestCase):
         info = parse_gradle_info("noise\nSBFL_MAIN=/x/build/classes/java/main\nSBFL_TEST=/x/build/classes/java/test\nSBFL_CP=a.jar:b.jar\n")
         self.assertEqual(info["SBFL_TEST"], "/x/build/classes/java/test")
         self.assertEqual((gradle_path("."), gradle_path("a/b")), ("", ":a:b:"))
+
+    def test_windows_helpers(self):
+        self.assertEqual(split_cmd(r"ant -Dx=C:\\a\\b compile", posix=False), ["ant", r"-Dx=C:\\a\\b", "compile"])
+        self.assertEqual(resolve_tool("ferramenta-que-nao-existe"), "ferramenta-que-nao-existe")
 
     def test_junit_flavor_and_scan(self):
         from sbfl.adapters.base import scan_tests

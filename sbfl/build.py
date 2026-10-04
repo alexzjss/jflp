@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,17 @@ class Built:
     classes_dir: str
     tests_dir: str
     extra_cp: list = field(default_factory=list)
+
+
+def resolve_tool(name: str) -> str:
+    """No Windows, `mvn` é `mvn.cmd` e o Popen sem shell não o encontra pelo nome curto;
+    shutil.which respeita o PATHEXT e devolve o caminho completo."""
+    return shutil.which(name) or name
+
+
+def split_cmd(cmd: str, posix: bool | None = None) -> list[str]:
+    """shlex em modo POSIX come as barras invertidas de caminhos do Windows."""
+    return shlex.split(cmd, posix=(os.name != "nt") if posix is None else posix)
 
 
 def detect(d: Path) -> str | None:
@@ -36,7 +48,7 @@ def _must(r, status="build_failed"):
 # ---------------------------------------------------------------- Maven
 def build_maven(cfg, wt: Path, module: str, log, env) -> Built:
     mod_dir = wt if module == "." else wt / module
-    mvn = cfg.get("java", "mvn")
+    mvn = resolve_tool(cfg.get("java", "mvn"))
     skips = list(cfg.get("maven", "skip_flags"))
     lr = cfg.get("maven", "local_repo")
     if lr:
@@ -86,8 +98,8 @@ def gradle_path(module: str) -> str:
 
 def build_gradle(cfg, wt: Path, module: str, log, env) -> Built:
     mod_dir = wt if module == "." else wt / module
-    gw = wt / "gradlew"
-    g = [str(gw)] if gw.exists() else ["gradle"]
+    gw = wt / ("gradlew.bat" if os.name == "nt" else "gradlew")
+    g = [str(gw)] if gw.exists() else [resolve_tool("gradle")]
     tmo = cfg.get("maven", "build_timeout_s")
     prefix = gradle_path(module)
     _must(run([*g, "-q", f"{prefix}testClasses"], cwd=wt, env=env, timeout=tmo, log_path=log))
@@ -121,7 +133,7 @@ def build_custom(cfg, wt: Path, module: str, log, env, spec: dict) -> Built:
     sub = lambda s: s.replace("{wt}", str(wt)).replace("{module_dir}", str(mod_dir))
     cwd = wt / spec.get("cwd", ".")
     for c in spec.get("cmds", []):
-        _must(run(shlex.split(sub(c)), cwd=cwd, env=env,
+        _must(run(split_cmd(sub(c)), cwd=cwd, env=env,
                   timeout=cfg.get("maven", "build_timeout_s"), log_path=log))
     base = wt / spec["cwd"] if spec.get("cwd") else mod_dir
     return Built(base, spec["classes"], spec["tests"], [sub(x) for x in spec.get("classpath", [])])
