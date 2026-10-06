@@ -31,6 +31,7 @@ class Ctx:
     cleanup: Callable = lambda: None
     info: dict = field(default_factory=dict)
     java_home: str | None = None
+    provenance: dict = field(default_factory=dict)   # nome do arquivo -> texto (metadados do benchmark)
 
 
 class Adapter:

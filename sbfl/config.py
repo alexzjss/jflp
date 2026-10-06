@@ -10,7 +10,7 @@ except ModuleNotFoundError:  # Python < 3.11
 
 DEFAULTS = {
     "paths": {"jaguar_lib": "", "workdir": "./work", "results": "./results"},
-    "java": {"java": "java", "mvn": "mvn", "java_home": ""},
+    "java": {"java": "java", "mvn": "mvn", "java_home": "", "homes": {}},
     "maven": {
         "local_repo": "",
         "skip_flags": [
@@ -19,6 +19,8 @@ DEFAULTS = {
             "-Danimal.sniffer.skip=true", "-Dfindbugs.skip=true",
         ],
         "build_timeout_s": 3600,
+        "opts": "",                   # MAVEN_OPTS, ex.: "-Xmx2g"
+        "extra_args": [],             # ex.: ["-T", "1C"] ou ["-o"] (offline, após o 1º download)
     },
     "jaguar": {
         "heuristic": "Ochiai",       # a que o Jaguar calcula; as demais são recalculadas offline
@@ -26,6 +28,7 @@ DEFAULTS = {
         "log_level": "DEBUG",         # precisa de DEBUG para localizar testes que derrubam a JVM
         "timeout_s": 3600,
         "max_retries": 6,
+        "jvm_args": [],               # ex.: ["-Xmx4g"] para projetos grandes
         "test_scope": "all",          # all | changed (Bugs.jar) | relevant (Defects4J)
     },
     "analysis": {
@@ -33,7 +36,8 @@ DEFAULTS = {
                        "op2", "zoltar", "barinel", "kulczynski2"],
     },
     "defects4j": {"home": "", "projects": []},
-    "bugsjar": {"repos": [], "java_home": ""},
+    "bugsjar": {"repos": [], "root": "", "projects": [],
+                "url_template": "https://github.com/bugs-dot-jar/{project}.git", "java_home": ""},
     "bears": {"repo": "", "java_home": ""},
     "gitbugjava": {"bin": "gitbug-java", "projects": [], "java_home": ""},
     "manifest": {"files": []},

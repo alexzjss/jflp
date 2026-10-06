@@ -26,6 +26,7 @@ def build_cmd(cfg, ctx, tf: Path, out_base: str, heuristic: str) -> list:
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
     return [
         java_exe(cfg, ctx.java_home),
+        *cfg.get("jaguar", "jvm_args"),
         f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",

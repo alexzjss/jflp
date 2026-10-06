@@ -58,3 +58,16 @@ def tree_truth(buggy: Path, fixed: Path):
         d = re.sub(r"^--- .*$", f"--- a/{rel}", d, count=1, flags=re.M)
         chunks.append(d)
     return truth_from_diff("\n".join(chunks))
+
+
+def crosscheck_classes(dev_patch_text: str | None, faults) -> str:
+    """Compara as CLASSES do ground truth (via git) com as de um patch do próprio benchmark.
+    Independe da direção do patch. absent | unparsable | agree | partial | disagree."""
+    if not dev_patch_text:
+        return "absent"
+    try:
+        other, _ = truth_from_diff(dev_patch_text)
+    except StageError:
+        return "unparsable"
+    a, b = {f.cls for f in faults}, {f.cls for f in other}
+    return "agree" if a == b else ("partial" if a & b else "disagree")

@@ -54,12 +54,13 @@ def build_maven(cfg, wt: Path, module: str, log, env) -> Built:
     if lr:
         skips.append(f"-Dmaven.repo.local={Path(lr).expanduser().resolve()}")
     tmo = cfg.get("maven", "build_timeout_s")
-    install = [mvn, "-B", "-q", "install", "-DskipTests", *skips]
+    extra = list(cfg.get("maven", "extra_args"))
+    install = [mvn, "-B", "-q", "install", "-DskipTests", *skips, *extra]
     if module != ".":
         install += ["-pl", module, "-am"]
     _must(run(install, cwd=wt, env=env, timeout=tmo, log_path=log))
     _must(run([mvn, "-B", "-q", "dependency:copy-dependencies",
-               "-DoutputDirectory=target/dependency", *skips],
+               "-DoutputDirectory=target/dependency", *skips, *extra],
               cwd=mod_dir, env=env, timeout=tmo, log_path=log))
     return Built(mod_dir, "target/classes", "target/test-classes",
                  [str(Path("target/dependency") / "*")])

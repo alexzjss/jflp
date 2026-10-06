@@ -45,3 +45,7 @@ class Bears(GitPairAdapter):
                                          capture_output=True).returncode == 0
         if not has(ref) or has(f"{ref}~1"):
             raise StageError("layout_unexpected", f"{ref}: bears.json não está só no último commit")
+
+    def provenance(self, repo: Path, bug: Bug, wt: Path) -> dict:
+        text = git(repo, "show", f"{bug.extra['ref']}:bears.json", check=False)
+        return {"bears.json": text} if text and len(text) <= 1_000_000 else {}

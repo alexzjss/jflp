@@ -6,6 +6,7 @@ from pathlib import Path
 from .. import build as build_mod
 from ..errors import StageError
 from ..gitutil import add_worktree, ensure_repo, git
+from ..jdk import auto_java_home
 from ..proc import make_env
 from ..truth import git_truth, patch_truth
 from .base import Adapter, Bug, Ctx, scan_tests
@@ -24,6 +25,14 @@ class GitPairAdapter(Adapter):
     def check_layout(self, repo: Path, bug: Bug) -> None:
         pass
 
+    def provenance(self, repo: Path, bug: Bug, wt: Path) -> dict:
+        """Metadados do benchmark a guardar junto do resultado (nome -> texto)."""
+        return {}
+
+    def crosscheck(self, prov: dict, faults: list) -> str | None:
+        """Confere o ground truth contra algo do próprio benchmark (ou None)."""
+        return None
+
     def prepare(self, bug: Bug, log_path: Path) -> Ctx:
         cfg, e = self.cfg, bug.extra
         repo = ensure_repo(cfg, e["repo"])
@@ -38,13 +47,17 @@ class GitPairAdapter(Adapter):
             else:
                 raise StageError("no_truth", "entrada sem 'fixed' nem 'fix_patch'")
             module = e.get("module") or module
+            prov = self.provenance(repo, bug, wt)
+            xcheck = self.crosscheck(prov, faults)
             if e.get("test_patch"):
                 try:
                     git(wt, "apply", "--whitespace=nowarn",
                         str(Path(e["test_patch"]).expanduser().resolve()))
                 except StageError as ex:
                     raise StageError("test_patch_failed", ex.detail)
-            jh = self.java_home(bug)
+            jh, level = self.java_home(bug), None
+            if not jh:   # [java.homes]: escolhe o JDK pelo nível declarado no pom.xml
+                jh, level = auto_java_home(cfg, [wt if module == "." else wt / module, wt])
             b = build_mod.build(cfg, wt, module, e.get("build", "auto"), log_path,
                                 make_env(cfg, jh), e.get("custom"))
             classes, stats = scan_tests(b.project_dir / b.tests_dir)
@@ -59,7 +72,9 @@ class GitPairAdapter(Adapter):
                                  + (" — o JaguarRunner usa JUnit 4; testes Jupiter não rodam nele"
                                     if why == "junit5_only" else ""))
             return Ctx(b.project_dir, b.classes_dir, b.tests_dir, b.extra_cp, classes, faults,
-                       cleanup, {"module": module, "build": e.get("build", "auto"), **stats}, jh)
+                       cleanup, {"module": module, "build": e.get("build", "auto"), **stats,
+                                 **({"truth_crosscheck": xcheck} if xcheck else {}),
+                                 **({"java_level": level} if level else {})}, jh, prov)
         except BaseException:
             cleanup()
             raise

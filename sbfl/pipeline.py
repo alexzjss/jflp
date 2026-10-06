@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .errors import StageError
+from .campaign import quality_flags
 from .diffgt import FaultLine, select_lines
 from .jaguar import run_jaguar
 from .proc import make_env, java_exe
@@ -43,17 +44,29 @@ def analyze_dir(cfg, d: Path) -> str:
     meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
     meta.update(info)
     meta["status"] = status
+    meta["quality"] = quality_flags(meta)
     _save(d / "meta.json", meta)
     return status
 
 
-def process(cfg, adapter, bug, force=False, keep_workdir=False) -> dict:
+def needs_run(cfg, bug, force=False, retry=()) -> bool:
+    """True se o bug ainda não foi processado, ou --force, ou o status está em --retry."""
+    mp = cfg.results / bug.benchmark / bug.project / bug.bug_id / "meta.json"
+    if force or not mp.exists():
+        return True
+    try:
+        return json.loads(mp.read_text(encoding="utf-8")).get("status") in set(retry)
+    except Exception:
+        return True
+
+
+def process(cfg, adapter, bug, force=False, keep_workdir=False, retry=()) -> dict:
     d = out_dir_for(cfg, bug)
     mp = d / "meta.json"
-    if mp.exists() and not force:
+    if not needs_run(cfg, bug, force, retry):
         return json.loads(mp.read_text(encoding="utf-8"))
     for old in d.glob("*"):
-        old.unlink()
+        shutil.rmtree(old) if old.is_dir() else old.unlink()
     meta = {"bug": bug.key, "started": time.strftime("%Y-%m-%d %H:%M:%S"),
             "status": "error"}
     log = d / "jaguar.log"
@@ -64,6 +77,10 @@ def process(cfg, adapter, bug, force=False, keep_workdir=False) -> dict:
         meta["java"] = java_version(cfg, ctx.java_home)
         meta.update(n_test_classes=len(ctx.test_classes), **ctx.info)
         _save(d / "truth.json", [f.to_dict() for f in ctx.truth])
+        if ctx.provenance:
+            (d / "provenance").mkdir(exist_ok=True)
+            for name, text in ctx.provenance.items():
+                (d / "provenance" / Path(name).name).write_text(text, encoding="utf-8")
         jm = run_jaguar(cfg, ctx, d)
         meta.update({k: v for k, v in jm.items() if k != "status"})
         meta["status"] = jm["status"]

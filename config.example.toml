@@ -8,10 +8,18 @@ results    = "./results"     # XMLs, metrics.json, meta.json, logs .gz
 java_home = ""               # ex.: "/usr/lib/jvm/java-8-openjdk" (recomendado p/ projetos antigos)
                              # Windows: use aspas simples ou barras normais, ex.: 'C:\Program Files\Java\jdk1.8.0_202' ou "C:/jdk8"
 
+# Vários JDKs instalados: o pipeline escolhe pelo nível do pom.xml (se java_home estiver vazio)
+# [java.homes]
+# 8  = "/usr/lib/jvm/java-8-openjdk-amd64"
+# 11 = "/usr/lib/jvm/java-11-openjdk-amd64"
+
 [maven]
+opts = ""                    # MAVEN_OPTS, ex.: "-Xmx2g"
+extra_args = []              # ex.: ["-T", "1C"] acelera o build; ["-o"] = offline (após o 1º download)
 local_repo = ""              # ex.: "./work/m2" isola do seu ~/.m2 (re-baixa dependências)
 
 [jaguar]
+jvm_args = []               # ex.: ["-Xmx4g"] para projetos grandes
 heuristic  = "Ochiai"        # as demais são recalculadas offline a partir de cef/cep/cnf/cnp
 test_scope = "all"           # all | changed (Bugs.jar) | relevant (Defects4J)
 timeout_s  = 3600
@@ -22,8 +30,13 @@ home = "~/defects4j"
 projects = ["Lang", "Math", "Time", "Chart", "Closure", "Mockito"]
 
 [bugsjar]
-# um clone git por projeto (cada um com as branches bugs-dot-jar_*)
-repos = ["~/bugs-dot-jar/maven"]
+# Forma simples: uma pasta com um clone por projeto. `python -m sbfl fetch` clona o que faltar.
+root = "~/bugs-dot-jar"
+projects = ["maven"]             # ou a lista completa; confira os nomes dos repositórios em github.com/bugs-dot-jar
+url_template = "https://github.com/bugs-dot-jar/{project}.git"
+# Alternativa: caminhos explícitos (têm prioridade sobre root)
+# repos = ["~/bugs-dot-jar/maven"]
+# java_home = "/usr/lib/jvm/java-8-openjdk-amd64"
 
 [bears]
 repo = "~/bears-benchmark"        # clone de github.com/bears-bugs/bears-benchmark (branches por bug)
