@@ -68,6 +68,8 @@ def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
             meta["status"] = "no_tests"
             return meta
         write_test_list(tf, remaining)
+        with open(log, "a", encoding="utf-8") as lf:
+            lf.write(f"# sbfl attempt {attempt + 1}\n")
         r = run(build_cmd(cfg, ctx, tf, out_base, heuristic), cwd=ctx.project_dir,
                 env=make_env(cfg, ctx.java_home), timeout=cfg.get("jaguar", "timeout_s"), log_path=log,
                 drop=NOISE,

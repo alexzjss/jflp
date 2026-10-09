@@ -553,6 +553,111 @@ class T(unittest.TestCase):
                 main(["-c", str(t / "cfg.toml"), "clean", "--all"])
             self.assertEqual(list((t / "w").iterdir()), [])
 
+    # ------------------------------------------------ compare (com e sem Jaguar)
+    def test_compare_parsers_and_rank(self):
+        import gzip
+        from sbfl.compare import compare_tests, jaguar_rank, parse_jaguar_log, parse_surefire, render
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); rep = t / "sf"; rep.mkdir()
+            (rep / "TEST-x.FooTest.xml").write_text(
+                '<testsuite><testcase classname="x.FooTest" name="a"/>'
+                '<testcase classname="x.FooTest" name="b"><failure message="m"/></testcase>'
+                '<testcase classname="x.FooTest" name="c"><skipped/></testcase>'
+                '<testcase classname="x.FooTest" name="d"><error/></testcase></testsuite>')
+            m = parse_surefire(rep)
+            self.assertEqual(m, {"x.FooTest#a": "passed", "x.FooTest#b": "failed",
+                                 "x.FooTest#c": "skipped", "x.FooTest#d": "error"})
+            log = t / "j.log.gz"
+            lines = ["# sbfl attempt 1", "10:00 DEBUG JaguarLogger - Test z(x.Crash) : Passed",
+                     "# sbfl attempt 2", "10:01 DEBUG JaguarLogger - Test a(x.FooTest) : Passed",
+                     "10:01 INFO JaguarLogger - Test b(x.FooTest) : Failed",
+                     "10:01 DEBUG JaguarLogger - Test e(x.FooTest) : Passed"]
+            with gzip.open(log, "wt") as f:
+                f.write("\n".join(lines) + "\n")
+            j = parse_jaguar_log(log)
+            self.assertEqual(j, {"x.FooTest#a": "passed", "x.FooTest#b": "failed", "x.FooTest#e": "passed"})  # só a última tentativa
+            cmp = compare_tests(m, j)
+            self.assertEqual(cmp["only_maven"], ["x.FooTest#d"])        # o skipped não conta como "só no Maven"
+            self.assertEqual(cmp["only_jaguar"], ["x.FooTest#e"])
+            self.assertEqual(cmp["outcome_differs"], [])
+            self.assertEqual(cmp["maven_failing"], ["x.FooTest#b", "x.FooTest#d"])
+            xml = t / "r.xml"
+            xml.write_text('<F><requirements location="3" cef="1" cep="0" cnf="0" cnp="3" name="a.B" suspicious-value="1.0"/>'
+                           '<requirements location="9" cef="1" cep="0" cnf="0" cnp="3" name="a.B" suspicious-value="1.0"/>'
+                           '<requirements location="5" cef="1" cep="2" cnf="0" cnp="1" name="a.B" suspicious-value="0.5"/></F>')
+            rk = jaguar_rank(xml, [FaultLine("a.B", 9, "removed"), FaultLine("a.B", 77, "removed")])
+            self.assertTrue(rk["sorted_desc"]); self.assertEqual(rk["not_covered"], 1)
+            row = rk["lines"][0]
+            self.assertEqual((row["position_in_file"], row["rank_best"], row["rank_worst"], row["tied"]), (2, 1, 2, 2))
+            txt = render("b/p/x", {"excluded_classes": []}, cmp, rk)
+            self.assertIn("1–2 de 3", txt); self.assertIn("ordenado", txt)
+
+    def test_compare_end_to_end_with_fakes(self):
+        from sbfl.adapters.manifest import Manifest
+        from sbfl.pipeline import process
+        import contextlib, io
+        from sbfl.cli import main
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); g = self._repo(t)
+            (t / "mod/src/main/java/a").mkdir(parents=True); (t / "mod/pom.xml").write_text("<project/>")
+            f = t / "mod/src/main/java/a/B.java"; f.write_text("l1\nl2\nl3\n")
+            g("add", "."); g("commit", "-qm", "buggy"); buggy = g("rev-parse", "HEAD")
+            f.write_text("l1\nl2X\nl3\n"); g("commit", "-qam", "fix"); fixed = g("rev-parse", "HEAD")
+            mvn = t / "fakemvn"; mvn.write_text(textwrap.dedent(f'''\
+                #!/usr/bin/env python3
+                import sys, os
+                a = sys.argv; mod = a[a.index("-pl") + 1] if "-pl" in a else "."
+                if "--version" in a or "-v" in a:
+                    print("Apache Maven 3.6.3"); sys.exit(0)
+                if "install" in a:
+                    base = os.path.join(os.getcwd(), mod, "target")
+                    os.makedirs(base + "/classes", exist_ok=True); os.makedirs(base + "/test-classes/x", exist_ok=True)
+                    open(base + "/test-classes/x/FooTest.class", "wb").write({classfile(0x21)!r} + b"org/junit/Test")
+                elif "test" in a:
+                    os.makedirs("target/surefire-reports", exist_ok=True)
+                    open("target/surefire-reports/TEST-x.FooTest.xml", "w").write(
+                        '<testsuite><testcase classname="x.FooTest" name="t"><failure/></testcase>'
+                        '<testcase classname="x.FooTest" name="u"/></testsuite>')
+                else:
+                    os.makedirs("target/dependency", exist_ok=True)
+            ''')); mvn.chmod(mvn.stat().st_mode | stat.S_IEXEC)
+            java = t / "fakejava"; java.write_text(textwrap.dedent('''\
+                #!/usr/bin/env python3
+                import sys, os
+                a = sys.argv
+                if "-version" in a:
+                    print('openjdk version "1.8.0_1"', file=sys.stderr); sys.exit(0)
+                out = a[a.index("-o") + 1]
+                print("10:00:00.000 [main] DEBUG JaguarLogger - Test t(x.FooTest) : Failed", flush=True)
+                os.makedirs(".jaguar", exist_ok=True); p = os.path.abspath(f".jaguar/{out}.xml")
+                open(p, "w").write("<F>" + "".join(
+                    f'<requirements location="{l}" cef="{ef}" cep="{ep}" cnf="0" cnp="3" name="a.B" suspicious-value="{s}"/>'
+                    for l, ef, ep, s in ((1, 1, 3, 0.5), (2, 1, 0, 1.0), (3, 1, 3, 0.5))) + "</F>")
+                print(f"10:00:01.000 [main] INFO JaguarLogger - Output xml created at: {p}")
+            ''')); java.chmod(java.stat().st_mode | stat.S_IEXEC)
+            (t / "m.jsonl").write_text(json.dumps({"project": "p", "bug_id": "p-1", "repo": str(t),
+                                                   "buggy": buggy, "fixed": fixed}) + "\n")
+            (t / "cfg.toml").write_text(f'[paths]\njaguar_lib="{t}"\nworkdir="{t}/w"\nresults="{t}/r"\n'
+                                        f'[java]\njava="{java}"\nmvn="{mvn}"\n[manifest]\nfiles=["m.jsonl"]\n')
+            cfg = C.load(t / "cfg.toml"); ad = Manifest(cfg); bug = ad.list_bugs()[0]
+            self.assertEqual(process(cfg, ad, bug)["status"], "ok")
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(main(["-c", str(t / "cfg.toml"), "compare", "p-1", "--benchmark", "manifest"]), 0)
+            out = buf.getvalue()
+            self.assertIn("Sem Jaguar (mvn test): failed 1, passed 1", out)
+            self.assertIn("Só no Maven (o Jaguar não executou): 1", out)      # o teste `u` (o fake do Jaguar só roda `t`)
+            self.assertIn("a.B:2 | 2 | 1.0000 | 1–1 de 3", out)
+            self.assertTrue((t / "r/manifest/p/p-1/compare.md").exists() and (t / "r/manifest/p/p-1/compare.json").exists())
+            self.assertFalse((t / "w/manifest/p/p-1").exists())               # checkout removido
+            # sem `run` prévio: erro claro
+            (t / "m.jsonl").write_text(json.dumps({"project": "p", "bug_id": "p-2", "repo": str(t),
+                                                   "buggy": buggy, "fixed": fixed}) + "\n")
+            errbuf = io.StringIO()
+            with contextlib.redirect_stderr(errbuf):
+                self.assertEqual(main(["-c", str(t / "cfg.toml"), "compare", "p-2", "--benchmark", "manifest"]), 2)
+            self.assertIn("rode `sbfl run` antes", errbuf.getvalue())
+
     def test_crash_recovery_loop(self):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t)

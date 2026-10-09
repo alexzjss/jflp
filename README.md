@@ -73,6 +73,7 @@ JFLP provides an automated workflow for these steps.
 - Campaign tooling for large benchmarks: resumable runs, progress and ETA, success levels, quality alerts, retry by failure reason, per-project sampling and per-bug inspection.
 - Structured per-bug experiment artifacts, aggregated CSV reports and plots.
 - Reproducible experiment metadata and an environment record.
+- A `compare` command that runs the same Maven module with and without Jaguar and reports Jaguar's own rank.
 - Safe Git worktree-based benchmark preparation.
 
 ## Requirements
@@ -348,6 +349,19 @@ The report is `.jaguar/manual.xml`. To run only some tests, write your own list.
 
 Quote the whole `-javaagent` argument in PowerShell, as above, so the comma is not interpreted as an array separator. When you are done, remove the leftovers with `python -m sbfl clean`.
 
+### Comparing with and without Jaguar
+
+To check that Jaguar sees the same tests as Maven, and to read the rank that Jaguar itself reports, run a bug and then compare it:
+
+```bash
+python -m sbfl run --benchmark bugsjar --project maven --bug bugs-dot-jar_MNG-5742_6ab41ee8 --force
+python -m sbfl compare bugs-dot-jar_MNG-5742_6ab41ee8 --benchmark bugsjar
+```
+
+`compare` checks out and builds the same module again, runs `mvn test` there (without Jaguar) and compares the surefire reports with the last Jaguar attempt: tests per outcome, tests that only one side executed, tests whose outcome differs and the classes Jaguar had to exclude. It then prints, for each line of the defect, its position in Jaguar's report, its `suspicious-value`, and its best and worst rank given the ties. It computes no formulas of its own. The result is saved as `compare.md` and `compare.json` (and the Maven output as `maven_test.log`) in the bug's results folder. Only Maven modules are supported.
+
+The same experiment, step by step with plain Maven and Jaguar commands, is in [`docs/COMPARACAO_COM_E_SEM_JAGUAR.md`](docs/COMPARACAO_COM_E_SEM_JAGUAR.md) (in Portuguese).
+
 ## Bugs.jar campaign
 
 The typical workflow for collecting line coverage over a whole benchmark, designed to be resumed at any time:
@@ -423,6 +437,7 @@ All commands accept `-c config.toml` before the subcommand (default: `config.tom
 | `run` (same selectors as `list`) `[--force] [--keep] [--workers N] [--retry STATUS,...] [--max-hours H] [--abort-after N] [--notify-cmd CMD] [--no-keep-awake]` | Runs the pending bugs. `--force` redoes everything selected, `--retry` redoes only bugs with those statuses, `--keep` keeps the checkout in `work/`. |
 | `status [--benchmark B] [--project P] [--md FILE]` | Progress, success levels, quality alerts and ETA per project. |
 | `triage [--benchmark B] [--project P] [--md FILE]` | Groups failures by probable cause and suggests adjustments. |
+| `compare BUG [--benchmark B] [--project P]` | Runs the same Maven module with and without Jaguar and reports the rank written by Jaguar. Needs a previous `run`. |
 | `inspect BUG [--top N]` | Summary of one result: status, failed tests, ground truth, most suspicious lines and the end of the log. |
 | `analyze` | Recalculates the metrics of every saved spectrum, without running Jaguar again. |
 | `aggregate` | Writes CSV reports and plots to `results/_agregado/`. |
@@ -646,6 +661,7 @@ results/
             ├── metrics.json
             ├── meta.json
             ├── provenance/
+            ├── compare.md, compare.json, maven_test.log   (only after `compare`)
             └── jaguar.log.gz
 ```
 
