@@ -129,22 +129,6 @@ def cmd_clean(cfg, args):
     return 0
 
 
-def cmd_compare(cfg, args):
-    from .compare import run_compare
-    args.limit = None
-    found = _bugs(cfg, args)
-    if not found:
-        print(f"nenhum bug '{args.bug}' encontrado", file=sys.stderr)
-        return 1
-    if len(found) > 1:
-        print("mais de um bug casa com esse id; use --benchmark e --project:\n  "
-              + "\n  ".join(b.key for _, b in found), file=sys.stderr)
-        return 1
-    a, b = found[0]
-    print(run_compare(cfg, a, b))
-    return 0
-
-
 def cmd_fetch(cfg, args):
     from .adapters.bugsjar import fetch_repos
     for proj, action in fetch_repos(cfg, args.project):
@@ -157,10 +141,10 @@ def main(argv=None):
     ap.add_argument("-c", "--config", default="config.toml")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name, fn in [("doctor", cmd_doctor), ("list", cmd_list), ("fetch", cmd_fetch),
-                     ("compare", cmd_compare), ("clean", cmd_clean), ("triage", cmd_triage)]:
+                     ("clean", cmd_clean), ("triage", cmd_triage)]:
         p = sub.add_parser(name)
         p.set_defaults(fn=fn)
-        if name in ("list", "triage", "compare"):
+        if name in ("list", "triage"):
             p.add_argument("--benchmark", default="all", choices=["all", *NAMES])
             p.add_argument("--project")
         if name == "list":
@@ -172,8 +156,6 @@ def main(argv=None):
             p.add_argument("--summary", action="store_true", help="só a contagem por projeto")
         if name == "triage":
             p.add_argument("--md", metavar="ARQUIVO", help="salva a tabela em Markdown")
-        if name == "compare":
-            p.add_argument("bug", help="id do bug")
         if name == "fetch":
             p.add_argument("--project")
         if name == "clean":

@@ -309,46 +309,6 @@ class T(unittest.TestCase):
                 main(["-c", str(t / "cfg.toml"), "clean", "--all"])
             self.assertEqual(list((t / "w").iterdir()), [])
 
-    # ------------------------------------------------ compare (com e sem Jaguar)
-    def test_compare_parsers_and_rank(self):
-        import gzip
-        from sbfl.compare import compare_tests, jaguar_rank, render
-        from sbfl.outputs import parse_jaguar1_log, parse_surefire
-        with tempfile.TemporaryDirectory() as t:
-            t = Path(t); rep = t / "sf"; rep.mkdir()
-            (rep / "TEST-x.FooTest.xml").write_text(
-                '<testsuite><testcase classname="x.FooTest" name="a"/>'
-                '<testcase classname="x.FooTest" name="b"><failure message="m"/></testcase>'
-                '<testcase classname="x.FooTest" name="c"><skipped/></testcase>'
-                '<testcase classname="x.FooTest" name="d"><error/></testcase></testsuite>')
-            m = parse_surefire(rep)
-            self.assertEqual(m, {"x.FooTest#a": "passed", "x.FooTest#b": "failed",
-                                 "x.FooTest#c": "skipped", "x.FooTest#d": "error"})
-            log = t / "j.log.gz"
-            lines = ["# sbfl attempt 1", "10:00 DEBUG JaguarLogger - Test z(x.Crash) : Passed",
-                     "# sbfl attempt 2", "10:01 DEBUG JaguarLogger - Test a(x.FooTest) : Passed",
-                     "10:01 INFO JaguarLogger - Test b(x.FooTest) : Failed",
-                     "10:01 DEBUG JaguarLogger - Test e(x.FooTest) : Passed"]
-            with gzip.open(log, "wt") as f:
-                f.write("\n".join(lines) + "\n")
-            j = parse_jaguar1_log(log)
-            self.assertEqual(j, {"x.FooTest#a": "passed", "x.FooTest#b": "failed", "x.FooTest#e": "passed"})  # só a última tentativa
-            cmp = compare_tests(m, j)
-            self.assertEqual(cmp["only_maven"], ["x.FooTest#d"])        # o skipped não conta como "só no Maven"
-            self.assertEqual(cmp["only_jaguar"], ["x.FooTest#e"])
-            self.assertEqual(cmp["outcome_differs"], [])
-            self.assertEqual(cmp["maven_failing"], ["x.FooTest#b", "x.FooTest#d"])
-            xml = t / "r.xml"
-            xml.write_text('<F><requirements location="3" cef="1" cep="0" cnf="0" cnp="3" name="a.B" suspicious-value="1.0"/>'
-                           '<requirements location="9" cef="1" cep="0" cnf="0" cnp="3" name="a.B" suspicious-value="1.0"/>'
-                           '<requirements location="5" cef="1" cep="2" cnf="0" cnp="1" name="a.B" suspicious-value="0.5"/></F>')
-            rk = jaguar_rank(xml, [FaultLine("a.B", 9, "removed"), FaultLine("a.B", 77, "removed")])
-            self.assertTrue(rk["sorted_desc"]); self.assertEqual(rk["not_covered"], 1)
-            row = rk["lines"][0]
-            self.assertEqual((row["position_in_file"], row["rank_best"], row["rank_worst"], row["tied"]), (2, 1, 2, 2))
-            txt = render("b/p/x", {"excluded_classes": []}, cmp, rk)
-            self.assertIn("1–2 de 3", txt); self.assertIn("ordenado", txt)
-
     def test_crash_recovery_loop(self):
         with tempfile.TemporaryDirectory() as t:
             t = Path(t)
