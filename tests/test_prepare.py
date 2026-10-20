@@ -1,4 +1,5 @@
 import json
+import threading
 import subprocess
 import tempfile
 import unittest
@@ -130,6 +131,80 @@ class PrepareTests(Base):
         self.assertEqual(cm.exception.status, "checkout_falhou")
         self.assertIn("WSL", cm.exception.detail)
         self.assertFalse(P._pristine_dir(self.home, bug).exists())
+
+
+    def test_src_truth_with_space_and_accent_paths(self):
+        b = self.root / "pasta com espaço e ç" / "b"
+        f = self.root / "pasta com espaço e ç" / "f"
+        for d, ret in ((b, 1), (f, 2)):
+            (d / "org/x").mkdir(parents=True)
+            (d / "org/x/Foo.java").write_text(f"package org.x;\nclass Foo {{\n  int f() {{ return {ret}; }}\n}}\n")
+        faults = P._src_truth(b, f)
+        self.assertEqual([(x.cls, x.line) for x in faults], [("org.x.Foo", 3)])
+        (f / "org/x/Foo.java").write_bytes((b / "org/x/Foo.java").read_bytes())
+        with self.assertRaises(StageError):
+            P._src_truth(b, f)
+
+    def test_local_repo_url_never_modifies_original(self):
+        repo = self.root / "orig"
+        repo.mkdir()
+        _git(repo, "init", "-q")
+        (repo / "a.txt").write_text("1")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "c")
+        bug = P.local_bug(f"{repo}@{_head(repo)}")
+        prep = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertTrue((prep.pristine / "a.txt").exists())
+        self.assertFalse((repo / ".git" / "worktrees").exists())
+        P.prepare(self.home, self.settings, bug, self.log, refresh=True)
+        self.assertFalse((repo / ".git" / "worktrees").exists())
+
+    def test_test_fqcn_most_specific_root(self):
+        self.assertEqual(P._test_fqcn("mod/tests/src/test/java/x/T.java"), "x.T")
+        self.assertEqual(P._test_fqcn("src/test/java/a/BTest.java"), "a.BTest")
+        self.assertEqual(P._test_fqcn("test/org/y/ZTest.java"), "org.y.ZTest")
+
+    def test_deleted_test_files_not_relevant(self):
+        fix = self.fake_bugsjar()
+        repo = self.root / "bj" / "Proj"
+        _git(repo, "checkout", "-q", fix)
+        (repo / "src/test/java/a/OldTest.java").write_text("package a;\nclass OldTest {}\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "add")
+        _git(repo, "rm", "-q", "src/test/java/a/OldTest.java")
+        _git(repo, "commit", "-qm", "del")
+        self.assertEqual(P._changed_tests(repo, "HEAD"), [])
+
+    def test_rmtree_readonly(self):
+        d = self.root / "ro"
+        (d / "sub").mkdir(parents=True)
+        f = d / "sub" / "obj"
+        f.write_text("x")
+        import os, stat
+        os.chmod(f, stat.S_IREAD)
+        P._rmtree(d)
+        self.assertFalse(d.exists())
+
+    def test_concurrent_prepare_same_bug(self):
+        src = self.root / "conc"
+        src.mkdir()
+        (src / "a.txt").write_text("1")
+        bug = P.local_bug(str(src))
+        res, errs = [], []
+
+        def work():
+            try:
+                res.append(P.prepare(self.home, self.settings, bug, self.log))
+            except Exception as e:  # noqa: BLE001
+                errs.append(e)
+
+        ts = [threading.Thread(target=work) for _ in range(2)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(errs, [])
+        self.assertEqual(len(res), 2)
+        self.assertEqual(res[0].pristine, res[1].pristine)
+        self.assertTrue((res[0].pristine / "a.txt").exists())
 
 
 if __name__ == "__main__":
