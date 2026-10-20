@@ -18,6 +18,19 @@
   <span id="abrir-ret"></span>
 </section>
 
+{% if attempts %}
+<section>
+  <h2>Tentativas</h2>
+  <table>
+    <thead><tr><th>#</th><th>Status</th><th>Correções</th><th>JDK</th><th>Maven</th></tr></thead>
+    <tbody>{% for a in attempts %}
+      <tr><td>{{ a.n }}</td><td>{% if a.skipped %}<span class="vazio">ignorada: {{ a.skipped }}</span>{% else %}{{ a.status }}{% endif %}</td>
+        <td>{{ a.fixes|join(', ') or '-' }}</td><td>{{ a.jdk or '-' }}</td><td>{{ a.maven or '-' }}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+</section>
+{% endif %}
+
 {% if diag and diag.cause %}
 <section>
   <h2>Diagnóstico</h2>
@@ -86,6 +99,7 @@
     {% endfor %}
     </tbody>
   </table>
+  {% if more_files %}<p class="vazio">+{{ more_files }} arquivos</p>{% endif %}
   {% endif %}
 </section>
 

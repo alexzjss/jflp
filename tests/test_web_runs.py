@@ -8,7 +8,7 @@ from sbfl import queue as jq
 from sbfl import store
 from sbfl.adapters.base import Bug
 from sbfl.home import load_settings
-from tests.test_web_base import WebBase
+from tests.web_helpers import HAVE_WEB, WebFixture
 
 BUG = Bug("bugsjar", "commons-lang", "7")
 DIAG = {"status": "classes_duplicadas", "cause": "Classes duplicadas", "evidence": ["duplicate class: a.B"],
@@ -18,7 +18,8 @@ DIAG = {"status": "classes_duplicadas", "cause": "Classes duplicadas", "evidence
         "warnings": []}
 
 
-class RunsBase(WebBase):
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class RunsBase(WebFixture, unittest.TestCase):
     def make_run(self, kind="jaguar2", status="ok", bug=BUG, fixes=("junit4",), attempts=2, diag=None,
                  csv="a/B,10,3,0,1,5,0.9\na/B,11,1,2,1,5,0.2\na/C,3,0,3,0,6,0.0\n"):
         w = store.RunWriter(self.home, bug, kind)
@@ -26,6 +27,8 @@ class RunsBase(WebBase):
             d = w.attempt_dir(n)
             with gzip.open(d / "log.txt.gz", "wt", encoding="utf-8") as f:
                 f.write(f"linha um {n}\nErro de compilação aqui\nlinha tres\n")
+            w.write_json(f"attempts/{n}/attempt.json", {
+                "config": {"fixes_on": list(fixes), "jdk": 11}, "status": "ok" if n == attempts else "compilacao_falhou"})
         w.write_text("outputs/jaguar2.csv", csv)
         w.write_text("outputs/surefire-reports/TEST-a.BTest.xml",
                      '<testsuite><testcase classname="a.BTest" name="t1"/>'
@@ -57,7 +60,15 @@ class RunPage(RunsBase):
         self.assertIn("a.C", only_c)
         self.assertNotIn(">11<", only_c)
         self.assertEqual(c.get("/run/bugsjar/x/1/nada").status_code, 404)
-        self.assertEqual(c.get("/run/bugsjar/../x/1/nada").status_code, 404)
+        self.assertEqual(c.get("/run/bugsjar/%2e%2e/x/1/nada").status_code, 404)
+
+    def test_valid_rel(self):
+        from sbfl.web.routes_runs import _valid_rel
+        self.assertTrue(_valid_rel("bugsjar/proj/7/20261020-1-maven"))
+        for bad in ("bugsjar/../x/1", "bugsjar/../x/1/y", "a/./b/c/d", "a/b/c/.d", "a/b\c/d/e",
+                    "C:/b/c/d", "a/b/c", "a/b/c/d/e", "a//c/d"):
+            with self.subTest(bad=bad):
+                self.assertFalse(_valid_rel(bad))
 
     def test_file_download_confined_to_run_dir(self):
         rel = self.make_run()
@@ -128,6 +139,9 @@ class RunPage(RunsBase):
         with mock.patch("sbfl.web.routes_runs._open_path") as op:
             self.assertEqual(c.post(f"/run/{rel}/abrir").status_code, 200)
         op.assert_called_once_with(store.run_dir(self.home, rel))
+        page = c.get(f"/run/{rel}").text
+        self.assertIn("Tentativas", page)
+        self.assertIn("compilacao_falhou", page)
         z = c.get(f"/run/{rel}/zip")
         self.assertEqual(z.status_code, 200)
         import io
@@ -218,6 +232,10 @@ class Export(RunsBase):
         r = c.post("/exportar", data={"nome": "meu_ds"})
         self.assertEqual(r.status_code, 200)
         self.assertTrue((self.home.datasets / "meu_ds" / "manifest.csv").exists())
+        with mock.patch("sbfl.web.routes_runs._open_path", side_effect=OSError("sem gerenciador")):
+            fail = c.post("/exportar/abrir", data={"nome": "meu_ds"})
+        self.assertEqual(fail.status_code, 500)
+        self.assertIn("sem gerenciador", fail.text)
         dup = c.post("/exportar", data={"nome": "meu_ds"})
         self.assertEqual(dup.status_code, 400)
         self.assertIn("Já existe", dup.text)

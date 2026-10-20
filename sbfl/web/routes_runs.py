@@ -1,8 +1,8 @@
 """Telas de execução, comparação, lotes, receitas e exportação de dataset."""
 from __future__ import annotations
 
-import contextlib
 import gzip
+import json
 import os
 import subprocess
 import sys
@@ -30,6 +30,8 @@ MAX_MATCHES = 500
 LOG_CONTEXT = 2
 ORDER_COLS = ("cls", "line", "cef", "cep", "cnf", "cnp", "susp")
 LIST_CAP = 200
+MAX_FILES = 500
+MAX_SELECT = 200
 
 
 def _render(request: Request, name: str, ctx: dict, status: int = 200):
@@ -95,7 +97,7 @@ def _open_path(path: Path) -> None:
     if sys.platform.startswith("win"):
         os.startfile(str(path))                       # noqa: S606
     else:
-        subprocess.Popen(["xdg-open", str(path)])     # noqa: S603,S607
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(path)])   # noqa: S603,S607
 
 
 def _files(d: Path) -> list[dict]:
@@ -103,6 +105,20 @@ def _files(d: Path) -> list[dict]:
     for f in sorted(d.rglob("*")):
         if f.is_file():
             out.append({"rel": f.relative_to(d).as_posix(), "size": f.stat().st_size})
+    return out
+
+
+def _attempts(d: Path) -> list[dict]:
+    out = []
+    for a in sorted((d / "attempts").glob("*/attempt.json"), key=lambda x: int(x.parent.name)
+                    if x.parent.name.isdigit() else 0):
+        try:
+            data = json.loads(a.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        cfg = data.get("config") or {}
+        out.append({"n": a.parent.name, "status": data.get("status"), "skipped": data.get("skipped"),
+                    "fixes": cfg.get("fixes_on") or [], "jdk": cfg.get("jdk"), "maven": cfg.get("maven")})
     return out
 
 
@@ -323,8 +339,10 @@ def run_page(request: Request, rel: str):
     counts = run.get("tests") or (test_counts(results) if results else None)
     failing = sorted(t for t, s in results.items() if s in ("failed", "error"))
     diag = run.get("diagnosis") or {}
+    files = _files(d)
     ctx = {"page": "bugs", "rel": rel, "run": run, "diag": diag, "counts": counts,
-           "failing": failing, "files": _files(d), "kind_label": KIND_LABEL,
+           "failing": failing, "files": files[:MAX_FILES], "more_files": max(0, len(files) - MAX_FILES),
+           "attempts": _attempts(d), "kind_label": KIND_LABEL,
            "can_recipe": _can_save_recipe(run), "cfg": _last_cfg(run),
            "has_scores": run.get("kind") in ("jaguar1", "jaguar2"),
            **_lines_ctx(request, rel, run, "susp", "desc", "", 1)}
@@ -340,7 +358,7 @@ def _cap(items: list, n: int = LIST_CAP) -> tuple[list, int]:
 @router.get("/comparar", response_class=HTMLResponse)
 def comparar(request: Request, a: str = "", b: str = ""):
     home = request.app.state.home
-    ctx: dict = {"page": "comparar", "runs": store.list_runs(home), "a": a, "b": b, "res": None,
+    ctx: dict = {"page": "comparar", "runs": store.list_runs(home)[:MAX_SELECT], "a": a, "b": b, "res": None,
                  "erro": None}
     status = 200
     if a and b:
@@ -550,6 +568,8 @@ def exportar_abrir(request: Request, nome: str = Form("")):
     d = _inside(home.datasets, nome) if nome else None
     if d is None or not d.is_dir():
         return _msg(request, "exportar", "Dataset não encontrado", nome, 404)
-    with contextlib.suppress(OSError):
+    try:
         _open_path(d)
+    except OSError as e:
+        return _msg(request, "exportar", "Não foi possível abrir a pasta", str(e), 500)
     return HTMLResponse('<span class="vazio">Pasta aberta no explorador de arquivos.</span>')

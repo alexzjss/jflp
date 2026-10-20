@@ -17,38 +17,12 @@ except ImportError:
 from sbfl import queue as jq
 from sbfl.adapters.base import Bug
 from sbfl.home import Home, load_settings
+from tests.web_helpers import BASE, TOKEN, WebFixture
 
-TOKEN = "tok-de-teste"
-BASE = "http://127.0.0.1:8123"
 
 
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
-class WebBase(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp, True)
-        self.home = Home(self.tmp / "home").ensure()
-        self.settings = load_settings(self.home)
-        worker = mock.Mock()
-        worker.status.return_value = {"alive": True, "last_error": None, "current": None}
-        self.worker = worker
-        self.app = create_app(self.home, self.settings, worker, TOKEN, 8123)
-        self.client = TestClient(self.app, base_url=BASE)
-
-    def authed(self) -> TestClient:
-        c = TestClient(self.app, base_url=BASE)
-        c.cookies.set("jflp_token", TOKEN)
-        return c
-
-    def no_tools(self):
-        wsl = mock.Mock(installed=False, distros=[], d4j=None, message="WSL indisponível")
-        return [mock.patch("sbfl.web.routes_env.find_jdks", return_value=[]),
-                mock.patch("sbfl.web.routes_env.find_mavens", return_value=[]),
-                mock.patch("sbfl.web.routes_env.wsl_status", return_value=wsl),
-                mock.patch("sbfl.web.routes_env._git", return_value=None),
-                mock.patch("sbfl.toolchain.profiles.find_jdks", return_value=[]),
-                mock.patch("sbfl.toolchain.profiles.find_mavens", return_value=[])]
-
+class WebBase(WebFixture, unittest.TestCase):
     def test_requires_token(self):
         self.assertEqual(self.client.get("/").status_code, 403)
         self.assertEqual(self.client.get("/ambiente").status_code, 403)

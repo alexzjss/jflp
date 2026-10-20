@@ -53,3 +53,5 @@ tr.defeito td { background: rgba(179,38,30,.15); font-weight: 600; }
 pre.log .acerto { background: rgba(255,200,0,.25); }
 textarea { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
 details summary { cursor: pointer; }
+#linhas thead a { color: var(--text); text-decoration: none; }
+#linhas thead a:hover { text-decoration: underline; }
