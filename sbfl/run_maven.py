@@ -67,7 +67,7 @@ def test_selection_args(prep: Prepared, scope: str, workdir: Path) -> list[str]:
 
 
 def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg: AttemptConfig,
-              log: Path, toolenv: ToolEnv | None = None) -> AttemptResult:
+              log: Path, toolenv: ToolEnv | None = None, on_line=None) -> AttemptResult:
     mod = module_dir(prep, workdir)
     te = toolenv or resolve("maven", home, settings, pom_dir=mod, jdk=cfg.jdk, maven=cfg.maven)
     cmd = te.mvn("clean", "test", *(settings.get("run", "skip_flags", []) or []),
@@ -75,7 +75,8 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
                  "-Dsurefire.failIfNoSpecifiedTests=false",
                  *test_selection_args(prep, cfg.test_scope, workdir))
     log.parent.mkdir(parents=True, exist_ok=True)
-    r = proc.run(cmd, cwd=mod, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log)
+    r = proc.run(cmd, cwd=mod, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
+                 on_line=on_line)
     outputs: dict[str, Path] = {}
     tests: dict[str, str] = {}
     reports = mod / "target" / "surefire-reports"
@@ -94,14 +95,15 @@ def log_phase(log: Path, name: str) -> None:
 
 
 def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
-                    log: Path) -> dict | None:
+                    log: Path, on_line=None) -> dict | None:
     """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
         return None
     log_phase(log, "reactor")
     cmd = te.mvn("install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
-    r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log)
+    r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
+                 on_line=on_line)
     r["command"] = cmd
     return r
 

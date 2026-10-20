@@ -20,7 +20,7 @@ def _fail(log: Path, fase: str, erro: str, seconds: float = 0.0, cmd=None, desc=
 
 
 def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg: AttemptConfig,
-                log: Path, toolenv: ToolEnv | None = None) -> AttemptResult:
+                log: Path, toolenv: ToolEnv | None = None, on_line=None) -> AttemptResult:
     """`toolenv` só existe para injetar um Maven falso nos testes."""
     mod = module_dir(prep, workdir)
     lib = Path(settings.get("jaguar1", "lib") or (home.tools / "jaguar1" / "lib"))
@@ -34,7 +34,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     timeout = settings.get("run", "timeout_s")
     total = 0.0
 
-    r = install_reactor(te, settings, prep, workdir, log)
+    r = install_reactor(te, settings, prep, workdir, log, on_line)
     if r is not None:
         total += r["seconds"]
         failed = reactor_failure(r, log, desc)
@@ -47,7 +47,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
                                          "-DoutputDirectory=target/dependency", *skip))):
         log_phase(log, fase)
         cmd = te.mvn(*args)
-        r = proc.run(cmd, cwd=mod, env=te.env, timeout=timeout, log_path=log)
+        r = proc.run(cmd, cwd=mod, env=te.env, timeout=timeout, log_path=log, on_line=on_line)
         total += r["seconds"]
         if r["rc"] != 0 or r["timed_out"]:
             return AttemptResult(r["rc"], r["timed_out"], round(total, 1), log, {}, {}, cmd, desc,

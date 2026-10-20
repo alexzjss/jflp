@@ -7,6 +7,7 @@ import signal
 import subprocess
 import threading
 import time
+from typing import Callable
 
 
 def kill_tree(p: subprocess.Popen) -> None:
@@ -23,12 +24,14 @@ def kill_tree(p: subprocess.Popen) -> None:
 
 
 def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
-        count=None, collect=None, tail_lines=3000) -> dict:
+        count=None, collect=None, tail_lines=3000,
+        on_line: Callable[[str], None] | None = None) -> dict:
     """Executa um comando streamando a saída.
 
     drop    regex de linhas a NÃO gravar no log (ex.: ruído do Jaguar)
     count   {nome: regex}  -> quantas linhas casam
     collect {nome: regex com 1 grupo} -> lista dos valores capturados
+    on_line chamada para cada linha gravada no log (ao vivo, para SSE)
     """
     drop_re = re.compile(drop) if drop else None
     count_res = {k: re.compile(v) for k, v in (count or {}).items()}
@@ -66,6 +69,8 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
             tail.append(line)
             if f:
                 f.write(line)
+            if on_line:
+                on_line(line.rstrip("\r\n"))
     finally:
         p.stdout.close()
         p.wait()

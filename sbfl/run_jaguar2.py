@@ -19,7 +19,7 @@ FAIL_IGNORE = ["-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
 
 
 def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg: AttemptConfig,
-                log: Path, toolenv: ToolEnv | None = None) -> AttemptResult:
+                log: Path, toolenv: ToolEnv | None = None, on_line=None) -> AttemptResult:
     """`toolenv` só existe para injetar um Maven falso nos testes.
     MissingTool de `resolve` sobe para o chamador (como em run_maven)."""
     mod = module_dir(prep, workdir)
@@ -29,7 +29,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     desc = te.describe()
     total = 0.0
 
-    r = install_reactor(te, settings, prep, workdir, log)
+    r = install_reactor(te, settings, prep, workdir, log, on_line)
     if r is not None:
         total += r["seconds"]
         failed = reactor_failure(r, log, desc)
@@ -58,7 +58,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     # na JVM do Surefire via JAVA_TOOL_OPTIONS (só nesta chamada), preservando opções já existentes.
     opts = " ".join(x for x in ("-Duser.language=en -Duser.country=US", te.env.get("JAVA_TOOL_OPTIONS")) if x)
     env = {**te.env, "JAVA_TOOL_OPTIONS": opts}
-    r = proc.run(cmd, cwd=mod, env=env, timeout=timeout, log_path=log)
+    r = proc.run(cmd, cwd=mod, env=env, timeout=timeout, log_path=log, on_line=on_line)
     total += r["seconds"]
 
     outputs: dict[str, Path] = {"pom": pom}
