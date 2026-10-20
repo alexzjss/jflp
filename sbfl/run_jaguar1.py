@@ -1,6 +1,7 @@
 """Uma tentativa do Jaguar 1: compila com o perfil jaguar1 e roda o JaguarRunner com recuperação de crash."""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from . import proc
@@ -8,8 +9,8 @@ from .adapters.base import Ctx, scan_tests
 from .home import Home, Settings
 from .jaguar import JaguarOptions, run_jaguar
 from .prepare import Prepared
-from .run_jaguar2 import install_reactor, log_phase
-from .run_maven import AttemptConfig, AttemptResult, module_dir
+from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir,
+                        reactor_failure)
 from .toolchain.profiles import ToolEnv, resolve
 
 
@@ -36,9 +37,9 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     r = install_reactor(te, settings, prep, workdir, log)
     if r is not None:
         total += r["seconds"]
-        if r["rc"] != 0 or r["timed_out"]:
-            return AttemptResult(r["rc"], r["timed_out"], total, log, {}, {}, r["command"], desc,
-                                 {"fase": "reactor"})
+        failed = reactor_failure(r, log, desc)
+        if failed:
+            return failed
 
     cmd: list = []
     for fase, args in (("compilar", ("test-compile", *skip)),
@@ -53,10 +54,10 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
                                  {"fase": fase})
 
     classes_dir, tests_dir = "target/classes", "target/test-classes"
-    if prep.relevant_tests is None:
+    if cfg.test_scope == "all" or not prep.relevant_tests:   # mesma regra de test_selection_args
         test_classes, _ = scan_tests(mod / tests_dir)
     else:
-        test_classes = sorted({t.split("$", 1)[0] for t in prep.relevant_tests})
+        test_classes = sorted({t.split("#", 1)[0].split("$", 1)[0] for t in prep.relevant_tests})
     ctx = Ctx(mod, classes_dir, tests_dir, [str(mod / "target" / "dependency" / "*")],
               test_classes, [])
     opts = JaguarOptions(
@@ -65,6 +66,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
         max_retries=settings.get("jaguar1", "max_retries", 6),
         jvm_args=list(settings.get("jaguar1", "jvm_args", []) or []))
     out_dir = mod / "target" / "jflp-jaguar1"
+    shutil.rmtree(out_dir, ignore_errors=True)   # nada de saída velha de outra tentativa
     out_dir.mkdir(parents=True, exist_ok=True)
     log_phase(log, "jaguar1")
     meta = run_jaguar(opts, ctx, out_dir)
@@ -72,7 +74,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
 
     outputs: dict[str, Path] = {}
     xml = out_dir / f"jaguar_{opts.heuristic}.xml"
-    if xml.is_file():
+    if meta.get("status") == "ok" and xml.is_file():
         outputs["jaguar1_xml"] = xml
     if (out_dir / "jaguar.log").is_file():   # junta o log do JaguarRunner ao log da tentativa
         with open(log, "a", encoding="utf-8") as f:

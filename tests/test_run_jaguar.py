@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from sbfl.adapters.base import Bug, Ctx
@@ -28,7 +29,10 @@ POM = ("<project><modelVersion>4.0.0</modelVersion><groupId>g</groupId>"
 FAKE_MVN = textwrap.dedent("""\
     import json, os, sys
     with open(r"{calls}", "a") as f:
-        f.write(json.dumps({{"cwd": os.getcwd(), "argv": sys.argv[1:]}}) + "\\n")
+        f.write(json.dumps({{"cwd": os.getcwd(), "argv": sys.argv[1:],
+                            "jto": os.environ.get("JAVA_TOOL_OPTIONS")}}) + "\\n")
+    if os.environ.get("FAKE_FAIL") and any(os.environ["FAKE_FAIL"] in a for a in sys.argv):
+        sys.exit(1)
     if "-f" in sys.argv and "test" in sys.argv:
         os.makedirs("target", exist_ok=True)
         open("target/jaguar2.csv", "w").write("classe,linha,cef,cnf,cep,cnp,susp\\ndemo/Calc,6,1,0,0,1,1.0\\n")
@@ -152,6 +156,34 @@ class Jaguar2Test(Base):
         self.assertIn("-Dmaven.test.failure.ignore=true", r.command)
         self.assertEqual(len(self.read_calls()), 1)
 
+    def test_prefetch_failure_returns_false_and_logs_coordinate(self):
+        te = self.toolenv()
+        te.env["FAKE_FAIL"] = "surefire-junit4"
+        self.assertFalse(prefetch_jaguar2(self.home, self.settings, toolenv=te))
+        log = (self.home.work / "prefetch_jaguar2.log").read_text(encoding="utf-8")
+        self.assertIn("# jflp falhou: org.apache.maven.surefire:surefire-junit4:3.5.3", log)
+        self.assertEqual(len(self.read_calls()), 10)   # continua nas demais
+
+    def test_jaguar2_prepends_locale_to_existing_java_tool_options(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        (work / "pom.xml").write_text(POM.format("p"))
+        te = self.toolenv()
+        te.env["JAVA_TOOL_OPTIONS"] = "-Xmx512m"
+        run_jaguar2(self.home, self.settings, self._prep(work, "."), work, AttemptConfig(),
+                    self.tmp / "run.log", toolenv=te)
+        self.assertEqual(self.read_calls()[0]["jto"], "-Duser.language=en -Duser.country=US -Xmx512m")
+
+    def test_jaguar2_sets_locale_without_existing_java_tool_options(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        (work / "pom.xml").write_text(POM.format("p"))
+        te = self.toolenv()
+        te.env.pop("JAVA_TOOL_OPTIONS", None)
+        run_jaguar2(self.home, self.settings, self._prep(work, "."), work, AttemptConfig(),
+                    self.tmp / "run.log", toolenv=te)
+        self.assertEqual(self.read_calls()[0]["jto"], "-Duser.language=en -Duser.country=US")
+
     def test_jaguar2_without_pom_reports_phase(self):
         work = self.tmp / "w"
         work.mkdir()
@@ -164,7 +196,9 @@ class Jaguar2Test(Base):
     def test_prefetch_runs_dependency_get_for_all(self):
         self.assertTrue(prefetch_jaguar2(self.home, self.settings, toolenv=self.toolenv()))
         arts = [a for c in self.read_calls() for a in c["argv"] if a.startswith("-Dartifact=")]
-        self.assertEqual(len(arts), 8)
+        self.assertEqual(len(arts), 10)
+        self.assertIn("-Dartifact=org.apache.maven.surefire:surefire-junit4:3.5.3", arts)
+        self.assertIn("-Dartifact=org.apache.maven.plugins:maven-compiler-plugin:3.8.0", arts)
         self.assertIn("-Dartifact=org.jacoco:jacoco-maven-plugin:0.8.7", arts)
         self.assertIn("-Dartifact=org.apache.maven.plugins:maven-surefire-plugin:3.5.3", arts)
         self.assertIn("-Dartifact=junit:junit:4.12", arts)
@@ -233,6 +267,66 @@ class Jaguar1Test(Base):
         self.assertIn("test-compile", argvs[0])
         self.assertIn("dependency:copy-dependencies", argvs[1])
         self.assertIn("# jflp fase: compilar", r.log.read_text(encoding="utf-8"))
+
+    def _j1(self, relevant, scope="relevant", status="ok"):
+        """Roda run_jaguar1 com run_jaguar simulado; devolve (resultado, classes passadas ao loop)."""
+        lib = self.tmp / "lib"
+        lib.mkdir(exist_ok=True)
+        (lib / "jacocoagent.jar").write_bytes(b"jar")
+        self.settings.set("jaguar1", "lib", str(lib))
+        work = self.tmp / "w"
+        work.mkdir(exist_ok=True)
+        seen = {}
+
+        def fake_loop(opts, ctx, out_dir, heuristic=None):
+            seen["classes"] = ctx.test_classes
+            seen["out_existed"] = sorted(p.name for p in out_dir.iterdir())
+            if status == "ok":
+                (out_dir / "jaguar_Ochiai.xml").write_text("<F/>")
+            return {"status": status, "excluded_classes": [], "attempts": 1}
+
+        prep = Prepared(Bug("local", "p", "1"), work, ".", relevant, [], {})
+        with mock.patch("sbfl.run_jaguar1.run_jaguar", fake_loop),                 mock.patch("sbfl.run_jaguar1.scan_tests", lambda root: (["scan.ATest"], {})):
+            r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(test_scope=scope),
+                            self.tmp / "j1.log", toolenv=self.toolenv(8))
+        return r, seen, work
+
+    def test_run_jaguar1_relevant_strips_inner_and_method(self):
+        r, seen, _ = self._j1(["a.BTest$Inner", "a.BTest#m", "a.CTest"])
+        self.assertEqual(seen["classes"], ["a.BTest", "a.CTest"])
+
+    def test_run_jaguar1_scope_all_scans_even_with_relevant(self):
+        r, seen, _ = self._j1(["a.BTest"], scope="all")
+        self.assertEqual(seen["classes"], ["scan.ATest"])
+
+    def test_run_jaguar1_empty_relevant_scans(self):
+        r, seen, _ = self._j1([])
+        self.assertEqual(seen["classes"], ["scan.ATest"])
+
+    def test_run_jaguar1_stale_output_not_reported(self):
+        lib = self.tmp / "w" / "target" / "jflp-jaguar1"
+        lib.mkdir(parents=True)
+        (lib / "jaguar_Ochiai.xml").write_text("<velho/>")
+        r, seen, _ = self._j1(["a.BTest"], status="jaguar_crash")
+        self.assertEqual(seen["out_existed"], [])        # pasta limpa antes da tentativa
+        self.assertNotIn("jaguar1_xml", r.outputs)
+        self.assertIsNone(r.rc)
+        self.assertEqual(r.extra["meta_status"], "jaguar_crash")
+
+    def test_run_jaguar1_reactor_failure_stops(self):
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        (lib / "jacocoagent.jar").write_bytes(b"jar")
+        self.settings.set("jaguar1", "lib", str(lib))
+        te = self.toolenv(8)
+        te.env["FAKE_FAIL"] = "install"
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        prep = Prepared(Bug("local", "p", "1"), work, "core", None, [], {})
+        r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(), self.tmp / "j1.log",
+                        toolenv=te)
+        self.assertEqual(r.extra["fase"], "reactor")
+        self.assertEqual(len(self.read_calls()), 1)
 
     def test_run_jaguar1_missing_lib_does_not_raise(self):
         work = self.tmp / "w"

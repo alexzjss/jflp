@@ -84,3 +84,31 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
         tests = parse_surefire(reports)
     return AttemptResult(r["rc"], r["timed_out"], r["seconds"], log, outputs, tests, cmd,
                          te.describe(), {})
+
+
+def log_phase(log: Path, name: str) -> None:
+    """Cabeçalho de cada fase no mesmo arquivo de log."""
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a", encoding="utf-8") as f:
+        f.write(f"# jflp fase: {name}\n")
+
+
+def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
+                    log: Path) -> dict | None:
+    """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
+    Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
+    if prep.module == ".":
+        return None
+    log_phase(log, "reactor")
+    cmd = te.mvn("install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
+    r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log)
+    r["command"] = cmd
+    return r
+
+
+def reactor_failure(r: dict, log: Path, toolenv: dict) -> AttemptResult | None:
+    """AttemptResult de uma tentativa que parou no reactor, ou None se o install deu certo."""
+    if r["rc"] == 0 and not r["timed_out"]:
+        return None
+    return AttemptResult(r["rc"], r["timed_out"], r["seconds"], log, {}, {}, r["command"], toolenv,
+                         {"fase": "reactor"})

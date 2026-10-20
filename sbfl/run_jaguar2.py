@@ -10,31 +10,12 @@ from .outputs import parse_surefire
 from .pomgen import generate, write
 from .pomgen.fixes import JAGUAR_ARTIFACTS, JAGUAR_GROUP
 from .prepare import Prepared
-from .run_maven import AttemptConfig, AttemptResult, module_dir, test_selection_args
+from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir,
+                        reactor_failure, test_selection_args)
 from .toolchain.profiles import ToolEnv, resolve
 
 FAIL_IGNORE = ["-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                "-Dsurefire.failIfNoSpecifiedTests=false"]
-
-
-def log_phase(log: Path, name: str) -> None:
-    """Cabeçalho de cada fase no mesmo arquivo de log."""
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with open(log, "a", encoding="utf-8") as f:
-        f.write(f"# jflp fase: {name}\n")
-
-
-def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
-                    log: Path) -> dict | None:
-    """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
-    Devolve o resultado do `mvn install` (dict de proc.run) ou None se o módulo é a raiz."""
-    if prep.module == ".":
-        return None
-    log_phase(log, "reactor")
-    cmd = te.mvn("install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
-    r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log)
-    r["command"] = cmd
-    return r
 
 
 def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg: AttemptConfig,
@@ -51,9 +32,9 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     r = install_reactor(te, settings, prep, workdir, log)
     if r is not None:
         total += r["seconds"]
-        if r["rc"] != 0 or r["timed_out"]:
-            return AttemptResult(r["rc"], r["timed_out"], total, log, {}, {}, r["command"], desc,
-                                 {"fase": "reactor"})
+        failed = reactor_failure(r, log, desc)
+        if failed:
+            return failed
 
     log_phase(log, "pom")
     # fixes_on vazio (padrão do AttemptConfig) = "usar as correções detectadas" (None no gerador)
@@ -74,8 +55,9 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     cmd = te.mvn("-f", "jaguar2-pom.xml", "clean", "test", classes_dirs, *FAIL_IGNORE, *skip,
                  *test_selection_args(prep, cfg.test_scope, workdir))
     # O CSV usa o locale da JVM (decimal "0,7071" em pt-BR, quebrando as colunas): força en-US
-    # na JVM do Surefire via JAVA_TOOL_OPTIONS (só nesta chamada).
-    env = {**te.env, "JAVA_TOOL_OPTIONS": "-Duser.language=en -Duser.country=US"}
+    # na JVM do Surefire via JAVA_TOOL_OPTIONS (só nesta chamada), preservando opções já existentes.
+    opts = " ".join(x for x in ("-Duser.language=en -Duser.country=US", te.env.get("JAVA_TOOL_OPTIONS")) if x)
+    env = {**te.env, "JAVA_TOOL_OPTIONS": opts}
     r = proc.run(cmd, cwd=mod, env=env, timeout=timeout, log_path=log)
     total += r["seconds"]
 
@@ -98,14 +80,23 @@ def prefetch_jaguar2(home: Home, settings: Settings, toolenv: ToolEnv | None = N
     te = toolenv or resolve("jaguar2", home, settings)
     j = settings.get("jaguar2", "version", "0.0.2")
     coords = [f"{JAGUAR_GROUP}:{a}:{j}" for a in JAGUAR_ARTIFACTS]
+    sf = settings.get("jaguar2", "surefire", "3.5.3")
+    ju = settings.get("jaguar2", "junit", "4.12")
     coords += [f"org.jacoco:jacoco-maven-plugin:{settings.get('jaguar2', 'jacoco', '0.8.7')}",
-               f"org.apache.maven.plugins:maven-surefire-plugin:{settings.get('jaguar2', 'surefire', '3.5.3')}",
-               f"junit:junit:{settings.get('jaguar2', 'junit', '4.12')}"]
+               f"org.apache.maven.plugins:maven-surefire-plugin:{sf}",
+               f"org.apache.maven.surefire:surefire-junit4:{sf}",
+               f"org.apache.maven.plugins:maven-compiler-plugin:{settings.get('jaguar2', 'compiler', '3.8.0')}",
+               f"junit:junit:{ju}"]
     cwd = home.work
     cwd.mkdir(parents=True, exist_ok=True)
     ok = True
+    log = home.work / "prefetch_jaguar2.log"
     for c in coords:
+        log_phase(log, f"prefetch {c}")
         r = proc.run(te.mvn("dependency:get", f"-Dartifact={c}"), cwd=cwd, env=te.env,
-                     timeout=settings.get("run", "timeout_s"))
-        ok = ok and r["rc"] == 0 and not r["timed_out"]
+                     timeout=settings.get("run", "timeout_s"), log_path=log)
+        if r["rc"] != 0 or r["timed_out"]:
+            ok = False
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(f"# jflp falhou: {c}\n")
     return ok
