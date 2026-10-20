@@ -45,7 +45,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     for fase, args in (("compilar", ("test-compile", *skip)),
                        ("dependencias", ("dependency:copy-dependencies",
                                          "-DoutputDirectory=target/dependency", *skip))):
-        log_phase(log, fase)
+        log_phase(log, fase, on_line)
         cmd = te.mvn(*args)
         r = proc.run(cmd, cwd=mod, env=te.env, timeout=timeout, log_path=log, on_line=on_line)
         total += r["seconds"]
@@ -68,7 +68,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     out_dir = mod / "target" / "jflp-jaguar1"
     shutil.rmtree(out_dir, ignore_errors=True)   # nada de saída velha de outra tentativa
     out_dir.mkdir(parents=True, exist_ok=True)
-    log_phase(log, "jaguar1")
+    log_phase(log, "jaguar1", on_line)
     meta = run_jaguar(opts, ctx, out_dir)
     total += meta.get("seconds", 0)
 

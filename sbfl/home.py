@@ -181,6 +181,9 @@ def _value(v) -> str:
     raise TypeError(f"valor não suportado no config.toml: {v!r}")
 
 
+toml_key, toml_value = _key, _value  # públicos para outros módulos (receitas)
+
+
 def _dump(data: dict, notes: dict | None = None) -> str:
     lines: list[str] = []
 

@@ -14,10 +14,11 @@ from typing import Callable
 from . import recipes
 from . import status as st
 from .adapters.base import Bug
-from .autosearch import candidates
+from .autosearch import candidates, deep_merge
 from .diagnose import Diagnosis, classify
 from .errors import StageError
 from .home import Home, Settings
+from .pomgen import generate as pom_generate
 from .prepare import _rmtree, prepare, working_copy
 from .run_jaguar1 import run_jaguar1
 from .run_jaguar2 import run_jaguar2
@@ -51,7 +52,7 @@ def _first_config(settings: Settings, recipe, opts: RunOptions) -> AttemptConfig
     fixes: set[str] = set(recipe.fixes) if recipe else set()
     if opts.fixes_on:
         fixes |= set(opts.fixes_on)
-    params = {**(recipe.params if recipe else {}), **opts.params}
+    params = deep_merge(recipe.params if recipe else {}, opts.params)
     return AttemptConfig(
         frozenset(fixes), frozenset(opts.fixes_off), params,
         opts.jdk if opts.jdk is not None else (recipe.jdk if recipe else None),
@@ -147,9 +148,12 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         configs: list[AttemptConfig] = []
         queue: list[AttemptConfig] = []
         cfg: AttemptConfig | None = first
+        # última tentativa REAL (que rodou): é ela que define status, saídas e checkout
         diag: Diagnosis | None = None
         res: AttemptResult | None = None
-        workdir: Path | None = None
+        real_n = 0
+        keep: Path | None = None       # cópia de trabalho da última tentativa real
+        missing: MissingTool | None = None
         try:
             n = 0
             while cfg is not None:
@@ -160,42 +164,70 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 workdir = working_copy(prep, home)
                 log = w.attempt_dir(n) / "log.txt"
                 try:
-                    res = _runner(kind)(home, settings, prep, workdir, cfg, log, on_line=cb)
+                    r = _runner(kind)(home, settings, prep, workdir, cfg, log, on_line=cb)
                 except MissingTool as e:
-                    status = st.JDK_INCOMPATIVEL if e.kind == "jdk" else st.DESCONHECIDO
-                    _stopped(w, status, e.message, attempts=n - 1,
-                             attempt_configs=[c.to_dict() for c in configs], **base)
-                    return w.rel
+                    _rmtree(workdir)
+                    w.write_json(f"attempts/{n}/attempt.json", {"config": cfg.to_dict(), "skipped": e.message})
+                    if cb:
+                        cb(f"# jflp tentativa {n} ignorada: {e.message}")
+                    if n == 1:
+                        missing = e
+                        break
+                    cfg = queue.pop(0) if queue and n < max_attempts else None
+                    continue
+                except BaseException:
+                    _rmtree(workdir)
+                    raise
+                if keep is not None:
+                    _rmtree(keep)
+                res, keep, real_n = r, workdir, n
                 diag = classify(kind, res)
                 _write_attempt(w, n, cfg, diag, res, log)
                 stop = (st.is_success(diag.status) or not opts.auto_search or n >= max_attempts
                         or diag.status == st.TIMEOUT)
                 if n == 1 and not stop:
-                    detected = set((res.extra.get("pom_plan") or {}).get("detected") or [])
-                    queue = candidates(first, diag, kind, settings, detected)
-                if stop or not queue:
-                    break
-                cfg = queue.pop(0)
-                _rmtree(workdir)
-                workdir = None
+                    queue = candidates(first, diag, kind, settings, _detected(prep, settings, kind, res))
+                cfg = None if stop or not queue else queue.pop(0)
 
-            _finalize(settings, w, kind, prep, opts, res, diag, workdir, configs, base)
+            if missing is not None:
+                status = st.JDK_INCOMPATIVEL if missing.kind == "jdk" else st.DESCONHECIDO
+                w.write_json("env.json", _env_info(prep, None))
+                w.write_text("command.txt", "")
+                _stopped(w, status, missing.message, attempts=1,
+                         attempt_configs=[c.to_dict() for c in configs], **base)
+            else:
+                _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base)
         finally:
-            if workdir is not None:
-                _rmtree(workdir)
+            if keep is not None:
+                _rmtree(keep)
     return w.rel
 
 
+def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
+    """Correções detectadas no POM; se a 1ª tentativa falhou antes de gerá-lo, calcula sem gravar nada."""
+    plan = res.extra.get("pom_plan")
+    if plan is not None:
+        return set(plan.get("detected") or [])
+    if kind != "jaguar2":
+        return set()
+    try:
+        mod = prep.pristine if prep.module == "." else prep.pristine / prep.module
+        return set(pom_generate(mod, settings, 11).detected)
+    except Exception:
+        return set()
+
+
 def _finalize(settings, w: RunWriter, kind, prep, opts, res: AttemptResult, diag: Diagnosis,
-              workdir: Path, configs, base) -> None:
-    _copy_outputs(w, kind, res, len(configs))
+              workdir: Path, configs, real_n: int, base) -> None:
+    _copy_outputs(w, kind, res, real_n)
     w.write_json("env.json", _env_info(prep, res))
     w.write_text("command.txt", shlex.join(str(c) for c in res.command) + "\n" if res.command else "")
     warnings = list(diag.warnings)
     run = {"status": diag.status, "diagnosis": diag.to_dict(), "warnings": warnings,
            "tests": _count_tests(res.tests), "attempts": len(configs),
            "attempt_configs": [c.to_dict() for c in configs], **base}
-    archive = opts.archive_checkout if opts.archive_checkout is not None         else settings.get("run", "archive_checkout", True)
+    archive = (opts.archive_checkout if opts.archive_checkout is not None
+               else settings.get("run", "archive_checkout", True))
     if archive:
         try:
             run["checkout"] = w.archive_checkout(workdir)

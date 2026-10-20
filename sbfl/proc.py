@@ -70,7 +70,10 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
             if f:
                 f.write(line)
             if on_line:
-                on_line(line.rstrip("\r\n"))
+                try:
+                    on_line(line.rstrip("\r\n"))
+                except Exception:  # um callback ruim nunca derruba a leitura
+                    pass
     finally:
         p.stdout.close()
         p.wait()

@@ -87,11 +87,16 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
                          te.describe(), {})
 
 
-def log_phase(log: Path, name: str) -> None:
+def log_phase(log: Path, name: str, on_line=None) -> None:
     """Cabeçalho de cada fase no mesmo arquivo de log."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as f:
         f.write(f"# jflp fase: {name}\n")
+    if on_line:
+        try:
+            on_line(f"# jflp fase: {name}")
+        except Exception:
+            pass
 
 
 def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
@@ -100,7 +105,7 @@ def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Pa
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
         return None
-    log_phase(log, "reactor")
+    log_phase(log, "reactor", on_line)
     cmd = te.mvn("install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
     r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
                  on_line=on_line)

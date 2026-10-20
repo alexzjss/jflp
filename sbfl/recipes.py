@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .adapters.base import Bug
-from .home import Home, _key, _value
+from .home import Home, toml_key as _key, toml_value as _value
 from .run_maven import AttemptConfig
 
 

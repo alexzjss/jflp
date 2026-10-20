@@ -36,7 +36,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
         if failed:
             return failed
 
-    log_phase(log, "pom")
+    log_phase(log, "pom", on_line)
     # fixes_on vazio (padrão do AttemptConfig) = "usar as correções detectadas" (None no gerador)
     plan = generate(mod, settings, te.jdk.major, set(cfg.fixes_on) if cfg.fixes_on else None,
                     set(cfg.fixes_off), cfg.params)
@@ -48,7 +48,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
         extra["erro"] = "; ".join(plan.warnings) or "não foi possível gerar o jaguar2-pom.xml"
         return AttemptResult(None, False, total, log, {}, {}, [], desc, extra)
 
-    log_phase(log, "jaguar2")
+    log_phase(log, "jaguar2", on_line)
     # O Jaguar 2 só analisa as classes listadas em jaguar2.classesDirs (propriedade de sistema da JVM
     # do Surefire, que repassa as -D do Maven). Sem ela o relatório sai vazio.
     classes_dirs = f"-Djaguar2.classesDirs={mod / 'target' / 'classes'}"

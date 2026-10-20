@@ -6,6 +6,7 @@ from dataclasses import replace
 
 from .diagnose import Diagnosis, Suggestion
 from .run_maven import AttemptConfig
+from .toolchain.profiles import PROFILES
 
 SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin"
 SUREFIRE_VERSIONS = ("3.5.3", "3.2.5", "3.0.0-M5")
@@ -13,11 +14,11 @@ COMPILER_VERSIONS = ("3.8.0", "3.1", "3.11.0")
 JDKS = (11, 17, 8)
 
 
-def _merge(base: dict, over: dict) -> dict:
+def deep_merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in over.items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
-            out[k] = _merge(out[k], v)
+            out[k] = deep_merge(out[k], v)
         else:
             out[k] = copy.deepcopy(v)
     return out
@@ -29,8 +30,15 @@ def _with_fix(first: AttemptConfig, fix: str, params: dict, detected: set[str]) 
     on.add(fix)
     merged = dict(first.params)
     if params:
-        merged[fix] = _merge(first.params.get(fix) or {}, params)
+        merged[fix] = deep_merge(first.params.get(fix) or {}, params)
     return replace(first, fixes_on=frozenset(on), params=merged)
+
+
+def _default_jdk(first: AttemptConfig, kind: str, jdk: int | None) -> int | None:
+    """JDK igual ao padrão do perfil (e a 1ª tentativa sem JDK fixo) seria uma tentativa duplicada."""
+    if jdk is not None and first.jdk is None and PROFILES.get(kind, {}).get("jdk") == jdk:
+        return None
+    return jdk
 
 
 def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: set[str]) -> AttemptConfig:
@@ -38,7 +46,7 @@ def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: s
     if s.fix and kind == "jaguar2":   # só o Jaguar 2 usa correções do POM
         cfg = _with_fix(cfg, s.fix, s.params, detected)
     if s.jdk is not None:
-        cfg = replace(cfg, jdk=s.jdk)
+        cfg = replace(cfg, jdk=_default_jdk(first, kind, s.jdk) or first.jdk)
     if s.maven:
         cfg = replace(cfg, maven=s.maven)
     if s.params.get("test_scope"):
@@ -58,7 +66,7 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
         for v in COMPILER_VERSIONS:
             out.append(_with_fix(first, "compiler-java", {"version": v}, detected))
     for j in JDKS:
-        out.append(replace(first, jdk=j))
+        out.append(replace(first, jdk=_default_jdk(first, kind, j) or first.jdk))
     seen, result = {first.key()}, []
     for c in out:
         if c.key() not in seen:
