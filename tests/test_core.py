@@ -312,7 +312,8 @@ class T(unittest.TestCase):
     # ------------------------------------------------ compare (com e sem Jaguar)
     def test_compare_parsers_and_rank(self):
         import gzip
-        from sbfl.compare import compare_tests, jaguar_rank, parse_jaguar_log, parse_surefire, render
+        from sbfl.compare import compare_tests, jaguar_rank, render
+        from sbfl.outputs import parse_jaguar1_log, parse_surefire
         with tempfile.TemporaryDirectory() as t:
             t = Path(t); rep = t / "sf"; rep.mkdir()
             (rep / "TEST-x.FooTest.xml").write_text(
@@ -330,7 +331,7 @@ class T(unittest.TestCase):
                      "10:01 DEBUG JaguarLogger - Test e(x.FooTest) : Passed"]
             with gzip.open(log, "wt") as f:
                 f.write("\n".join(lines) + "\n")
-            j = parse_jaguar_log(log)
+            j = parse_jaguar1_log(log)
             self.assertEqual(j, {"x.FooTest#a": "passed", "x.FooTest#b": "failed", "x.FooTest#e": "passed"})  # só a última tentativa
             cmp = compare_tests(m, j)
             self.assertEqual(cmp["only_maven"], ["x.FooTest#d"])        # o skipped não conta como "só no Maven"

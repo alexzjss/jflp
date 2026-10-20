@@ -6,55 +6,15 @@
 Nada aqui calcula fórmulas próprias; só lê o que o Maven e o Jaguar produziram."""
 from __future__ import annotations
 
-import gzip
 import json
-import xml.etree.ElementTree as ET
 from collections import Counter
 from pathlib import Path
 
 from .build import resolve_tool
 from .diffgt import FaultLine, select_lines
 from .errors import StageError
-from .jaguar import TEST_RE
 from .proc import make_env, run
-from .outputs import outer, parse_xml_jaguar1
-
-MARK = "# sbfl attempt"
-
-
-def parse_surefire(reports: Path) -> dict[str, str]:
-    """{classe#teste: passed|failed|error|skipped} a partir de target/surefire-reports/TEST-*.xml."""
-    out = {}
-    for f in sorted(Path(reports).glob("TEST-*.xml")):
-        try:
-            root = ET.parse(f).getroot()
-        except ET.ParseError:
-            continue
-        for tc in root.iter("testcase"):
-            st = "passed"
-            if tc.find("failure") is not None:
-                st = "failed"
-            elif tc.find("error") is not None:
-                st = "error"
-            elif tc.find("skipped") is not None:
-                st = "skipped"
-            out[f"{tc.get('classname', '')}#{tc.get('name', '')}"] = st
-    return out
-
-
-def parse_jaguar_log(path: Path) -> dict[str, str]:
-    """{classe#teste: passed|failed} dos testes da ÚLTIMA tentativa do Jaguar."""
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-        lines = f.read().splitlines()
-    last = max((i for i, l in enumerate(lines) if l.startswith(MARK)), default=-1)
-    out = {}
-    for line in lines[last + 1:]:
-        m = TEST_RE.search(line)
-        if m:
-            out[f"{m.group(2)}#{m.group(1)}"] = "passed" if m.group(3) == "Passed" else "failed"
-    return out
-
+from .outputs import outer, parse_jaguar1_log, parse_surefire, parse_xml_jaguar1
 
 def compare_tests(maven: dict, jag: dict) -> dict:
     ok = lambda st: st == "passed"
@@ -127,7 +87,7 @@ def run_compare(cfg, adapter, bug) -> str:
         raise StageError("no_results", f"sem resultado do Jaguar para {bug.bug_id}: rode `sbfl run` antes")
     meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
     faults = [FaultLine(**t) for t in json.loads((d / "truth.json").read_text(encoding="utf-8"))]
-    jag = parse_jaguar_log(d / "jaguar.log.gz")
+    jag = parse_jaguar1_log(d / "jaguar.log.gz")
 
     mlog = d / "maven_test.log"
     mlog.write_text("", encoding="utf-8")
