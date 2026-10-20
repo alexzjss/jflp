@@ -49,3 +49,7 @@ pre.diff .menos { background: rgba(179,38,30,.15); color: var(--err); }
 .correcao { padding: 6px 0; border-bottom: 1px solid var(--line); }
 .correcao .vazio { margin-left: 24px; font-size: .9em; }
 a.botao { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 7px 14px; color: var(--text); text-decoration: none; }
+tr.defeito td { background: rgba(179,38,30,.15); font-weight: 600; }
+pre.log .acerto { background: rgba(255,200,0,.25); }
+textarea { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; }
+details summary { cursor: pointer; }

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Lote {{ b.id }} - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Lote {{ b.id }}: {{ b.name }}</h1>
+<div hx-get="/lote/{{ b.id }}/progresso" hx-trigger="every 3s" hx-swap="innerHTML">
+{% include "_lote_progresso.html" %}
+</div>
+{% endblock %}

@@ -89,6 +89,16 @@ def list_jobs(home: Home, state: str | None = None, limit: int = 50) -> list[dic
         return [dict(r) for r in con.execute(sql, (*args, limit))]
 
 
+def list_batches(home: Home, limit: int = 100) -> list[dict]:
+    """Lotes do mais recente ao mais antigo, com a contagem de jobs."""
+    with contextlib.closing(_connect(home)) as con:
+        return [dict(r) for r in con.execute(
+            "SELECT b.id, b.name, b.created, b.kinds, b.state, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id) AS total, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id AND j.state='done') AS done "
+            "FROM batches b ORDER BY b.id DESC LIMIT ?", (limit,))]
+
+
 def batch_jobs(home: Home, batch_id: int) -> list[dict]:
     """Jobs de um lote, na ordem (bug_extra já decodificado em `extra`)."""
     with contextlib.closing(_connect(home)) as con:

@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}{{ rel }} - JFLP Studio{% endblock %}
+{% block content %}
+<h1>{{ run.bug }} · {{ kind_label.get(run.kind, run.kind) }}</h1>
+<p class="vazio">{{ rel }}{% if run.parent %} · nova tentativa de <a href="/run/{{ run.parent }}">{{ run.parent }}</a>{% endif %}</p>
+
+<section>
+  <h2>Resultado</h2>
+  <p>Status: <strong class="{{ 'ok' if run.status in ('ok', 'ok_testes_falhando') else 'erro' }}">{{ run.status }}</strong>
+    · tentativas: {{ run.attempts or 0 }}
+    {% if run.seconds is not none %}· {{ run.seconds|round|int }} s{% endif %}
+    {% if run.test_scope %}· testes: {{ 'relevantes' if run.test_scope == 'relevant' else 'todos' }}{% endif %}</p>
+  {% for w in run.warnings or [] %}<p class="aviso">{{ w }}</p>{% endfor %}
+  <div class="botoes">
+    <form method="post" action="/run/{{ rel|q }}/abrir" hx-post="/run/{{ rel|q }}/abrir" hx-target="#abrir-ret"><button type="submit">Abrir pasta</button></form>
+    <a class="botao" href="/run/{{ rel|q }}/zip">Exportar zip</a>
+  </div>
+  <span id="abrir-ret"></span>
+</section>
+
+{% if diag and diag.cause %}
+<section>
+  <h2>Diagnóstico</h2>
+  <p><strong>{{ diag.cause }}</strong></p>
+  {% if diag.evidence %}<pre class="log">{{ diag.evidence|join('\n') }}</pre>{% endif %}
+  {% if diag.suggestions %}
+  <h2>Sugestões</h2>
+  {% for s in diag.suggestions %}
+  <form method="post" action="/run/{{ rel|q }}/tentar" class="correcao">
+    <input type="hidden" name="idx" value="{{ loop.index0 }}">
+    {{ s.label }}
+    <button type="submit">Tentar de novo com esta correção</button>
+  </form>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+
+{% if can_recipe %}
+<section>
+  <h2>Salvar como receita</h2>
+  <p class="vazio">Guarda as correções da última tentativa (fixes: {{ cfg.fixes_on|join(', ') or 'nenhuma' }}) para execuções futuras.</p>
+  <form method="post" action="/run/{{ rel|q }}/receita" class="linha">
+    <select name="scope">
+      <option value="bug">Só este bug ({{ run.bug_id }})</option>
+      <option value="glob">Padrão de bugs</option>
+      <option value="projeto">Projeto inteiro</option>
+    </select>
+    <input type="text" name="glob" placeholder="Padrão (ex.: 1*), só para o escopo padrão" style="min-width:200px">
+    <input type="text" name="note" placeholder="Nota (opcional)" style="min-width:200px">
+    <button type="submit">Salvar como receita</button>
+  </form>
+</section>
+{% endif %}
+
+<section>
+  <h2>Testes</h2>
+  {% if counts %}
+  <p>{{ counts.total }} testes · {{ counts.passed or 0 }} passaram · {{ counts.failed or 0 }} falharam · {{ counts.error or 0 }} com erro · {{ counts.skipped or 0 }} ignorados</p>
+  {% else %}<p class="vazio">Sem resultados de testes.</p>{% endif %}
+  {% if failing %}
+  <details><summary>{{ failing|length }} falhas</summary>
+    <ul>{% for t in failing[:300] %}<li><code>{{ t }}</code></li>{% endfor %}</ul>
+    {% if failing|length > 300 %}<p class="vazio">… e mais {{ failing|length - 300 }}.</p>{% endif %}
+  </details>
+  {% endif %}
+</section>
+
+{% if has_scores %}
+<section>
+  <h2>Linhas suspeitas</h2>
+  <p class="vazio">Linhas do defeito em destaque.</p>
+  <input type="text" id="filtro" name="filtro" placeholder="Filtrar por classe…" hx-get="/run/{{ rel|q }}/linhas" hx-trigger="keyup changed delay:300ms" hx-target="#linhas" hx-swap="outerHTML" hx-include="this">
+  {% include "_linhas.html" %}
+</section>
+{% endif %}
+
+<section>
+  <h2>Arquivos</h2>
+  {% if files %}
+  <table>
+    <thead><tr><th>Arquivo</th><th>Tamanho</th></tr></thead>
+    <tbody>
+    {% for f in files %}
+      <tr><td><a href="/run/{{ rel|q }}/arquivo?p={{ f.rel|q }}">{{ f.rel }}</a></td><td>{{ f.size }} B</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Buscar nos logs</h2>
+  <input type="text" name="q" placeholder="Texto a procurar nos logs das tentativas…" hx-get="/run/{{ rel|q }}/log" hx-trigger="keyup changed delay:400ms" hx-target="#log-resultado" hx-swap="outerHTML">
+  <div id="log-resultado"></div>
+</section>
+{% endblock %}

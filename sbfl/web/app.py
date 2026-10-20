@@ -94,6 +94,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.include_router(env_router)
     from .routes_bugs import router as bugs_router
     app.include_router(bugs_router)
+    from .routes_runs import router as runs_router
+    app.include_router(runs_router)
     return app
 
 

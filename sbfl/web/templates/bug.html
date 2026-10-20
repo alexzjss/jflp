@@ -25,6 +25,8 @@
 
 <section>
   <h2>Execuções</h2>
+  {% if last.get('maven') and last.get('jaguar2') %}<a class="botao" href="/comparar?a={{ last.maven|q }}&amp;b={{ last.jaguar2|q }}">Maven × Jaguar 2</a>{% endif %}
+  {% if last.get('jaguar1') and last.get('jaguar2') %}<a class="botao" href="/comparar?a={{ last.jaguar1|q }}&amp;b={{ last.jaguar2|q }}">Jaguar 1 × Jaguar 2</a>{% endif %}
   {% if runs %}
   <table>
     <thead><tr><th>Início</th><th>Tipo</th><th>Status</th><th>Testes</th><th>Duração</th></tr></thead>

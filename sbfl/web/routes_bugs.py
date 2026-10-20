@@ -193,8 +193,9 @@ def bug_page(request: Request, key: str):
     if bug is None:
         return _not_found(request, f"Bug não encontrado: {key}")
     runs = store.list_runs(request.app.state.home, bug.benchmark, bug.project, bug.bug_id)
+    last = {k: r["path"] for k, r in _latest_by_kind(request.app.state.home, bug).items()}
     return _render(request, "bug.html", {"page": "bugs", "bug": bug, "runs": runs,
-                                         "kind_label": KIND_LABEL})
+                                         "kind_label": KIND_LABEL, "last": last})
 
 
 # ------------------------------------------------------------------ ao vivo
