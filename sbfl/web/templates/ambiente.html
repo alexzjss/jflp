@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Ambiente - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Ambiente</h1>
+
+{% if msg %}<p class="aviso {{ 'ok' if msg_ok else 'erro' }}">{{ msg }}</p>{% endif %}
+
+<section>
+  <h2>JDKs</h2>
+  {% if jdks %}
+  <table>
+    <thead><tr><th>Versão</th><th>Pasta</th><th>Origem</th></tr></thead>
+    <tbody>
+    {% for j in jdks %}
+      <tr><td>JDK {{ j.major }} ({{ j.version }})</td><td>{{ j.home }}</td><td>{{ j.source }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vazio">JDK não encontrado.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Mavens</h2>
+  {% if mavens %}
+  <table>
+    <thead><tr><th>Versão</th><th>Pasta</th><th>Origem</th></tr></thead>
+    <tbody>
+    {% for m, v in mavens %}
+      <tr><td>Maven {{ v }}</td><td>{{ m.home }}</td><td>{{ m.source }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vazio">Maven não encontrado.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Outras ferramentas</h2>
+  <table>
+    <tbody>
+      <tr><th>Git</th><td>{% if git %}{{ git }}{% else %}não encontrado{% endif %}</td></tr>
+      <tr><th>WSL</th><td>{{ wsl.message }}</td></tr>
+      <tr><th>Defects4J</th><td>{% if wsl.d4j %}{{ wsl.d4j }}{% else %}não encontrado{% endif %}</td></tr>
+      <tr><th>Jaguar 1 (lib)</th>
+          <td>{{ jaguar1_lib }} &mdash; {% if jaguar1_ok %}instalado{% else %}não encontrado{% endif %}</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Perfis por tipo de execução</h2>
+  <table>
+    <tbody>
+    {% for p in profiles %}
+      <tr><th>{{ p.name }}</th><td class="{{ 'ok' if p.ok else 'erro' }}">{{ p.text }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Baixar</h2>
+  <div class="botoes">
+    {% for v in jdk_options %}
+    <button hx-get="/ambiente/plano?tipo=jdk&v={{ v }}" hx-target="#dialogo">JDK {{ v }}</button>
+    {% endfor %}
+    {% for v in maven_options %}
+    <button hx-get="/ambiente/plano?tipo=maven&v={{ v }}" hx-target="#dialogo">Maven {{ v }}</button>
+    {% endfor %}
+    <button hx-get="/ambiente/plano?tipo=jaguar1" hx-target="#dialogo">Jaguar 1 (2 jars)</button>
+  </div>
+  <div id="dialogo"></div>
+</section>
+
+<section>
+  <h2>Jaguar 2 offline</h2>
+  <p>Baixa para a pasta Maven própria tudo que o Jaguar 2 precisa, para usar sem internet.</p>
+  <button hx-post="/ambiente/prefetch" hx-target="#prefetch">Preparar Jaguar 2 para uso offline</button>
+  <div id="prefetch"></div>
+</section>
+
+<section>
+  <h2>Apontar pasta existente</h2>
+  <form method="post" action="/ambiente/apontar" class="linha">
+    <select name="kind">
+      <option value="jdk">JDK</option>
+      <option value="maven">Maven</option>
+      <option value="jaguar1">Jaguar 1 (pasta lib)</option>
+    </select>
+    <input type="text" name="path" placeholder="Caminho da pasta" required>
+    <button type="submit">Registrar</button>
+  </form>
+</section>
+{% endblock %}

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 full = ["zstandard", "pywebview"]
+dev = ["httpx"]
 
 [project.scripts]
 jflp = "sbfl.cli:main"

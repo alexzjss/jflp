@@ -78,6 +78,17 @@ def active_batch_ids(home: Home) -> list[int]:
             "(SELECT 1 FROM jobs j WHERE j.batch_id=b.id AND j.state IN ('pending','running')) ORDER BY b.id")]
 
 
+def list_jobs(home: Home, state: str | None = None, limit: int = 50) -> list[dict]:
+    """Jobs de todos os lotes (mais antigos primeiro), opcionalmente de um só estado."""
+    sql, args = "SELECT * FROM jobs", []
+    if state is not None:
+        sql += " WHERE state=?"
+        args.append(state)
+    sql += " ORDER BY batch_id, idx LIMIT ?"
+    with contextlib.closing(_connect(home)) as con:
+        return [dict(r) for r in con.execute(sql, (*args, limit))]
+
+
 def batch_jobs(home: Home, batch_id: int) -> list[dict]:
     """Jobs de um lote, na ordem (bug_extra já decodificado em `extra`)."""
     with contextlib.closing(_connect(home)) as con:

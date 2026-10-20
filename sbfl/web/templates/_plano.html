@@ -1,0 +1,24 @@
+<div class="dialogo">
+{% if error %}
+  <p class="aviso erro">{{ error }}</p>
+{% else %}
+  <h3>Confirmar download</h3>
+  <ul>
+  {% for p in plans %}
+    <li>
+      <strong>{{ p.name }}</strong><br>
+      URL: <code>{{ p.url }}</code><br>
+      Tamanho: {{ p.size }}<br>
+      Checksum: <code>{{ p.checksum }}</code><br>
+      Destino: <code>{{ p.dest }}</code>
+    </li>
+  {% endfor %}
+  </ul>
+  <form hx-post="/ambiente/baixar" hx-target="#dialogo">
+    <input type="hidden" name="tipo" value="{{ tipo }}">
+    <input type="hidden" name="v" value="{{ v }}">
+    <button type="submit">Baixar</button>
+    <button type="button" onclick="document.getElementById('dialogo').innerHTML=''">Cancelar</button>
+  </form>
+{% endif %}
+</div>
