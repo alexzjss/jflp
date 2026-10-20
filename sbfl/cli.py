@@ -326,8 +326,7 @@ def cmd_ui(home: Home, settings: Settings, args) -> int:
         print("A interface web ainda não disponível nesta instalação.")
         return 1
     port = args.port if args.port is not None else int(settings.get("ui", "port", 0) or 0)
-    serve(home, port, not args.no_browser, args.window)
-    return 0
+    return serve(home, port, not args.no_browser, args.window)
 
 
 # ----------------------------------------------------------------- selftest

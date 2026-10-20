@@ -111,11 +111,21 @@ def plano(request: Request, tipo: str, v: str = ""):
     return _render(request, "_plano.html", ctx)
 
 
-def _new_task(request: Request, label: str) -> tuple[str, dict]:
-    tid = uuid.uuid4().hex[:12]
-    task = {"label": label, "done": False, "error": None, "bytes": 0, "total": None, "dest": None}
-    request.app.state.tasks[tid] = task
-    return tid, task
+_LOCK = threading.Lock()
+
+
+def _new_task(request: Request, label: str, key: str) -> tuple[str, dict, bool]:
+    """Cria a tarefa, ou devolve a que já roda para a mesma `key` (False = reaproveitada)."""
+    tasks = request.app.state.tasks
+    with _LOCK:
+        for tid, t in tasks.items():
+            if t.get("key") == key and not t["done"]:
+                return tid, t, False
+        tid = uuid.uuid4().hex[:12]
+        task = {"label": label, "key": key, "done": False, "error": None, "bytes": 0,
+                "total": None, "dest": None}
+        tasks[tid] = task
+        return tid, task, True
 
 
 def _progress_page(request: Request, tid: str):
@@ -125,7 +135,9 @@ def _progress_page(request: Request, tid: str):
 @router.post("/ambiente/baixar", response_class=HTMLResponse)
 def baixar(request: Request, tipo: str = Form(...), v: str = Form("")):
     home = request.app.state.home
-    tid, task = _new_task(request, f"Baixando {tipo} {v}".strip())
+    tid, task, new = _new_task(request, f"Baixando {tipo} {v}".strip(), f"baixar:{tipo}:{v}")
+    if not new:
+        return _progress_page(request, tid)
 
     def work():
         base = 0
@@ -152,7 +164,9 @@ def baixar(request: Request, tipo: str = Form(...), v: str = Form("")):
 @router.post("/ambiente/prefetch", response_class=HTMLResponse)
 def prefetch(request: Request):
     st = request.app.state
-    tid, task = _new_task(request, "Preparando o Jaguar 2 para uso offline")
+    tid, task, new = _new_task(request, "Preparando o Jaguar 2 para uso offline", "prefetch")
+    if not new:
+        return _progress_page(request, tid)
 
     def work():
         try:
@@ -178,26 +192,36 @@ def progresso(request: Request, tid: str):
     return _progress_page(request, tid)
 
 
+def _looks_like_jdk(p: Path) -> bool:
+    return (p / "release").is_file() or (p / "lib" / "rt.jar").is_file() or (p / "lib" / "modules").is_file()
+
+
+def _looks_like_maven(p: Path) -> bool:
+    return (p / "boot").is_dir() and (p / "conf" / "settings.xml").is_file()
+
+
 @router.post("/ambiente/apontar", response_class=HTMLResponse)
 def apontar(request: Request, kind: str = Form(...), path: str = Form(...)):
     settings = request.app.state.settings
     folder = Path(path.strip().strip('"'))
     msg, ok = None, False
-    if not folder.is_dir():
+    if not folder.is_absolute():
+        msg = "Informe o caminho absoluto da pasta."
+    elif not folder.is_dir():
         msg = f"A pasta não existe: {folder}"
     elif kind == "jdk":
-        info = java_info(folder)
+        info = java_info(folder) if _looks_like_jdk(folder) else None
         if info is None:
-            msg = "Não é um JDK válido: não encontrei bin/java ou ele não executa."
+            msg = "Não é um JDK válido: faltam release, lib/rt.jar ou lib/modules, ou o java não executa."
         else:
             jdks = dict(settings.get("tools", "jdks", {}) or {})
             jdks[str(info[0])] = str(folder)
             settings.set("tools", "jdks", jdks)
             msg, ok = f"JDK {info[0]} ({info[1]}) registrado.", True
     elif kind == "maven":
-        ver = maven_info(folder)
+        ver = maven_info(folder) if _looks_like_maven(folder) else None
         if ver is None:
-            msg = "Não é um Maven válido: não encontrei bin/mvn ou ele não executa."
+            msg = "Não é um Maven válido: faltam boot/ e conf/settings.xml, ou o mvn não executa."
         else:
             mavens = dict(settings.get("tools", "mavens", {}) or {})
             mavens[_vstr(ver)] = str(folder)
