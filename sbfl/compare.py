@@ -17,7 +17,7 @@ from .diffgt import FaultLine, select_lines
 from .errors import StageError
 from .jaguar import TEST_RE
 from .proc import make_env, run
-from .report import outer, parse_xml
+from .outputs import outer, parse_xml_jaguar1
 
 MARK = "# sbfl attempt"
 
@@ -74,7 +74,7 @@ def compare_tests(maven: dict, jag: dict) -> dict:
 def jaguar_rank(xml_path: Path, faults: list[FaultLine]) -> dict:
     """Posição das linhas do defeito no relatório do Jaguar. `position_in_file` é a ordem em que o
     Jaguar gravou; rank_best/rank_worst vêm do `suspicious-value` dele (empates entre os dois)."""
-    reqs = parse_xml(xml_path)
+    reqs = parse_xml_jaguar1(xml_path)
     vals = [round(r.sus, 12) for r in reqs]
     wanted = {(f.cls, f.line) for f in select_lines(faults)}
     rows = []

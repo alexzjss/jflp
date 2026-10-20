@@ -11,8 +11,16 @@ from pathlib import Path
 
 from . import __version__
 from .build import resolve_tool
-from .pipeline import java_version
-from .proc import make_env
+from .proc import java_exe, make_env
+
+
+def java_version(cfg, java_home=None) -> str:
+    try:
+        r = subprocess.run([java_exe(cfg, java_home), "-version"], capture_output=True,
+                           text=True, env=make_env(cfg, java_home))
+        return (r.stderr or r.stdout).splitlines()[0]
+    except Exception as e:
+        return f"erro: {e}"
 
 
 def _sha(path: Path) -> str:
