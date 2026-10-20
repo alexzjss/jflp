@@ -18,8 +18,10 @@ from pathlib import Path
 from .adapters.base import Bug
 from .home import Home
 
-_INVALID = re.compile(r'[:*?"<>|\x00-\x1f]')
+_INVALID = re.compile(r'[:*?"<>|/\\\x00-\x1f]')
+_RESERVED = re.compile(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?")
 
+_MANIFEST = ".writer.json"  # dados originais, para recuperar uma .partial
 _SCHEMA = """CREATE TABLE IF NOT EXISTS runs(
     path TEXT PRIMARY KEY, benchmark TEXT, project TEXT, bug TEXT, kind TEXT,
     status TEXT, started TEXT, seconds REAL, n_tests INT, n_failed INT, parent TEXT)"""
@@ -29,7 +31,9 @@ _INSERT = "INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?)"
 def _safe(part: str) -> str:
     """Componente de caminho válido no Windows (troca : * ? " < > | por _)."""
     s = _INVALID.sub("_", str(part)).rstrip(" .")
-    return s or "_"
+    if not s:
+        return "_"  # vazio, "." ou ".."
+    return "_" + s if _RESERVED.fullmatch(s) else s
 
 
 def make_writable(path) -> None:
@@ -72,6 +76,14 @@ def _index(home: Home, rel: str, run: dict) -> None:
         con.execute(_INSERT, _row(rel, run, tuple(rel.split("/")[:3])))
 
 
+def _read_json(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def _count_attempts(folder: Path) -> int:
     root = folder / "attempts"
     return sum(1 for d in root.iterdir() if d.is_dir()) if root.is_dir() else 0
@@ -108,6 +120,10 @@ class RunWriter:
         self._final = final
         self.rel = "/".join((*parts, name))
         self._done = False
+        (self.dir / _MANIFEST).write_text(json.dumps({
+            "bug": bug.key, "benchmark": bug.benchmark, "project": bug.project,
+            "bug_id": bug.bug_id, "kind": kind, "parent": parent, "started": self.started,
+        }, ensure_ascii=False), encoding="utf-8")
 
     # -- gravação --
     def _dest(self, rel: str) -> Path:
@@ -154,7 +170,7 @@ class RunWriter:
                         tar.add(src_dir, arcname=".")
             return name
         name = "checkout.zip"
-        with zipfile.ZipFile(self._dest(name), "w", zipfile.ZIP_DEFLATED) as zf:
+        with zipfile.ZipFile(self._dest(name), "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
             for item in sorted(src_dir.rglob("*")):
                 if item.is_file():
                     zf.write(item, item.relative_to(src_dir).as_posix())
@@ -180,6 +196,7 @@ class RunWriter:
         }
         doc.update(run)
         (self.dir / "run.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        (self.dir / _MANIFEST).unlink(missing_ok=True)
         os.replace(self.dir, self._final)
         self.dir = self._final
         _lock_files(self._final)
@@ -220,7 +237,7 @@ def reindex(home: Home) -> int:
     """Reconstrói a tabela varrendo runs/**/run.json."""
     rows = []
     if home.runs.is_dir():
-        for f in sorted(home.runs.rglob("run.json")):
+        for f in sorted(home.runs.glob("*/*/*/*/run.json")):
             parts = f.parent.relative_to(home.runs).parts
             if any(p.startswith(".") for p in parts):
                 continue  # .partial nunca é execução válida
@@ -251,17 +268,24 @@ def recover_partials(home: Home) -> list[str]:
             final = base / f"{stem}-{n}"
         parts = base.relative_to(home.runs).parts
         m = re.fullmatch(r"\d{8}-\d{6}-(.+?)(?:-\d+)?", stem)
-        kind = m.group(1) if m else "desconhecido"
-        try:
-            started = datetime.fromtimestamp(partial.stat().st_ctime).isoformat(timespec="seconds")
-        except OSError:
-            started = None
-        doc = {"kind": kind, "bug": "/".join(parts), "benchmark": parts[0], "project": parts[1],
-               "bug_id": parts[2], "status": "interrompido", "started": started,
-               "finished": datetime.now().isoformat(timespec="seconds"), "seconds": None,
-               "attempts": _count_attempts(partial), "parent": None,
-               "error": "execução interrompida antes de terminar"}
-        (partial / "run.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        man = _read_json(partial / _MANIFEST)
+        doc = _read_json(partial / "run.json")
+        if not doc:  # sem run.json completo: monta o `interrompido` a partir do manifesto
+            try:
+                started = datetime.fromtimestamp(partial.stat().st_ctime).isoformat(timespec="seconds")
+            except OSError:
+                started = None
+            doc = {"kind": man.get("kind") or (m.group(1) if m else "desconhecido"),
+                   "bug": man.get("bug") or "/".join(parts),
+                   "benchmark": man.get("benchmark") or parts[0],
+                   "project": man.get("project") or parts[1],
+                   "bug_id": man.get("bug_id") or parts[2],
+                   "status": "interrompido", "started": man.get("started") or started,
+                   "finished": datetime.now().isoformat(timespec="seconds"), "seconds": None,
+                   "attempts": _count_attempts(partial), "parent": man.get("parent"),
+                   "error": "execução interrompida antes de terminar"}
+            (partial / "run.json").write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+        (partial / _MANIFEST).unlink(missing_ok=True)
         os.replace(partial, final)
         _lock_files(final)
         rel = "/".join((*parts, final.name))
