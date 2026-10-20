@@ -3,20 +3,32 @@ from __future__ import annotations
 
 OK = "ok"
 OK_TEST_FAIL = "ok_testes_falhando"
+CHECKOUT_FALHOU = "checkout_falhou"
+JDK_INCOMPATIVEL = "jdk_incompativel"
+DEPENDENCIA_NAO_RESOLVIDA = "dependencia_nao_resolvida"
+PLUGIN_INCOMPATIVEL = "plugin_incompativel"
+COMPILACAO_FALHOU = "compilacao_falhou"
+CLASSES_DUPLICADAS = "classes_duplicadas"
+TESTES_NAO_ENCONTRADOS = "testes_nao_encontrados"
+JAGUAR_SEM_SAIDA = "jaguar_sem_saida"
+JAGUAR_CRASH = "jaguar_crash"
+TIMEOUT = "timeout"
+INTERROMPIDO = "interrompido"
+DESCONHECIDO = "desconhecido"
 
 INFRA = (
-    "checkout_falhou",
-    "jdk_incompativel",
-    "dependencia_nao_resolvida",
-    "plugin_incompativel",
-    "compilacao_falhou",
-    "classes_duplicadas",
-    "testes_nao_encontrados",
-    "jaguar_sem_saida",
-    "jaguar_crash",
-    "timeout",
-    "interrompido",
-    "desconhecido",
+    CHECKOUT_FALHOU,
+    JDK_INCOMPATIVEL,
+    DEPENDENCIA_NAO_RESOLVIDA,
+    PLUGIN_INCOMPATIVEL,
+    COMPILACAO_FALHOU,
+    CLASSES_DUPLICADAS,
+    TESTES_NAO_ENCONTRADOS,
+    JAGUAR_SEM_SAIDA,
+    JAGUAR_CRASH,
+    TIMEOUT,
+    INTERROMPIDO,
+    DESCONHECIDO,
 )
 
 

@@ -48,6 +48,7 @@ class Rule:
     pattern: str
     cause: str
     suggestions: list[Suggestion] = field(default_factory=list)
+    only_errors: bool = False  # só casa em linhas de falha ([ERROR] / Failed to execute goal)
 
 
 def _surefire(version: str) -> Suggestion:
@@ -64,34 +65,36 @@ _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositó
 
 # A primeira regra que casar vence (padrões casados sem diferenciar maiúsculas).
 RULES: list[Rule] = [
-    Rule("jdk_incompativel",
+    Rule(st.JDK_INCOMPATIVEL,
          r"Unsupported class file major version|Unsupported class version|invalid target release|"
          r"invalid source release|release version \d+ not supported|UnsupportedClassVersionError|"
          r"(?:Source|Target) option \d+ is no longer supported|invalid flag: -release",
          "JDK incompatível com o projeto ou com a instrumentação do JaCoCo",
          [Suggestion(jdk=8, label="Tentar com JDK 8"), Suggestion(jdk=17, label="Tentar com JDK 17"),
           _compiler("3.11.0")]),
-    Rule("plugin_incompativel", r"animal-sniffer|Undefined reference",
+    Rule(st.PLUGIN_INCOMPATIVEL, r"animal-sniffer|Undefined reference",
          "O plugin animal-sniffer bloqueou o build",
-         [Suggestion(fix="skip-animal-sniffer", label="Pular o animal-sniffer")]),
-    Rule("plugin_incompativel",
+         [Suggestion(fix="skip-animal-sniffer", label="Pular o animal-sniffer")], only_errors=True),
+    Rule(st.PLUGIN_INCOMPATIVEL,
          r"maven-surefire-plugin:2\.|SurefireBooterForkException|The forked VM terminated",
-         "Surefire incompatível ou JVM de teste caiu", [_surefire("3.2.5"), _surefire("3.0.0-M5")]),
-    Rule("plugin_incompativel", r"maven-compiler-plugin.*(Fatal error compiling|NoSuchMethodError)",
-         "maven-compiler-plugin incompatível com o JDK", [_compiler("3.1"), _compiler("3.11.0")]),
-    Rule("dependencia_nao_resolvida", r"Blocked mirror for repositories|maven-default-http-blocker",
+         "Surefire incompatível ou JVM de teste caiu", [_surefire("3.2.5"), _surefire("3.0.0-M5")],
+         only_errors=True),
+    Rule(st.PLUGIN_INCOMPATIVEL, r"maven-compiler-plugin.*(Fatal error compiling|NoSuchMethodError)",
+         "maven-compiler-plugin incompatível com o JDK", [_compiler("3.1"), _compiler("3.11.0")],
+         only_errors=True),
+    Rule(st.DEPENDENCIA_NAO_RESOLVIDA, r"Blocked mirror for repositories|maven-default-http-blocker",
          "Maven recente bloqueia repositórios http://", [_MAVEN_363]),
-    Rule("dependencia_nao_resolvida",
+    Rule(st.DEPENDENCIA_NAO_RESOLVIDA,
          r"Could not resolve dependencies|Could not transfer artifact|Could not find artifact|"
          r"Failed to collect dependencies|Plugin \S+ or one of its dependencies could not be resolved",
          "Dependência ou plugin não pôde ser baixado", [_MAVEN_363]),
-    Rule("classes_duplicadas", r"duplicate class", "Classes duplicadas entre diretórios de fontes",
+    Rule(st.CLASSES_DUPLICADAS, r"duplicate class", "Classes duplicadas entre diretórios de fontes",
          [Suggestion(fix="exclude-duplicates", label="Excluir os arquivos duplicados")]),
-    Rule("compilacao_falhou", r"COMPILATION ERROR|cannot find symbol|package \S+ does not exist",
+    Rule(st.COMPILACAO_FALHOU, r"COMPILATION ERROR|cannot find symbol|package \S+ does not exist",
          "Erro de compilação",
          [Suggestion(fix="source-dirs", label="Ajustar diretórios de fontes"),
           Suggestion(fix="junit4", label="Adicionar JUnit 4")]),
-    Rule("testes_nao_encontrados", r"No tests (?:were )?(?:executed|to run)|Tests run: 0\b",
+    Rule(st.TESTES_NAO_ENCONTRADOS, r"No tests (?:were )?(?:executed|to run)|Tests run: 0\b",
          "Nenhum teste foi executado",
          [Suggestion(fix="source-dirs", label="Ajustar diretórios de fontes"),
           Suggestion(fix="junit4", label="Adicionar JUnit 4"),
@@ -113,30 +116,71 @@ def _read_tail(log: Path | None) -> str:
         return ""
 
 
-def _evidence(text: str, m: re.Match) -> list[str]:
-    idx = text.count("\n", 0, m.start())
+def _evidence(text: str, pos: int) -> list[str]:
+    idx = text.count("\n", 0, pos)
     start = max(0, idx - 3)
     return [ln[:MAX_LINE] for ln in text.splitlines()[start:start + MAX_EVIDENCE]]
 
 
+_ROOTS = ("src/main/java/", "src/test/java/", "src/java/", "src/")
+
+
+def _relative_source(path: str) -> str:
+    path = path.replace("\\", "/")
+    for marker in _ROOTS:
+        k = path.find(marker)
+        if k >= 0:
+            return path[k + len(marker):]
+    return path
+
+
 def _duplicate_files(text: str) -> list[str]:
-    files = [f.replace("\\", "/") for f in _DUP_FILE.findall(text)]
+    files = [_relative_source(f) for f in _DUP_FILE.findall(text)]
     files += [c.split("$", 1)[0].replace(".", "/") + ".java" for c in _DUP_CLASS.findall(text)]
     return list(dict.fromkeys(files))
 
 
-def _match_rules(text: str) -> Diagnosis | None:
-    for r in RULES:
-        m = re.search(r.pattern, text, re.I)
-        if not m:
-            continue
-        sugs = [Suggestion(s.fix, dict(s.params), s.jdk, s.maven, s.label) for s in r.suggestions]
-        if r.status == "classes_duplicadas":
-            files = _duplicate_files(text)
-            for s in sugs:
-                s.params = {"files": files}
-        return Diagnosis(r.status, r.cause, _evidence(text, m), sugs)
-    return None
+_ERR_LINE = re.compile(r"\[ERROR\]|Failed to execute goal|BUILD FAILURE")
+_FAIL_LINE = re.compile(r"\[ERROR\]|Failed to execute goal")
+
+
+def _error_lines(text: str) -> list[tuple[int, str]]:
+    """(offset, linha) das linhas de falha."""
+    out, off = [], 0
+    for ln in text.splitlines(keepends=True):
+        if _FAIL_LINE.search(ln):
+            out.append((off, ln))
+        off += len(ln)
+    return out
+
+
+def _match_rules(text: str) -> tuple[Diagnosis, bool] | None:
+    """Primeira causa encontrada e se ela veio de uma linha de falha.\n\n    Com linhas [ERROR]/BUILD FAILURE, vence a regra cujo match está mais perto do primeiro bloco de erro;\n    sem elas, vale a ordem das regras. Regras `only_errors` nunca casam em cabeçalhos de plugin."""
+    errs = _error_lines(text)
+    first = _ERR_LINE.search(text)
+    cands: list[tuple[int, int, Rule, bool, int]] = []
+    for n, r in enumerate(RULES):
+        pos, from_err = None, False
+        for off, ln in errs:
+            m = re.search(r.pattern, ln, re.I)
+            if m:
+                pos, from_err = off + m.start(), True
+                break
+        if pos is None and not r.only_errors:
+            m = re.search(r.pattern, text[first.start():] if first else text, re.I)
+            if m:
+                pos = m.start() + (first.start() if first else 0)
+        if pos is not None:
+            cands.append((pos if first else 0, n, r, from_err, pos))
+    if not cands:
+        return None
+    _, _, r, from_err, pos = min(cands, key=lambda c: (c[0], c[1]))
+    sugs = [Suggestion(s.fix, dict(s.params), s.jdk, s.maven, s.label) for s in r.suggestions]
+    if r.status == st.CLASSES_DUPLICADAS:
+        files = _duplicate_files(text)
+        for s in sugs:
+            s.params = {"files": files}
+    return Diagnosis(r.status, r.cause, _evidence(text, pos), sugs), from_err
 
 
 def _success(kind: str, res: AttemptResult) -> bool:
@@ -150,15 +194,15 @@ def _success(kind: str, res: AttemptResult) -> bool:
 
 def classify(kind: str, res: AttemptResult) -> Diagnosis:
     if res.timed_out:
-        return Diagnosis("timeout", "A tentativa excedeu o tempo limite")
+        return Diagnosis(st.TIMEOUT, "A tentativa excedeu o tempo limite")
     extra = res.extra or {}
     fase, erro = extra.get("fase"), extra.get("erro") or ""
     if kind == "jaguar1" and extra.get("meta_status") == "jaguar_timeout":
-        return Diagnosis("timeout", "O Jaguar 1 excedeu o tempo limite")
+        return Diagnosis(st.TIMEOUT, "O Jaguar 1 excedeu o tempo limite")
     if kind == "jaguar1" and extra.get("meta_status") == "no_tests":
-        return Diagnosis("testes_nao_encontrados", "O Jaguar 1 não encontrou classes de teste")
+        return Diagnosis(st.TESTES_NAO_ENCONTRADOS, "O Jaguar 1 não encontrou classes de teste")
     if fase == "jaguar1_lib":
-        return Diagnosis("jaguar_sem_saida", erro)
+        return Diagnosis(st.JAGUAR_SEM_SAIDA, erro)
 
     if _success(kind, res):
         failed = any(v in ("failed", "error") for v in res.tests.values())
@@ -166,20 +210,22 @@ def classify(kind: str, res: AttemptResult) -> Diagnosis:
         if kind == "jaguar2":
             try:
                 scores = parse_jaguar2_csv(Path(res.outputs["jaguar2_csv"]))
-            except ValueError as e:
-                return Diagnosis("jaguar_sem_saida", "relatório do Jaguar 2 ilegível", [str(e)[:MAX_LINE]])
+            except (ValueError, OSError) as e:
+                return Diagnosis(st.JAGUAR_SEM_SAIDA, "relatório do Jaguar 2 ilegível", [str(e)[:MAX_LINE]])
             if not scores and not failed:
                 warnings.append("nenhum teste falhou: relatório vazio (defeito não reproduzido)")
         return Diagnosis(st.OK_TEST_FAIL if failed else st.OK, warnings=warnings)
 
     text = _read_tail(res.log)
-    d = _match_rules(text) if text else None
+    found = _match_rules(text) if text else None
+    d, from_err = found if found else (None, False)
     if fase == "pom":
-        return d if d and d.status == "plugin_incompativel" else Diagnosis("desconhecido", erro)
-    if d:
+        return d if d and d.status == st.PLUGIN_INCOMPATIVEL else Diagnosis(st.DESCONHECIDO, erro)
+    no_csv = kind == "jaguar2" and fase != "reactor" and res.rc == 0
+    if d and not (no_csv and not from_err):
         return d
-    if kind == "jaguar2" and fase != "reactor" and res.rc == 0:
-        return Diagnosis("jaguar_sem_saida", "O build terminou mas o Jaguar 2 não gerou o CSV")
-    if kind == "jaguar1" and extra.get("meta_status") == "jaguar_crash":
-        return Diagnosis("jaguar_crash", "A JVM do Jaguar 1 caiu")
-    return Diagnosis("desconhecido", erro or "Falha não reconhecida; veja o log")
+    if no_csv:
+        return Diagnosis(st.JAGUAR_SEM_SAIDA, "O build terminou mas o Jaguar 2 não gerou o CSV")
+    if kind == "jaguar1" and extra.get("meta_status") == st.JAGUAR_CRASH:
+        return Diagnosis(st.JAGUAR_CRASH, "A JVM do Jaguar 1 caiu")
+    return Diagnosis(st.DESCONHECIDO, erro or "Falha não reconhecida; veja o log")
