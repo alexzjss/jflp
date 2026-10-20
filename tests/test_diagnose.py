@@ -49,6 +49,15 @@ class DiagnoseTest(unittest.TestCase):
         self.assertIn("Apache RAT", d.cause)
         self.assertEqual(d.suggestions[0].fix, "skip-rat")
 
+    def test_remote_resources_failure(self):
+        log = ("[ERROR] Failed to execute goal org.apache.maven.plugins:maven-remote-resources-plugin:1.5:process "
+               "(default) on project apache-maven: Error finding remote resources manifests: "
+               "Could not find resource 'https://glassfish.java.net/public/CDDLv1.0.html'")
+        d = self.c(log, kind="jaguar2")
+        self.assertEqual(d.status, "dependencia_nao_resolvida")
+        self.assertIn("recurso remoto indisponível (maven-remote-resources-plugin)", d.cause)
+        self.assertIn("-Dremoteresources.skip=true", d.cause)
+
     def test_http_blocked_suggests_unblock_first(self):
         d = self.c("[ERROR] Blocked mirror for repositories: [apache.snapshots (http://x, default)]")
         self.assertEqual(d.status, "dependencia_nao_resolvida")

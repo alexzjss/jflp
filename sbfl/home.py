@@ -10,6 +10,7 @@ from pathlib import Path
 # Flags que desligam verificações de qualidade do Maven que atrapalham o checkout antigo.
 SKIP_FLAGS = [
     "-Drat.skip=true", "-Drat.numUnapprovedLicenses=999999", "-Drat.ignoreErrors=true",
+    "-Dremoteresources.skip=true",
     "-Denforcer.skip=true", "-Dcheckstyle.skip=true",
     "-Dlicense.skip=true", "-Dmaven.javadoc.skip=true",
     "-Danimal.sniffer.skip=true", "-Dfindbugs.skip=true",

@@ -79,6 +79,9 @@ RULES: list[Rule] = [
     Rule(st.PLUGIN_INCOMPATIVEL, r"apache-rat-plugin.*unapproved license",
          "verificação de licenças (Apache RAT) reprovou arquivos",
          [Suggestion(fix="skip-rat", label="Pular o Apache RAT")], only_errors=True),
+    Rule(st.DEPENDENCIA_NAO_RESOLVIDA, r"maven-remote-resources-plugin",
+         "recurso remoto indisponível (maven-remote-resources-plugin); "
+         "inclua -Dremoteresources.skip=true em run.skip_flags", only_errors=True),
     Rule(st.PLUGIN_INCOMPATIVEL,
          r"maven-surefire-plugin:2\.|SurefireBooterForkException|The forked VM terminated",
          "Surefire incompatível ou JVM de teste caiu", [_surefire("3.2.5"), _surefire("3.0.0-M5")],

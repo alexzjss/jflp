@@ -121,6 +121,9 @@ class Jaguar2Test(Base):
         self.assertEqual(Path(calls[0]["cwd"]), work)
         self.assertIn("install", calls[0]["argv"])
         self.assertIn("-DskipTests", calls[0]["argv"])
+        argv = calls[0]["argv"]
+        self.assertEqual(argv[argv.index("-pl") + 1], "core")
+        self.assertIn("-am", argv)
         self.assertEqual(Path(calls[1]["cwd"]), work / "core")
         self.assertEqual(calls[1]["argv"][calls[1]["argv"].index("-f") + 1], "jaguar2-pom.xml")
         self.assertIn("test", calls[1]["argv"])

@@ -135,7 +135,7 @@ Fica em `<pasta do JFLP>/config.toml` e é criado com os padrões na primeira ve
 | `defects4j.projects` | Lang, Math, Time, Chart, Closure, Mockito, Jsoup | projetos listados na tela Bugs |
 | `ui.port` | `0` | porta da interface (0 = automática) |
 
-`run.skip_flags` padrão: `-Drat.skip=true -Drat.numUnapprovedLicenses=999999 -Drat.ignoreErrors=true -Denforcer.skip=true -Dcheckstyle.skip=true -Dlicense.skip=true -Dmaven.javadoc.skip=true -Danimal.sniffer.skip=true -Dfindbugs.skip=true` (desligam verificações de qualidade que atrapalham checkouts antigos).
+`run.skip_flags` padrão: `-Drat.skip=true -Drat.numUnapprovedLicenses=999999 -Drat.ignoreErrors=true -Dremoteresources.skip=true -Denforcer.skip=true -Dcheckstyle.skip=true -Dlicense.skip=true -Dmaven.javadoc.skip=true -Danimal.sniffer.skip=true -Dfindbugs.skip=true` (desligam verificações de qualidade que atrapalham checkouts antigos).
 
 Exemplo:
 
@@ -320,6 +320,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 
 - **"JDK N não encontrado"** (`jdk_incompativel` com causa de ferramenta ausente): baixe o JDK na tela Ambiente (`jflp tools get jdk 11`) ou aponte-o em `tools.jdks`. O Jaguar 2 usa JDK 11; o Jaguar 1, JDK 8.
 - **Maven bloqueia repositório `http`** ("Blocked mirror for repositories", `maven-default-http-blocker`): projetos antigos usam repositórios `http://`, que o Maven ≥ 3.8.1 bloqueia. O diagnóstico sugere primeiro a correção **`unblock-http`** (funciona também com o Maven ≥ 3.9.9 que o Jaguar 2 exige) e depois o **Maven 3.6.3** (`--maven 3.6.3`, ou receita com `maven = "3.6.3"`). Baixe-o em `jflp tools get maven 3.6.3`.
+- **maven-remote-resources-plugin** ("Could not find resource ..."): o reactor instala só o módulo do bug (`-pl <módulo> -am`) e `-Dremoteresources.skip=true` está em `run.skip_flags`; se o erro voltar, confira se o flag não foi removido da configuração.
 - **Apache RAT** ("Too many files with unapproved license"): o checkout do Bugs.jar não leva mais a pasta `.bugs-dot-jar` para a cópia de trabalho e os flags `-Drat.*` estão em `run.skip_flags`; se ainda falhar, a correção `skip-rat` desliga o plugin no POM gerado.
 - **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada na revisão, o diagnóstico a sugere de volta.
 - **Surefire 2.x** ("maven-surefire-plugin:2.x", "The forked VM terminated"): o Jaguar 2 precisa do Surefire 3. O POM gerado fixa `jaguar2.surefire`; se ainda falhar, a busca tenta 3.2.5 e 3.0.0-M5.

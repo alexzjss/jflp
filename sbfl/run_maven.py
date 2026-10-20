@@ -132,7 +132,9 @@ def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Pa
     if prep.module == ".":
         return None
     log_phase(log, "reactor", on_line)
-    cmd = te.mvn(*(extra or []), "install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
+    # só o módulo do bug e o que ele precisa (o reactor inteiro pode ter módulos de distribuição que quebram)
+    module = prep.module.replace("\\", "/").strip("/")
+    cmd = te.mvn(*(extra or []), "install", "-DskipTests", "-pl", module, "-am", *(settings.get("run", "skip_flags", []) or []))
     r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
                  on_line=on_line)
     r["command"] = cmd
