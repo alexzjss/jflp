@@ -64,6 +64,29 @@ class DatasetTests(Base):
         self.assertFalse((out / "d4j" / "Lang" / "2").exists())
         self.assertEqual(rows["1"]["status"], "ok")
 
+    def test_selected_bugs_without_runs_appear_in_manifest(self):
+        from sbfl import queue as jq
+        good = Bug("d4j", "Lang", "1")
+        self.make_run(good, "ok")
+        bugs = [good, Bug("local", "p", "a", {"d": 1}), Bug("local", "p", "b"), Bug("local", "p", "c")]
+        bid = jq.create_batch(self.home, "t", bugs, ["jaguar2"], {})
+        import contextlib
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='done', error='boom' WHERE idx=1")
+            con.execute("UPDATE jobs SET state='cancelled' WHERE idx=2")
+        out = dataset.export(self.home, "ds", batch_id=bid)
+        with open(out / "manifest.csv", encoding="utf-8", newline="") as f:
+            rows = {r["bug"]: r for r in csv.DictReader(f)}
+        self.assertEqual(rows["a"]["status"], "desconhecido")
+        self.assertEqual(rows["b"]["status"], "cancelado")
+        self.assertEqual(rows["c"]["status"], "sem_execucao")
+        self.assertEqual(rows["c"]["path"], "")
+        self.assertEqual(rows["c"]["n_tests"], "")
+        out2 = dataset.export(self.home, "ds2", [Bug("local", "p", "z")])
+        with open(out2 / "manifest.csv", encoding="utf-8", newline="") as f:
+            self.assertEqual(list(csv.DictReader(f))[0]["status"], "sem_execucao")
+        self.assertIn("sem_execucao", (out / "README.md").read_text(encoding="utf-8"))
+
     def test_refuses_overwrite(self):
         bug = Bug("d4j", "Lang", "1")
         self.make_run(bug, "ok")

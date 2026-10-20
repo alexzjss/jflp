@@ -40,6 +40,8 @@ manifest.json
 
 - `benchmark`, `project`, `bug`: identificação do defeito.
 - `status`: status da execução usada (ou da última tentativa, se nenhuma foi bem-sucedida).
+  Além dos status do JFLP, o manifest usa: `sem_execucao` (selecionado, mas nunca executado),
+  `cancelado` (job cancelado antes de rodar) e `desconhecido` (o job terminou com erro sem execução gravada).
 - `test_scope`: escopo de testes (`relevant` ou `all`).
 - `n_tests`, `n_failed`: total de testes e quantos falharam ou deram erro.
 - `jdk`, `maven`: versões usadas na execução.
@@ -58,11 +60,19 @@ def _safe_name(name: str) -> str:
     return s
 
 
-def _batch_bugs(home: Home, batch_id: int) -> list[Bug]:
-    from .queue import _connect
-    with contextlib.closing(_connect(home)) as con:
-        rows = con.execute("SELECT DISTINCT bug_key FROM jobs WHERE batch_id=? ORDER BY idx", (batch_id,)).fetchall()
-    return [Bug(*r[0].split("/", 2)) for r in rows]
+def _batch_selection(home: Home, batch_id: int) -> tuple[list[Bug], dict[str, str]]:
+    """Bugs do lote (com extra) e, para cada chave, o status pelo estado dos jobs."""
+    from .queue import batch_jobs
+    bugs: dict[str, Bug] = {}
+    status: dict[str, str] = {}
+    for j in batch_jobs(home, batch_id):
+        b, p, i = j["bug_key"].split("/", 2)
+        bugs.setdefault(j["bug_key"], Bug(b, p, i, j["extra"]))
+        if j["error"]:
+            status[j["bug_key"]] = "desconhecido"
+        elif j["state"] == "cancelled":
+            status.setdefault(j["bug_key"], "cancelado")
+    return list(bugs.values()), status
 
 
 def _all_bugs(home: Home) -> list[Bug]:
@@ -93,8 +103,12 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
     dest = home.datasets / name
     if dest.exists():
         raise ValueError(f"Já existe um dataset chamado '{name}'. Escolha outro nome.")
+    job_status: dict[str, str] = {}
     if bugs is None:
-        bugs = _batch_bugs(home, batch_id) if batch_id is not None else _all_bugs(home)
+        if batch_id is not None:
+            bugs, job_status = _batch_selection(home, batch_id)
+        else:
+            bugs = _all_bugs(home)
     version = str(load_settings(home).get("jaguar2", "version", ""))
     rows: list[dict] = []
     tmp = home.datasets / f".{name}.tmp"
@@ -103,7 +117,10 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
     try:
         for bug in bugs:
             runs = store.list_runs(home, bug.benchmark, bug.project, bug.bug_id, "jaguar2")
-            if not runs:
+            if not runs:   # selecionado mas sem execução: entra no manifest (taxa de sucesso explícita)
+                rows.append({c: "" for c in COLUMNS} | {
+                    "benchmark": bug.benchmark, "project": bug.project, "bug": bug.bug_id,
+                    "status": job_status.get(bug.key, "sem_execucao"), "jaguar2_version": version})
                 continue
             good = next((r for r in runs if st.is_success(r["status"])), None)
             use = good or runs[0]

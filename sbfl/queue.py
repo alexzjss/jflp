@@ -70,6 +70,15 @@ def _close_if_finished(con: sqlite3.Connection, batch_id: int) -> None:
                     (batch_id,))
 
 
+def batch_jobs(home: Home, batch_id: int) -> list[dict]:
+    """Jobs de um lote, na ordem (bug_extra já decodificado em `extra`)."""
+    with contextlib.closing(_connect(home)) as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM jobs WHERE batch_id=? ORDER BY idx", (batch_id,))]
+    for r in rows:
+        r["extra"] = json.loads(r.get("bug_extra") or "{}")
+    return rows
+
+
 def batch_status(home: Home, batch_id: int) -> dict:
     """Contagens por estado, ETA pela duração média dos jobs concluídos e resumo por projeto."""
     with contextlib.closing(_connect(home)) as con:
@@ -88,7 +97,8 @@ def batch_status(home: Home, batch_id: int) -> dict:
         marks = ",".join("?" * len(paths))
         with contextlib.closing(store._connect(home)) as con:
             runs = [dict(r) for r in con.execute(f"SELECT * FROM runs WHERE path IN ({marks})", paths)]
-    return {"id": batch_id, "name": b["name"], "state": b["state"], "total": len(jobs),
+    finished = b["state"] == "done" or (b["state"] == "cancelled" and counts["running"] == 0)
+    return {"id": batch_id, "name": b["name"], "state": b["state"], "finished": finished, "total": len(jobs),
             "counts": counts, "eta_seconds": eta, "summary": compare.batch_summary(home, runs),
             "jobs": jobs}
 
@@ -104,6 +114,7 @@ class Worker(threading.Thread):
         self._subs: set[_q.Queue] = set()
         self._log: deque[str] = deque(maxlen=LOG_LINES)
         self._current: dict | None = None
+        self._last_error: str | None = None
 
     # -- controle --
     def _set_batch(self, batch_id: int, frm: tuple, to: str) -> None:
@@ -158,6 +169,9 @@ class Worker(threading.Thread):
         self._publish(str(line).rstrip("\r\n"))
 
     # -- laço --
+    def _after_select(self) -> None:
+        """Gancho (só para testes): roda entre o SELECT e a reivindicação do job."""
+
     def _next_job(self):
         with contextlib.closing(_connect(self.home)) as con, con:
             row = con.execute(
@@ -165,33 +179,56 @@ class Worker(threading.Thread):
                 "WHERE j.state='pending' AND b.state='active' ORDER BY j.batch_id, j.idx LIMIT 1").fetchone()
             if row is None:
                 return None
-            con.execute("UPDATE jobs SET state='running' WHERE id=?", (row["id"],))
+            self._after_select()
+            # reivindicação atômica: só vale se o job ainda está pendente e o lote ativo
+            cur = con.execute("UPDATE jobs SET state='running' WHERE id=? AND state='pending' "
+                              "AND batch_id IN (SELECT id FROM batches WHERE state='active')", (row["id"],))
+            if cur.rowcount == 0:
+                return None
             opts = json.loads(con.execute("SELECT options FROM batches WHERE id=?",
                                           (row["batch_id"],)).fetchone()[0] or "{}")
             return dict(row), opts
 
-    def run(self) -> None:
-        try:
-            store.recover_partials(self.home)
-            with contextlib.closing(_connect(self.home)) as con, con:
-                con.execute("UPDATE jobs SET state='pending' WHERE state='running'")
-        except Exception:
-            pass
-        while not self._stop_ev.is_set():
-            picked = self._safe_next()
-            if picked is None:
-                self._stop_ev.wait(1.0)
-                continue
-            with keep_awake():
-                while picked is not None:
-                    self._run_job(*picked)
-                    picked = None if self._stop_ev.is_set() else self._safe_next()
+    def _record_error(self, e: BaseException) -> None:
+        self._last_error = repr(e)[-500:]
 
-    def _safe_next(self):
-        try:
-            return self._next_job()
-        except Exception:
-            return None
+    def status(self) -> dict:
+        return {"alive": self.is_alive(), "last_error": self._last_error, "current": self.current()}
+
+    def _recover(self) -> None:
+        store.recover_partials(self.home)
+        with contextlib.closing(_connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state = CASE WHEN batch_id IN "
+                        "(SELECT id FROM batches WHERE state='cancelled') THEN 'cancelled' ELSE 'pending' END "
+                        "WHERE state='running'")
+            for (bid,) in con.execute("SELECT id FROM batches WHERE state IN ('active','paused')").fetchall():
+                _close_if_finished(con, bid)
+
+    def run(self) -> None:
+        recovered = False
+        while not self._stop_ev.is_set():
+            try:
+                if not recovered:
+                    self._recover()
+                    recovered = True
+                picked = self._next_job()
+                if picked is None:
+                    self._stop_ev.wait(1.0)
+                    continue
+                self._process(picked)
+            except Exception as e:   # nada derruba a thread: registra e tenta de novo
+                self._record_error(e)
+                self._stop_ev.wait(1.0)
+
+    def _process(self, picked) -> None:
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(keep_awake())
+            except Exception as e:   # sem keep_awake os jobs seguem
+                self._record_error(e)
+            while picked is not None:
+                self._run_job(*picked)
+                picked = None if self._stop_ev.is_set() else self._next_job()
 
     def _run_job(self, job: dict, opts: dict) -> None:
         with self._lock:

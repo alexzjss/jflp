@@ -152,6 +152,61 @@ class QueueTests(Base):
         self.assertNotIn("pending", self.states(bid))
         self.assertIn("cancelled", self.states(bid))
 
+    def test_cancel_between_select_and_claim_never_runs_job(self):
+        calls = []
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        w = self.worker()
+        w._after_select = lambda: w.cancel(bid)   # cancela entre o SELECT e o UPDATE
+        with mock.patch.object(jq, "execute", lambda *a, **k: calls.append(1) or "rel/x"):
+            self.assertIsNone(w._next_job())
+        self.assertEqual(calls, [])
+        self.assertEqual(self.states(bid), ["cancelled"])
+
+    def test_crash_recovery_cancelled_batch_running_job(self):
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar2"], {})
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='running' WHERE idx=0")
+            con.execute("UPDATE jobs SET state='cancelled' WHERE idx=1")
+            con.execute("UPDATE batches SET state='cancelled'")
+        calls = []
+        with mock.patch.object(jq, "execute", lambda *a, **k: calls.append(1) or "rel/x"):
+            w = self.worker()
+            w.start()
+            self.assertTrue(wait_for(lambda: self.states(bid) == ["cancelled", "cancelled"]))
+            time.sleep(1.2)
+        self.assertEqual(calls, [])
+        self.assertTrue(jq.batch_status(self.home, bid)["finished"])
+
+    def test_keep_awake_failure_does_not_stop_processing(self):
+        @contextlib.contextmanager
+        def bad():
+            raise OSError("sem energia")
+            yield
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar2"], {})
+        with mock.patch.object(jq, "keep_awake", bad),                 mock.patch.object(jq, "execute", lambda *a, **k: "rel/ok"):
+            w = self.worker()
+            w.start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertIn("sem energia", w.status()["last_error"])
+
+    def test_loop_survives_db_error(self):
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        real = jq.Worker._next_job
+        n = {"i": 0}
+
+        def flaky(self_):
+            n["i"] += 1
+            if n["i"] == 1:
+                raise RuntimeError("banco travado")
+            return real(self_)
+
+        with mock.patch.object(jq.Worker, "_next_job", flaky),                 mock.patch.object(jq, "execute", lambda *a, **k: "rel/ok"):
+            w = self.worker()
+            w.start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertIn("banco travado", w.status()["last_error"])
+
     def test_slow_subscriber_is_dropped(self):
         w = self.worker()
         q = w.subscribe()
