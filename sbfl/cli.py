@@ -7,6 +7,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+from datetime import datetime
 from pathlib import Path
 
 from . import status as st
@@ -178,9 +180,34 @@ def _opts(args) -> RunOptions:
         archive_checkout=False if args.no_archive else None, log_cb=_print_log)
 
 
+def _unexpected_error(home: Home, bug: Bug, exc: Exception, before: set[str]) -> int:
+    """Erro inesperado no execute: mensagem em português, traceback em work/erros e código 1."""
+    log = home.work / "erros" / f"{datetime.now():%Y%m%d-%H%M%S-%f}.log"
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("".join(traceback.format_exception(exc)), encoding="utf-8")
+    except OSError:
+        log = None
+    print(f"[XX] {bug.key}: erro inesperado ({type(exc).__name__}): {exc}")
+    try:   # execute encerra a execução como `desconhecido` antes de relançar
+        new = [r["path"] for r in list_runs(home, bug.benchmark, bug.project, bug.bug_id)
+               if r["path"] not in before]
+    except Exception:  # noqa: BLE001
+        new = []
+    if new:
+        print(f"     execução: {new[0]}")
+    if log is not None:
+        print(f"     detalhes (traceback): {log}")
+    return 1
+
+
 def cmd_run(home: Home, settings: Settings, args) -> int:
     bug = parse_bug(settings, args.bug)
-    rel = execute(home, settings, bug, args.kind, _opts(args))
+    before = {r["path"] for r in list_runs(home, bug.benchmark, bug.project, bug.bug_id)}
+    try:
+        rel = execute(home, settings, bug, args.kind, _opts(args))
+    except Exception as e:  # noqa: BLE001 - qualquer falha inesperada vira mensagem + log
+        return _unexpected_error(home, bug, e, before)
     run = load_run(home, rel)
     status = run.get("status", "desconhecido")
     print(f"{'[OK]' if st.is_success(status) else '[XX]'} {bug.key} ({args.kind}): {status}")

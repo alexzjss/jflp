@@ -12,6 +12,7 @@ from . import status as st
 from . import store
 from .adapters.base import Bug
 from .home import Home, load_settings
+from .winpath import long_path
 
 SCHEMA_VERSION = 1
 COLUMNS = ["benchmark", "project", "bug", "status", "test_scope", "n_tests", "n_failed", "jdk", "maven",
@@ -30,7 +31,7 @@ README.md
 manifest.csv
 manifest.json
 <benchmark>/<projeto>/<bug>/
-  jaguar2.csv            # classe,linha,cef,cnf,cep,cnp,susp (só linhas com susp > 0)
+  jaguar2.csv            # SEM linha de cabeçalho; colunas classe,linha,cef,cnf,cep,cnp,susp (só linhas com susp > 0)
   jaguar2.xml
   surefire-reports/
   env.json               # ambiente da execução (ferramentas, SO, commit)
@@ -112,7 +113,7 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
     version = str(load_settings(home).get("jaguar2", "version", ""))
     rows: list[dict] = []
     tmp = home.datasets / f".{name}.tmp"
-    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(long_path(tmp), ignore_errors=True)
     tmp.mkdir(parents=True)
     try:
         for bug in bugs:
@@ -135,11 +136,11 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
                 src = store.run_dir(home, use["path"])
                 for f in ("jaguar2.csv", "jaguar2.xml"):
                     if (src / "outputs" / f).is_file():
-                        shutil.copyfile(src / "outputs" / f, out / f)
+                        shutil.copyfile(long_path(src / "outputs" / f), long_path(out / f))
                 if (src / "outputs" / "surefire-reports").is_dir():
-                    shutil.copytree(src / "outputs" / "surefire-reports", out / "surefire-reports")
+                    shutil.copytree(long_path(src / "outputs" / "surefire-reports"), long_path(out / "surefire-reports"))
                 if (src / "env.json").is_file():
-                    shutil.copyfile(src / "env.json", out / "env.json")
+                    shutil.copyfile(long_path(src / "env.json"), long_path(out / "env.json"))
             rows.append({
                 "benchmark": bug.benchmark, "project": bug.project, "bug": bug.bug_id,
                 "status": run.get("status") or use["status"], "test_scope": run.get("test_scope") or "",
@@ -157,6 +158,6 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
         (tmp / "README.md").write_text(README.replace("__VERSION__", str(SCHEMA_VERSION)), encoding="utf-8")
         tmp.rename(dest)
     except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(long_path(tmp), ignore_errors=True)
         raise
     return dest

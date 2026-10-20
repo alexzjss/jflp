@@ -23,6 +23,7 @@ from .gitutil import add_worktree, git
 from .home import Home, Settings
 from .toolchain.detect import defects4j_cmd, wsl_status
 from .truth import git_truth
+from .winpath import long_path
 
 MARKER = "prepared.json"
 _LOCKS: dict[str, threading.Lock] = {}
@@ -72,13 +73,14 @@ def _rmtree(path, strict: bool = True) -> None:
             pass
 
     path = Path(path)
-    if not path.exists():
+    lpath = long_path(path)
+    if not os.path.exists(lpath):
         return
     if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=fix)
+        shutil.rmtree(lpath, onexc=fix)
     else:
-        shutil.rmtree(path, onerror=fix)
-    if strict and path.exists():
+        shutil.rmtree(lpath, onerror=fix)
+    if strict and os.path.exists(lpath):
         raise _fail(f"Não foi possível apagar a pasta {path}; feche programas que a estejam usando.")
 
 
@@ -249,7 +251,7 @@ def _local_prepare(home: Home, bug: Bug, dest: Path, log: Path) -> Prepared:
         src = Path(e["path"])
         if not src.is_dir():
             raise _fail(f"Pasta não encontrada: {src}")
-        shutil.copytree(src, dest, ignore=_IGNORE_COPY)
+        shutil.copytree(long_path(src), long_path(dest), ignore=_IGNORE_COPY)
         return Prepared(bug, dest, ".", None, [], {})
     url, commit = e["repo"], e["commit"]
     is_path = Path(url).expanduser().exists()
@@ -336,7 +338,8 @@ def working_copy(prep: Prepared, home: Home) -> Path:
     """Cópia descartável do pristine (sem target/, .git nem o marcador)."""
     dest = home.work / "w" / secrets.token_hex(4)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(prep.pristine, dest, ignore=shutil.ignore_patterns("target", ".git", MARKER))
+    shutil.copytree(long_path(prep.pristine), long_path(dest),
+                    ignore=shutil.ignore_patterns("target", ".git", MARKER))
     return dest
 
 

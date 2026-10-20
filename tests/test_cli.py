@@ -66,6 +66,31 @@ class CliTests(unittest.TestCase):
             rc, out, _ = _run_main(["run", "maven", "d4j/Jsoup/93"], self.tmp / "h")
         self.assertEqual(rc, 1)
 
+    def test_run_unexpected_error_returns_1_with_log(self):
+        h = self.tmp / "h"
+        with mock.patch("sbfl.cli.execute", side_effect=RuntimeError("quebrou")):
+            rc, out, err = _run_main(["run", "maven", "d4j/Jsoup/93"], h)
+        self.assertEqual(rc, 1)
+        self.assertIn("erro inesperado (RuntimeError): quebrou", out)
+        self.assertNotIn("Traceback", out + err)
+        logs = list((h / "work" / "erros").glob("*.log"))
+        self.assertEqual(len(logs), 1)
+        self.assertIn(str(logs[0]), out)
+        self.assertIn("RuntimeError: quebrou", logs[0].read_text(encoding="utf-8"))
+
+    def test_run_unexpected_error_mentions_created_run(self):
+        h = self.tmp / "h"
+
+        def boom(home, settings, bug, kind, opts):
+            from sbfl.store import RunWriter
+            w = RunWriter(home, bug, kind)
+            w.finish({"status": "desconhecido"})
+            raise ValueError("depois de gravar")
+        with mock.patch("sbfl.cli.execute", side_effect=boom):
+            rc, out, _ = _run_main(["run", "maven", "d4j/Jsoup/93"], h)
+        self.assertEqual(rc, 1)
+        self.assertRegex(out, r"execução: d4j/Jsoup/93/\d{8}-\d{6}-maven")
+
     def test_doctor_runs_without_tools(self):
         miss = MissingTool("jdk", "11", "JDK 11 não encontrado — baixe na tela Ambiente")
         with mock.patch("sbfl.cli.find_jdks", return_value=[]), \

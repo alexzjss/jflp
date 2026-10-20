@@ -20,6 +20,7 @@ from .errors import StageError
 from .home import Home, Settings
 from .pomgen import generate as pom_generate
 from .prepare import _rmtree, prepare, working_copy
+from .winpath import long_path
 from .run_jaguar1 import run_jaguar1
 from .run_jaguar2 import run_jaguar2
 from .run_maven import AttemptConfig, AttemptResult, run_maven
@@ -100,7 +101,7 @@ def _copy_outputs(w: RunWriter, kind: str, res: AttemptResult, last: int) -> Non
             w.copy_into(Path(src), rel)
     gz = w.dir / "attempts" / str(last) / "log.txt.gz"
     if kind == "jaguar1" and gz.exists():   # o log da tentativa já inclui o do JaguarRunner
-        shutil.copy2(gz, w.dir / "outputs" / "jaguar1.log.gz")
+        shutil.copy2(long_path(gz), long_path(w.dir / "outputs" / "jaguar1.log.gz"))
     pom = res.outputs.get("pom")
     if pom and Path(pom).exists():
         w.copy_into(Path(pom), "pom/" + Path(pom).name)

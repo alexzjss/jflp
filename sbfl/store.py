@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .adapters.base import Bug
 from .home import Home
+from .winpath import long_path, lp
 
 _INVALID = re.compile(r'[:*?"<>|/\\\x00-\x1f]')
 _RESERVED = re.compile(r"(?i)(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?")
@@ -38,7 +39,7 @@ def _safe(part: str) -> str:
 
 def make_writable(path) -> None:
     """Remove o somente-leitura de um arquivo ou árvore (para apagar execuções)."""
-    p = Path(path)
+    p = lp(path)
     items = [p] + (list(p.rglob("*")) if p.is_dir() else [])
     for item in items:
         with contextlib.suppress(OSError):
@@ -46,7 +47,7 @@ def make_writable(path) -> None:
 
 
 def _lock_files(folder: Path) -> None:
-    for item in folder.rglob("*"):
+    for item in lp(folder).rglob("*"):
         if item.is_file():
             os.chmod(item, stat.S_IREAD)
 
@@ -146,9 +147,9 @@ class RunWriter:
         src = Path(src)
         dest = self._dest(rel)
         if src.is_dir():
-            shutil.copytree(src, dest, dirs_exist_ok=True)
+            shutil.copytree(long_path(src), long_path(dest), dirs_exist_ok=True)
         else:
-            shutil.copy2(src, dest)
+            shutil.copy2(long_path(src), long_path(dest))
 
     def gzip_into(self, src: Path, rel: str) -> None:
         """Comprime `src` em `rel` (o chamador inclui o `.gz` no nome)."""
@@ -167,13 +168,14 @@ class RunWriter:
             with open(self._dest(name), "wb") as raw:
                 with zstandard.ZstdCompressor().stream_writer(raw) as zw:
                     with tarfile.open(fileobj=zw, mode="w|") as tar:
-                        tar.add(src_dir, arcname=".")
+                        tar.add(long_path(src_dir), arcname=".")
             return name
         name = "checkout.zip"
         with zipfile.ZipFile(self._dest(name), "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as zf:
-            for item in sorted(src_dir.rglob("*")):
+            root = lp(src_dir)
+            for item in sorted(root.rglob("*")):
                 if item.is_file():
-                    zf.write(item, item.relative_to(src_dir).as_posix())
+                    zf.write(item, item.relative_to(root).as_posix())
         return name
 
     # -- publicação --
