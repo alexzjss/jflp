@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ bug.key }} - JFLP Studio{% endblock %}
+{% block content %}
+<h1>{{ bug.key }}</h1>
+
+<section>
+  <h2>Executar</h2>
+  <form method="post" action="/bug/{{ bug.key }}/rodar">
+    <div class="linha">
+      <label>Testes
+        <select name="scope">
+          <option value="relevant" selected>relevantes</option>
+          <option value="all">todos</option>
+        </select>
+      </label>
+      <label><input type="checkbox" name="auto_search" value="1" checked> busca automática</label>
+    </div>
+    <div class="botoes" style="margin-top:10px">
+      <button type="submit" name="kind" value="maven">Rodar Maven</button>
+      <button type="submit" name="kind" value="jaguar1">Rodar Jaguar 1</button>
+      <a class="botao" href="/bug/{{ bug.key }}/jaguar2">Revisar e rodar Jaguar 2</a>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2>Execuções</h2>
+  {% if runs %}
+  <table>
+    <thead><tr><th>Início</th><th>Tipo</th><th>Status</th><th>Testes</th><th>Duração</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td><a href="/run/{{ r.path }}">{{ r.started }}</a></td>
+        <td>{{ kind_label.get(r.kind, r.kind) }}</td>
+        <td class="{{ 'ok' if r.status == 'ok' else 'erro' }}">{{ r.status }}</td>
+        <td>{{ r.tests_total if r.tests_total is not none else '-' }}{% if r.tests_failed %} ({{ r.tests_failed }} falhas){% endif %}</td>
+        <td>{{ (r.seconds|round|int ~ ' s') if r.seconds is not none else '-' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vazio">Nenhuma execução ainda.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -52,6 +52,7 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app = FastAPI(title="JFLP Studio", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.home, app.state.settings, app.state.worker = home, settings, worker
     app.state.token, app.state.port = token, port
+    app.state.local_bugs = {}     # bugs locais cadastrados nesta sessão: {key: Bug}
     app.state.tasks = {}          # downloads e prefetch em andamento: {id: {...}}
     app.state.templates = Jinja2Templates(directory=str(_HERE / "templates"))
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
@@ -90,6 +91,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
 
     from .routes_env import router as env_router
     app.include_router(env_router)
+    from .routes_bugs import router as bugs_router
+    app.include_router(bugs_router)
     return app
 
 

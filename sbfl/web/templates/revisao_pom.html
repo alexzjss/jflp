@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Revisão do POM - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Jaguar 2: revisão do POM</h1>
+<p><a href="/bug/{{ bug.key }}">{{ bug.key }}</a></p>
+
+{% if error %}
+<p class="aviso erro">Não foi possível preparar o bug: {{ error }}</p>
+{% else %}
+{% if plan.warnings %}
+<section>
+  <h2>Avisos</h2>
+  <ul>{% for w in plan.warnings %}<li class="erro">{{ w }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if recipe %}
+<p class="aviso ok">Receita aplicada: {{ recipe.fixes|join(', ') or 'sem correções' }}{% if recipe.note %} ({{ recipe.note }}){% endif %}</p>
+{% endif %}
+
+<form method="post" action="/bug/{{ bug.key }}/jaguar2">
+  <section>
+    <h2>Correções</h2>
+    {% for d in plan.detected %}<input type="hidden" name="detected" value="{{ d }}">{% endfor %}
+    {% for f in fixes %}
+    <div class="correcao">
+      <label><input type="checkbox" name="fix" value="{{ f.id }}" {{ 'checked' if f.id in checked else '' }}>
+        <strong>{{ f.title }}</strong>
+        {% if f.id in plan.detected %}<span class="ok">(detectada)</span>{% endif %}</label>
+      <div class="vazio">{{ f.reason }}</div>
+    </div>
+    {% endfor %}
+  </section>
+
+  <section>
+    <h2>Diferenças no pom.xml</h2>
+    {% if diff_lines %}
+    <pre class="diff">{% for cls, ln in diff_lines %}<span class="{{ cls }}">{{ ln }}</span>{% endfor %}</pre>
+    {% else %}
+    <p class="vazio">Sem diferenças.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Enfileirar</h2>
+    <div class="linha">
+      <label>Testes
+        <select name="scope"><option value="relevant" selected>relevantes</option><option value="all">todos</option></select>
+      </label>
+      <label><input type="checkbox" name="auto_search" value="1" checked> busca automática</label>
+      <button type="submit" {{ 'disabled' if not plan.text else '' }}>Enfileirar e acompanhar</button>
+    </div>
+  </section>
+</form>
+{% endif %}
+{% endblock %}

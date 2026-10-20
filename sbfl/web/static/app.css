@@ -42,3 +42,10 @@ input[type=text] { flex: 1; min-width: 260px; }
   background: var(--bg); }
 .dialogo ul { padding-left: 18px; }
 progress { width: 260px; }
+pre.diff { background: var(--bg); padding: 10px; border-radius: 6px; overflow: auto; max-height: 420px; }
+pre.diff span { display: block; white-space: pre; word-break: normal; }
+pre.diff .mais { background: rgba(29,122,70,.18); color: var(--ok); }
+pre.diff .menos { background: rgba(179,38,30,.15); color: var(--err); }
+.correcao { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.correcao .vazio { margin-left: 24px; font-size: .9em; }
+a.botao { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 7px 14px; color: var(--text); text-decoration: none; }
