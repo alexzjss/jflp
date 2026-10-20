@@ -191,6 +191,105 @@ class TestPomgen(Base):
         self.assertIn("sem pom.xml: Jaguar 2 não suportado", plan.warnings)
         self.assertEqual(plan.text, "")
 
+    # ---------------------------------------------------------------- herança (Review Focus 4)
+    def _child_of(self, parent_fixture):
+        self.module(parent_fixture)                 # pai em ../pom.xml
+        return self.module("child_plain.xml", "child")
+
+    def _listener_values(self, plan):
+        root = self.parse(plan)
+        out = []
+        for sf in self.plugins(root, "maven-surefire-plugin"):
+            props = sf.find("m:configuration/m:properties", NS)
+            out.append((props.get("combine.children"),
+                        [v.text for v in props.findall("m:property[m:name='listener']/m:value", NS)]))
+        return out
+
+    def test_listener_inherited_from_parent(self):
+        d = self._child_of("parent_listener.xml")
+        (combine, values), = self._listener_values(self.gen(d))
+        self.assertEqual(values, ["com.acme.ParentListener," + LISTENER])
+        self.assertIsNone(combine)
+
+    def test_listener_in_pluginmanagement(self):
+        d = self._child_of("parent_pm_listener.xml")
+        (combine, values), = self._listener_values(self.gen(d))
+        self.assertEqual(values, ["com.acme.ManagedListener," + LISTENER])
+        self.assertIsNone(combine)
+
+    def test_listener_already_has_ours(self):
+        d = self._child_of("parent_listener_ours.xml")
+        plan = self.gen(d)
+        for _, values in self._listener_values(plan):
+            self.assertEqual(len(values), 0)             # nada a acrescentar no filho
+        own = self.module("argline.xml", "own")
+        p = own / "pom.xml"
+        p.write_text(p.read_text().replace("com.acme.OtherListener",
+                                           "com.acme.OtherListener," + LISTENER), encoding="utf-8")
+        (_, values), = self._listener_values(self.gen(own))
+        self.assertEqual(values[0].count(LISTENER), 1)
+
+    def test_jacoco_prepare_agent_in_parent_not_duplicated(self):
+        d = self._child_of("parent_jacoco.xml")
+        root = self.parse(self.gen(d))
+        jac, = self.plugins(root, "jacoco-maven-plugin")
+        self.assertEqual(jac.findtext("m:version", namespaces=NS), "0.8.7")
+        execs = jac.findall("m:executions/m:execution", NS)
+        self.assertEqual([e.findtext("m:id", namespaces=NS) for e in execs], ["agent"])
+
+    # ---------------------------------------------------------------- pastas de fontes
+    def _java(self, d, rel, pkg):
+        f = d / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("package " + pkg + ";\nclass X {}\n", encoding="utf-8")
+
+    def test_source_dirs_helpers_in_test_tree(self):
+        d = self.module("minimal.xml")
+        self._java(d, "src/main/java/org/x/Foo.java", "org.x")
+        for n in ("MockFoo", "FakeBar", "Helper"):
+            self._java(d, f"src/test/java/org/x/{n}.java", "org.x")
+        self._java(d, "src/test/java/org/x/FooTest.java", "org.x")
+        plan = self.gen(d)
+        self.assertNotIn("source-dirs", plan.detected)
+        root = self.parse(plan)
+        self.assertIsNone(root.find("m:build/m:sourceDirectory", NS))
+
+    def test_source_dirs_only_helpers_never_main(self):
+        d = self.module("minimal.xml")
+        self._java(d, "src/main/java/org/x/Foo.java", "org.x")
+        self._java(d, "src/test/org/x/MockFoo.java", "org.x")
+        root = self.parse(self.gen(d))
+        self.assertEqual(root.findtext("m:build/m:testSourceDirectory", namespaces=NS), "src/test")
+        self.assertIsNone(root.find("m:build/m:sourceDirectory", NS))
+
+    def test_source_dirs_ignores_src_it(self):
+        d = self.module("minimal.xml")
+        for i in range(5):
+            self._java(d, f"src/it/java/org/x/Foo{i}IT.java", "org.x")
+            self._java(d, f"src/it/java/org/x/Test{i}.java", "org.x")
+        self._java(d, "src/test/java/org/x/FooTest.java", "org.x")
+        plan = self.gen(d)
+        self.assertNotIn("source-dirs", plan.detected)
+
+    # ---------------------------------------------------------------- erros
+    def test_invalid_pom_returns_warning_plan(self):
+        d = self.root / "ruim"
+        d.mkdir()
+        (d / "pom.xml").write_text("<project><oops>", encoding="utf-8")
+        plan = self.gen(d)
+        self.assertEqual(plan.text, "")
+        self.assertTrue(plan.warnings[0].startswith("pom.xml inválido:"))
+        with self.assertRaises(ValueError):
+            write(plan, d)
+
+    def test_override_version_dep_requires_group(self):
+        d = self.module("minimal.xml")
+        plan = self.gen(d, fixes_on={"override-version"},
+                        params={"override-version": {"deps": {"semgrupo": "1.0"}}})
+        self.assertEqual(plan.applied, [])
+        self.assertTrue(any("grupo:artefato" in w for w in plan.warnings))
+        self.assertNotIn("semgrupo", plan.text)
+
     def test_fixes_registry(self):
         self.assertEqual(list(FIXES), ["skip-animal-sniffer", "compiler-java", "source-dirs",
                                        "junit4", "override-version", "exclude-duplicates"])

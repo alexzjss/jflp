@@ -34,33 +34,100 @@ def apply_base(doc: PomDoc, ctx: PomContext) -> None:
     for artifact in JAGUAR_ARTIFACTS:
         doc.ensure_dependency(JAGUAR_GROUP, artifact, v["version"], "test")
 
+    inherited = _chain_docs(ctx)
+    jac_id = None if _has_prepare_agent(doc, False) else _chain_prepare_agent_id(inherited)
     jac = doc.ensure_plugin("org.jacoco", "jacoco-maven-plugin", v["jacoco"])
     execs = doc.child(jac, "executions", create=True)
     has_goal = any((g.text or "").strip() == "prepare-agent"
                    for g in execs.iter(doc.q("goal")))
     if not has_goal:
         e = ET.SubElement(execs, doc.q("execution"))
-        doc.set_child(e, "id", "prepare-agent")
+        if jac_id != "default":        # sem <id> = execução "default" do Maven
+            doc.set_child(e, "id", jac_id or "prepare-agent")
         doc.set_child(doc.child(e, "goals", create=True), "goal", "prepare-agent")
 
     sf = doc.ensure_plugin(*SUREFIRE, v["surefire"])
     cfg = doc.child(sf, "configuration", create=True)
     props = doc.child(cfg, "properties", create=True)
-    props.set("combine.children", "append")
-    listener = next(_listener_properties(doc, props), None)
-    if listener is None:
+    own = next(_listener_properties(doc, props), None)
+    chain_value = None if own is not None else _chain_listener(inherited)
+    if own is not None:
+        value = doc.child(own, "value", create=True)
+        value.text = _with_listener((value.text or "").strip())
+    elif chain_value is not None:
+        # herdado do pai/pluginManagement: uma única chave `listener` com o valor herdado + o nosso
+        if LISTENER not in _split_list(chain_value):
+            listener = ET.SubElement(props, doc.q("property"))
+            doc.set_child(listener, "name", "listener")
+            doc.set_child(listener, "value", _with_listener(chain_value))
+    else:
+        props.set("combine.children", "append")
         listener = ET.SubElement(props, doc.q("property"))
         doc.set_child(listener, "name", "listener")
         doc.set_child(listener, "value", LISTENER)
-    else:
-        value = doc.child(listener, "value", create=True)
-        current = (value.text or "").strip()
-        if LISTENER not in [x.strip() for x in current.split(",")]:
-            value.text = f"{current},{LISTENER}" if current else LISTENER
 
     argline = ctx.surefire_argline
     if argline and "@{argLine}" not in argline and "${argLine}" not in argline:
         doc.set_child(cfg, "argLine", f"@{{argLine}} {argline}")
+
+
+def _split_list(value: str) -> list[str]:
+    return [x.strip() for x in value.split(",") if x.strip()]
+
+
+def _with_listener(current: str) -> str:
+    items = _split_list(current)
+    return ",".join(items if LISTENER in items else items + [LISTENER])
+
+
+def _chain_docs(ctx: PomContext) -> list[PomDoc]:
+    """POMs da cadeia (o do módulo primeiro) já lidos; os ilegíveis são ignorados."""
+    docs = []
+    for text in ctx.chain_texts:
+        try:
+            docs.append(PomDoc.from_text(text))
+        except ET.ParseError:
+            pass
+    return docs
+
+
+def _plugin_entries(doc: PomDoc, group: str, artifact: str, management_too: bool = True):
+    for mgmt in ((False, True) if management_too else (False,)):
+        p = doc.find_plugin(group, artifact, in_management=mgmt)
+        if p is not None:
+            yield p
+
+
+def _chain_listener(docs: list[PomDoc]) -> str | None:
+    """Valor de `listener` do Surefire mais próximo do módulo na cadeia (plugins, depois management)."""
+    for d in docs:
+        for p in _plugin_entries(d, *SUREFIRE):
+            props = d.path(p, "configuration", "properties")
+            if props is None:
+                continue
+            for prop in _listener_properties(d, props):
+                return (d.child(prop, "value").text or "").strip() if d.child(prop, "value") is not None else ""
+    return None
+
+
+def _has_prepare_agent(doc: PomDoc, management_too: bool) -> bool:
+    return _prepare_agent_id(doc, management_too) is not None
+
+
+def _prepare_agent_id(doc: PomDoc, management_too: bool) -> str | None:
+    for p in _plugin_entries(doc, "org.jacoco", "jacoco-maven-plugin", management_too):
+        for e in p.findall(f"{doc.q('executions')}/{doc.q('execution')}"):
+            if any((g.text or "").strip() == "prepare-agent" for g in e.iter(doc.q("goal"))):
+                return (doc.child(e, "id").text or "").strip() if doc.child(e, "id") is not None else "default"
+    return None
+
+
+def _chain_prepare_agent_id(docs: list[PomDoc]) -> str | None:
+    for d in docs:
+        found = _prepare_agent_id(d, True)
+        if found:
+            return found
+    return None
 
 
 def _listener_properties(doc: PomDoc, props):
@@ -135,16 +202,22 @@ def _apply_junit4(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     doc.ensure_dependency("junit", "junit", ctx.versions["junit"], "test")
 
 
-def _split(coord: str) -> tuple[str, str]:
+def _split(coord: str, is_plugin: bool) -> tuple[str, str]:
     group, _, artifact = coord.partition(":")
-    return (group, artifact) if artifact else (DEFAULT_GROUP, group)
+    if artifact:
+        return group, artifact
+    if is_plugin:
+        return DEFAULT_GROUP, group
+    raise ValueError(f"dependência deve ser 'grupo:artefato': {coord}")
 
 
 def _apply_override(doc: PomDoc, ctx: PomContext, params: dict) -> None:
-    for coord, version in (params.get("deps") or {}).items():
-        doc.ensure_dependency(*_split(coord), version)
-    for coord, version in (params.get("plugins") or {}).items():
-        doc.ensure_plugin(*_split(coord), version)
+    deps = [(_split(c, False), v) for c, v in (params.get("deps") or {}).items()]
+    plugins = [(_split(c, True), v) for c, v in (params.get("plugins") or {}).items()]
+    for (g, a), version in deps:        # valida tudo antes de alterar o documento
+        doc.ensure_dependency(g, a, version)
+    for (g, a), version in plugins:
+        doc.ensure_plugin(g, a, version)
 
 
 def _apply_excludes(doc: PomDoc, ctx: PomContext, params: dict) -> None:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import difflib
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,9 +31,12 @@ def generate(module_dir: Path, settings, jdk: int, fixes_on: set[str] | None = N
     if not pom.is_file():
         return PomPlan("", "", warnings=[WARN_NO_POM])
 
+    try:                                # pom.xml ilegível: plano vazio com aviso (não levanta)
+        original = PomDoc.load(pom).serialize()
+        doc = PomDoc.load(pom)
+    except ET.ParseError as e:
+        return PomPlan("", "", warnings=[f"pom.xml inválido: {e}"])
     ctx = build_context(module_dir, settings, jdk)
-    original = PomDoc.load(pom).serialize()
-    doc = PomDoc.load(pom)
 
     warnings: list[str] = []
     detected = [fid for fid, fx in FIXES.items() if fx.detect(ctx)]
@@ -47,7 +51,11 @@ def generate(module_dir: Path, settings, jdk: int, fixes_on: set[str] | None = N
     for fid, fx in FIXES.items():       # ordem fixa do registro
         if fid in wanted:
             p = {**fx.default_params, **(params.get(fid) or {})}
-            fx.apply(doc, ctx, p)
+            try:
+                fx.apply(doc, ctx, p)
+            except ValueError as e:     # parâmetro inválido: avisa e segue sem a correção
+                warnings.append(f"correção {fid} ignorada: {e}")
+                continue
             applied.append(fid)
             used[fid] = p
 
@@ -61,7 +69,7 @@ def generate(module_dir: Path, settings, jdk: int, fixes_on: set[str] | None = N
 
 def write(plan: PomPlan, module_dir: Path) -> Path:
     if not plan.text:
-        raise ValueError(WARN_NO_POM)
+        raise ValueError("plano sem texto: nada para gravar")
     out = Path(module_dir) / "jaguar2-pom.xml"
     out.write_text(plan.text, encoding="utf-8", newline="\n")
     return out

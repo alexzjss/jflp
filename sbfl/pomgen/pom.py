@@ -205,41 +205,56 @@ def _java_root(path: Path) -> Path | None:
     return Path(*parent.parts[:-len(parts)])
 
 
+def _root_kind(rel_parts: tuple[str, ...], stem: str) -> str | None:
+    """'test', 'main' ou None (ignorar) para uma raiz de fontes relativa a src/.
+
+    O diretório vale mais que o nome: test/tests => teste, main => principal, it => ignorado.
+    O nome do arquivo só desempata raízes ambíguas (ex.: src/java)."""
+    low = [x.lower() for x in rel_parts]
+    if low and low[0] == "it":
+        return None
+    if any(x in ("test", "tests") for x in low):
+        return "test"
+    if "main" in low:
+        return "main"
+    return "test" if is_test_name(stem) else "main"
+
+
 def detect_source_dirs(module_dir: Path) -> tuple[str | None, str | None]:
     """(test_dir, main_dir) relativos ao módulo, inferidos do `package` dos .java em src/."""
-    src = Path(module_dir) / "src"
+    module_dir = Path(module_dir)
+    src = module_dir / "src"
     if not src.is_dir():
         return None, None
-    tests: Counter = Counter()
-    mains: Counter = Counter()
-    n_test = n_main = 0
+    roots = {"test": Counter(), "main": Counter()}
+    reads = 0
     for dirpath, dirnames, filenames in os.walk(src):
         dirnames.sort()
+        if Path(dirpath) == src:
+            dirnames[:] = [d for d in dirnames if d.lower() != "it"]
         for name in sorted(filenames):
             if not name.endswith(".java"):
                 continue
-            is_test = is_test_name(name[:-5])
-            if (n_test if is_test else n_main) >= MAX_SAMPLES:
-                continue
+            if reads >= 4 * MAX_SAMPLES:
+                break
             root = _java_root(Path(dirpath) / name)
+            reads += 1
             if root is None or src not in (root, *root.parents):
                 continue
-            if is_test:
-                n_test += 1
-                tests[root] += 1
-            else:
-                n_main += 1
-                mains[root] += 1
-        if n_test >= MAX_SAMPLES and n_main >= MAX_SAMPLES:
+            kind = _root_kind(root.relative_to(src).parts, name[:-5])
+            if kind and sum(roots[kind].values()) < MAX_SAMPLES:
+                roots[kind][root] += 1
+        if reads >= 4 * MAX_SAMPLES or all(sum(c.values()) >= MAX_SAMPLES for c in roots.values()):
             break
 
-    def rel(p: Path) -> str:
-        return p.relative_to(module_dir).as_posix()
+    def best(kind: str) -> Path | None:
+        return roots[kind].most_common(1)[0][0] if roots[kind] else None
 
-    main = mains.most_common(1)[0][0] if mains else None
-    for r in [r for r, _ in tests.most_common() if r != main]:
-        return rel(r), (rel(main) if main else None)
-    return None, (rel(main) if main else None)
+    test, main = best("test"), best("main")
+    if test is not None and test == main:       # raiz única com os dois tipos: não dá para separar
+        test = None
+    rel = lambda p: p.relative_to(module_dir).as_posix() if p is not None else None
+    return rel(test), rel(main)
 
 
 def _surefire_argline(texts: list[str]) -> str | None:
