@@ -7,7 +7,6 @@ from unittest import mock
 from sbfl import queue as jq
 from sbfl import store
 from sbfl.adapters.base import Bug
-from sbfl.home import load_settings
 from tests.web_helpers import HAVE_WEB, WebFixture
 
 BUG = Bug("bugsjar", "commons-lang", "7")
@@ -65,7 +64,7 @@ class RunPage(RunsBase):
     def test_valid_rel(self):
         from sbfl.web.routes_runs import _valid_rel
         self.assertTrue(_valid_rel("bugsjar/proj/7/20261020-1-maven"))
-        for bad in ("bugsjar/../x/1", "bugsjar/../x/1/y", "a/./b/c/d", "a/b/c/.d", "a/b\c/d/e",
+        for bad in ("bugsjar/../x/1", "bugsjar/../x/1/y", "a/./b/c/d", "a/b/c/.d", r"a/b\c/d/e",
                     "C:/b/c/d", "a/b/c", "a/b/c/d/e", "a//c/d"):
             with self.subTest(bad=bad):
                 self.assertFalse(_valid_rel(bad))
@@ -79,6 +78,22 @@ class RunPage(RunsBase):
         for bad in ("../../../../jflp.db", "/etc/passwd", "C:/Windows/win.ini", "outputs/../../x"):
             with self.subTest(bad=bad):
                 self.assertEqual(c.get(f"/run/{rel}/arquivo", params={"p": bad}).status_code, 400)
+
+    def test_open_folder_htmx_fragment_on_error(self):
+        rel = self.make_run()
+        with mock.patch("sbfl.web.routes_runs._open_path", side_effect=OSError("falhou")):
+            r = self.authed().post(f"/run/{rel}/abrir", headers={"HX-Request": "true"})
+        self.assertEqual(r.status_code, 500)
+        self.assertNotIn("<html", r.text)
+        self.assertIn("Não foi possível abrir a pasta: falhou", r.text)
+
+    def test_attempts_skips_malformed_json(self):
+        rel = self.make_run()
+        d = store.run_dir(self.home, rel) / "attempts" / "1" / "attempt.json"
+        d.chmod(0o666)
+        d.write_text("[1, 2]", encoding="utf-8")
+        r = self.authed().get(f"/run/{rel}")
+        self.assertEqual(r.status_code, 200)
 
     def test_log_search(self):
         rel = self.make_run()
@@ -236,6 +251,11 @@ class Export(RunsBase):
             fail = c.post("/exportar/abrir", data={"nome": "meu_ds"})
         self.assertEqual(fail.status_code, 500)
         self.assertIn("sem gerenciador", fail.text)
+        with mock.patch("sbfl.web.routes_runs._open_path", side_effect=OSError("sem gerenciador")):
+            hx = c.post("/exportar/abrir", data={"nome": "meu_ds"}, headers={"HX-Request": "true"})
+        self.assertEqual(hx.status_code, 500)
+        self.assertNotIn("<html", hx.text)
+        self.assertIn("Não foi possível abrir a pasta", hx.text)
         dup = c.post("/exportar", data={"nome": "meu_ds"})
         self.assertEqual(dup.status_code, 400)
         self.assertIn("Já existe", dup.text)

@@ -55,3 +55,7 @@ textarea { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px;
 details summary { cursor: pointer; }
 #linhas thead a { color: var(--text); text-decoration: none; }
 #linhas thead a:hover { text-decoration: underline; }
+a { color: var(--accent); }
+a:hover { text-decoration: underline; }
+.lateral a, a.botao, #linhas thead a { color: var(--text); }
+.lateral a { color: var(--side-text); }

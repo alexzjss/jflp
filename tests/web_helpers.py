@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,7 +13,6 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from sbfl.adapters.base import Bug  # noqa: F401
 from sbfl.home import Home, load_settings
 
 TOKEN = "tok-de-teste"

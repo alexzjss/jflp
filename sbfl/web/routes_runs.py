@@ -9,6 +9,7 @@ import sys
 import tempfile
 import tomllib
 import zipfile
+from html import escape
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
@@ -40,6 +41,14 @@ def _render(request: Request, name: str, ctx: dict, status: int = 200):
 
 def _msg(request: Request, page: str, title: str, text: str, status: int):
     return _render(request, "mensagem.html", {"page": page, "titulo": title, "texto": text}, status)
+
+
+def _open_reply(request: Request, page: str, title: str, text: str, status: int):
+    """Resposta de "abrir pasta": só um trecho quando vem do htmx, página inteira caso contrário."""
+    if request.headers.get("hx-request"):
+        cls = "erro" if status >= 400 else "vazio"
+        return HTMLResponse(f'<span class="{cls}">{escape(text)}</span>', status_code=status)
+    return _msg(request, page, title, text, status)
 
 
 # ------------------------------------------------------------------ helpers
@@ -116,7 +125,9 @@ def _attempts(d: Path) -> list[dict]:
             data = json.loads(a.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        cfg = data.get("config") or {}
+        if not isinstance(data, dict):
+            continue
+        cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
         out.append({"n": a.parent.name, "status": data.get("status"), "skipped": data.get("skipped"),
                     "fixes": cfg.get("fixes_on") or [], "jdk": cfg.get("jdk"), "maven": cfg.get("maven")})
     return out
@@ -245,12 +256,13 @@ def run_zip(request: Request, rel: str):
 def run_open(request: Request, rel: str):
     got = _load(request, rel)
     if got is None:
-        return _no_run(request, rel)
+        return _open_reply(request, "bugs", "Execução não encontrada", f"Não existe a execução: {rel}", 404)
     try:
         _open_path(got[1])
     except OSError as e:
-        return _msg(request, "bugs", "Não foi possível abrir a pasta", str(e), 500)
-    return HTMLResponse('<span class="vazio">Pasta aberta no explorador de arquivos.</span>')
+        return _open_reply(request, "bugs", "Não foi possível abrir a pasta",
+                           f"Não foi possível abrir a pasta: {e}", 500)
+    return _open_reply(request, "bugs", "Pasta aberta", "Pasta aberta no explorador de arquivos.", 200)
 
 
 # --------------------------------------------------- tentar de novo / receita
@@ -567,9 +579,10 @@ def exportar_abrir(request: Request, nome: str = Form("")):
     home = request.app.state.home
     d = _inside(home.datasets, nome) if nome else None
     if d is None or not d.is_dir():
-        return _msg(request, "exportar", "Dataset não encontrado", nome, 404)
+        return _open_reply(request, "exportar", "Dataset não encontrado", f"Dataset não encontrado: {nome}", 404)
     try:
         _open_path(d)
     except OSError as e:
-        return _msg(request, "exportar", "Não foi possível abrir a pasta", str(e), 500)
-    return HTMLResponse('<span class="vazio">Pasta aberta no explorador de arquivos.</span>')
+        return _open_reply(request, "exportar", "Não foi possível abrir a pasta",
+                           f"Não foi possível abrir a pasta: {e}", 500)
+    return _open_reply(request, "exportar", "Pasta aberta", "Pasta aberta no explorador de arquivos.", 200)

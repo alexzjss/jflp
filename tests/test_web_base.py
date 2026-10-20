@@ -9,7 +9,6 @@ from unittest import mock
 
 try:
     from fastapi.testclient import TestClient
-    from sbfl.web.app import create_app
     HAVE_WEB = True
 except ImportError:
     HAVE_WEB = False
