@@ -70,6 +70,14 @@ def _close_if_finished(con: sqlite3.Connection, batch_id: int) -> None:
                     (batch_id,))
 
 
+def active_batch_ids(home: Home) -> list[int]:
+    """Lotes ativos que ainda têm jobs pendentes ou em andamento."""
+    with contextlib.closing(_connect(home)) as con:
+        return [r[0] for r in con.execute(
+            "SELECT b.id FROM batches b WHERE b.state='active' AND EXISTS "
+            "(SELECT 1 FROM jobs j WHERE j.batch_id=b.id AND j.state IN ('pending','running')) ORDER BY b.id")]
+
+
 def batch_jobs(home: Home, batch_id: int) -> list[dict]:
     """Jobs de um lote, na ordem (bug_extra já decodificado em `extra`)."""
     with contextlib.closing(_connect(home)) as con:

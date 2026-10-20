@@ -7,7 +7,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config as C
+# Flags que desligam verificações de qualidade do Maven que atrapalham o checkout antigo.
+SKIP_FLAGS = [
+    "-Drat.skip=true", "-Denforcer.skip=true", "-Dcheckstyle.skip=true",
+    "-Dlicense.skip=true", "-Dmaven.javadoc.skip=true",
+    "-Danimal.sniffer.skip=true", "-Dfindbugs.skip=true",
+]
 
 # Valores padrão das configurações do usuário (config.toml).
 DEFAULTS = {
@@ -17,7 +22,7 @@ DEFAULTS = {
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": []},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
-            "skip_flags": list(C.DEFAULTS["maven"]["skip_flags"])},
+            "skip_flags": list(SKIP_FLAGS)},
     "bugsjar": {"root": "", "projects": [],
                 "url_template": "https://github.com/bugs-dot-jar/{project}.git"},
     "defects4j": {"home": "", "wsl_distro": "",

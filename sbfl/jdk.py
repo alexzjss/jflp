@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 LEVEL_RES = [
     r"<maven\.compiler\.(?:source|target|release)>\s*([^<\s]+)\s*<",
@@ -38,17 +37,3 @@ def pick_home(level: int, homes: dict) -> str:
             return v
     return cands[-1][1]
 
-
-def auto_java_home(cfg, dirs) -> tuple[str | None, int | None]:
-    """(java_home, nível declarado) ou (None, None) se `[java.homes]` não está configurado
-    ou o pom não declara o nível."""
-    homes = cfg.get("java", "homes") or {}
-    if not homes:
-        return None, None
-    for d in dirs:
-        pom = Path(d) / "pom.xml"
-        if pom.exists():
-            lv = declared_level(pom.read_text(encoding="utf-8", errors="replace"))
-            if lv:
-                return pick_home(lv, homes), lv
-    return None, None

@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from sbfl import config as C
+from sbfl.home import SKIP_FLAGS
 from sbfl.home import DEFAULTS, Home, load_settings
 
 
@@ -76,7 +76,7 @@ class HomeTests(unittest.TestCase):
         home = Home(self.tmp / "vazio")
         s = load_settings(home)
         self.assertEqual(s.get("jaguar2", "surefire"), "3.5.3")
-        self.assertEqual(s.get("run", "skip_flags"), C.DEFAULTS["maven"]["skip_flags"])
+        self.assertEqual(s.get("run", "skip_flags"), SKIP_FLAGS)
         self.assertEqual(s.section("ui"), {"port": 0})
 
     def test_defaults_not_mutated_by_settings(self):

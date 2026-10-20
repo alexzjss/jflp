@@ -84,21 +84,3 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
     return {"rc": p.returncode, "tail": list(tail), "timed_out": state["timed_out"],
             "counts": counts, "collected": collected, "seconds": round(time.time() - t0, 1)}
 
-
-def make_env(cfg, java_home: str | None = None) -> dict:
-    env = dict(os.environ)
-    jh = java_home or cfg.get("java", "java_home")
-    if jh:
-        env["JAVA_HOME"] = str(jh)
-        env["PATH"] = os.path.join(str(jh), "bin") + os.pathsep + env.get("PATH", "")
-    if cfg.get("maven", "opts"):
-        env["MAVEN_OPTS"] = cfg.get("maven", "opts")
-    return env
-
-
-def java_exe(cfg, java_home: str | None = None) -> str:
-    jh = java_home or cfg.get("java", "java_home")
-    if jh:
-        exe = os.path.join(str(jh), "bin", "java")
-        return exe if os.path.exists(exe) or os.path.exists(exe + ".exe") else cfg.get("java", "java")
-    return cfg.get("java", "java")
