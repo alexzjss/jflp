@@ -10,7 +10,7 @@ from sbfl.build import detect, parse_gradle_info, gradle_path, resolve_tool, spl
 from sbfl.adapters.base import junit_flavor
 from sbfl.classfile import is_abstract_or_interface
 from sbfl.diffgt import FaultLine, faults_from_hunks, fqcn_from_path, parse_left_hunks, select_lines
-from sbfl.jaguar import run_jaguar
+from sbfl.jaguar import JaguarOptions, run_jaguar
 from sbfl.outputs import Req, outer, parse_xml_jaguar1
 from sbfl import status as S
 
@@ -372,13 +372,12 @@ class T(unittest.TestCase):
                 wrapper = t / "fakejava.cmd"
                 wrapper.write_text(f'@"{sys.executable}" "{fake}" %*\r\n')
                 fake = wrapper
-            (t / "cfg.toml").write_text(f'[paths]\njaguar_lib="{t.as_posix()}"\nresults="{t.as_posix()}/r"\n[java]\njava="{fake.as_posix()}"\n')
-            cfg = C.load(t / "cfg.toml")
+            opts = JaguarOptions(lib=t, java=str(fake), env=dict(os.environ), max_retries=6)
             proj = t / "proj"; proj.mkdir()
             ctx = Ctx(proj, "target/classes", "target/test-classes", [],
                       ["x.OkTest", "x.CrashTest", "x.FailTest", "x.LastTest"], [])
             out = t / "out"; out.mkdir()
-            meta = run_jaguar(cfg, ctx, out)
+            meta = run_jaguar(opts, ctx, out)
             self.assertEqual(meta["status"], "ok")
             self.assertEqual(meta["excluded_classes"], ["x.CrashTest"])
             self.assertTrue((out / "jaguar_Ochiai.xml").exists())
