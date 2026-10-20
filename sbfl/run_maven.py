@@ -51,14 +51,14 @@ def module_dir(prep: Prepared, workdir: Path) -> Path:
     return workdir if prep.module == "." else workdir / prep.module
 
 
-def test_selection_args(prep: Prepared, scope: str, workdir: Path | None = None) -> list[str]:
+def test_selection_args(prep: Prepared, scope: str, workdir: Path) -> list[str]:
     """`-Dtest=...` com os testes relevantes; lista longa vai para um includesFile no módulo."""
-    if scope == "all" or prep.relevant_tests is None:
+    if scope == "all" or not prep.relevant_tests:  # None e [] = sem seleção
         return []
     arg = "-Dtest=" + ",".join(prep.relevant_tests)
     if len(arg) <= MAX_TEST_ARG:
         return [arg]
-    base = module_dir(prep, workdir if workdir is not None else Path(prep.pristine))
+    base = module_dir(prep, workdir)
     lines = sorted({t.split("$", 1)[0].replace(".", "/") + ".java" for t in prep.relevant_tests})
     base.mkdir(parents=True, exist_ok=True)
     with open(base / INCLUDES_FILE, "w", encoding="utf-8", newline="\n") as f:
