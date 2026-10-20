@@ -38,7 +38,7 @@ class WslTests(unittest.TestCase):
 
     def test_wsl_absent_message(self):
         run = _fake_run(1, MSG.encode("utf-16-le"))
-        with mock.patch.object(detect.os, "name", "nt"), \
+        with mock.patch.object(detect, "_is_windows", return_value=True), \
                 mock.patch.object(detect.subprocess, "run", run):
             st = detect.wsl_status(self.settings)
         self.assertFalse(st.installed)
@@ -47,7 +47,7 @@ class WslTests(unittest.TestCase):
         self.assertIn("não está instalado", st.message)
 
     def test_wsl_missing_executable(self):
-        with mock.patch.object(detect.os, "name", "nt"), \
+        with mock.patch.object(detect, "_is_windows", return_value=True), \
                 mock.patch.object(detect.subprocess, "run", side_effect=FileNotFoundError):
             st = detect.wsl_status(self.settings)
         self.assertFalse(st.installed)
@@ -62,23 +62,51 @@ class WslTests(unittest.TestCase):
                 return subprocess.CompletedProcess(cmd, 0, "Ubuntu\r\n".encode("utf-16-le"), b"")
             return subprocess.CompletedProcess(cmd, 0, b"/opt/d4j/framework/bin/defects4j\n", b"")
 
-        with mock.patch.object(detect.os, "name", "nt"), \
+        with mock.patch.object(detect, "_is_windows", return_value=True), \
                 mock.patch.object(detect.subprocess, "run", run):
             st = detect.wsl_status(self.settings)
+            cmd = detect.defects4j_cmd(self.settings, st)
         self.assertTrue(st.installed)
         self.assertEqual(st.distros, ["Ubuntu"])
         self.assertEqual(st.d4j, "/opt/d4j/framework/bin/defects4j")
-        self.assertEqual(detect.defects4j_cmd(self.settings, st)[:4], ["wsl", "-d", "Ubuntu", "--"])
+        self.assertEqual(cmd[:4], ["wsl", "-d", "Ubuntu", "--"])
+
+    def _wsl_with_probe(self, probe_out: bytes, rc: int = 0):
+        def run(cmd, **kw):
+            if cmd[:2] == ["wsl.exe", "-l"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, "docker-desktop\r\nUbuntu\r\n".encode("utf-16-le"), b"")
+            self.probe_cmd = cmd
+            return subprocess.CompletedProcess(cmd, rc, probe_out, b"wsl: failed to translate path\n")
+
+        with mock.patch.object(detect, "_is_windows", return_value=True), \
+                mock.patch.object(detect.subprocess, "run", run):
+            return detect.wsl_status(self.settings)
+
+    def test_wsl_distro_without_defects4j(self):
+        st = self._wsl_with_probe(b"", rc=1)
+        self.assertTrue(st.installed)
+        self.assertIsNone(st.d4j)
+        self.assertIn("Defects4J não encontrado", st.message)
+        self.assertEqual(self.probe_cmd[2], "Ubuntu")  # pulou docker-desktop
+
+    def test_wsl_noisy_banner_not_found(self):
+        st = self._wsl_with_probe(b"Bem-vindo ao Ubuntu\n")
+        self.assertIsNone(st.d4j)
+
+    def test_wsl_noisy_banner_found(self):
+        st = self._wsl_with_probe(b"Bem-vindo\n/usr/bin/defects4j\n")
+        self.assertEqual(st.d4j, "/usr/bin/defects4j")
 
     def test_not_applicable_on_linux(self):
-        with mock.patch.object(detect.os, "name", "posix"):
+        with mock.patch.object(detect, "_is_windows", return_value=False):
             st = detect.wsl_status(self.settings)
         self.assertFalse(st.installed)
         self.assertEqual(st.message, "não se aplica")
 
     def test_defects4j_cmd_none_without_wsl(self):
         st = detect.WslStatus(False, [], None, "x")
-        with mock.patch.object(detect.os, "name", "nt"):
+        with mock.patch.object(detect, "_is_windows", return_value=True):
             self.assertIsNone(detect.defects4j_cmd(self.settings, st))
 
 
@@ -153,6 +181,35 @@ class MavenTests(unittest.TestCase):
                     mock.patch.object(detect, "_system_maven_homes", return_value=[m]):
                 mv = detect.find_mavens(home, settings)
         self.assertEqual([(x.version, x.source) for x in mv], [((3, 6, 3), "managed")])
+
+
+class MavenManagedJdkTests(unittest.TestCase):
+    def test_only_managed_jdk_is_used_for_maven(self):
+        with tempfile.TemporaryDirectory() as t:
+            home = Home(Path(t) / "h")
+            home.ensure()
+            settings = load_settings(home)
+            jdk = home.tools / "jdk-11.0.24+8"
+            (jdk / "bin").mkdir(parents=True)
+            (jdk / "bin" / "java.exe").write_text("")
+            (jdk / "bin" / "java").write_text("")
+            m = home.tools / "apache-maven-3.9.9"
+            (m / "bin").mkdir(parents=True)
+            (m / "bin" / "mvn.cmd").write_text("")
+            (m / "bin" / "mvn").write_text("")
+            seen = {}
+
+            def run(cmd, env=None, **kw):
+                seen["java_home"] = env and env.get("JAVA_HOME")
+                return subprocess.CompletedProcess(cmd, 0, b"Apache Maven 3.9.9 (x)\n", b"")
+
+            with mock.patch.object(detect, "java_info", return_value=(11, "11.0.24")), \
+                    mock.patch.object(detect, "_system_java_homes", return_value=[]), \
+                    mock.patch.object(detect, "_system_maven_homes", return_value=[]), \
+                    mock.patch.object(detect.subprocess, "run", run):
+                mv = detect.find_mavens(home, settings)
+        self.assertEqual([x.version for x in mv], [(3, 9, 9)])
+        self.assertEqual(seen["java_home"], str(jdk))
 
 
 @unittest.skipUnless(shutil.which("java"), "java ausente")

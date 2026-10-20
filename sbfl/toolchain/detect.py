@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -46,17 +47,24 @@ def decode_console(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def _run(cmd: list[str], env: dict | None = None) -> tuple[int, str] | None:
-    """Roda um comando; devolve (código, stdout+stderr) ou None se não executou."""
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _run(cmd: list[str], env: dict | None = None, merge: bool = True) -> tuple[int, str] | None:
+    """Roda um comando; devolve (código, saída) ou None se não executou.
+
+    Com merge=True a saída é stdout+stderr; senão, só stdout."""
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT, env=env)
     except (OSError, subprocess.SubprocessError):
         return None
-    return p.returncode, decode_console(p.stdout or b"") + decode_console(p.stderr or b"")
+    err = decode_console(p.stderr or b"") if merge else ""
+    return p.returncode, decode_console(p.stdout or b"") + err
 
 
 def _exe(home: Path, name: str) -> Path:
-    suffix = {"java": ".exe", "mvn": ".cmd"}[name] if os.name == "nt" else ""
+    suffix = {"java": ".exe", "mvn": ".cmd"}[name] if _is_windows() else ""
     return home / "bin" / (name + suffix)
 
 
@@ -90,7 +98,7 @@ def _system_java_homes() -> list[Path]:
     which = shutil.which("java")
     if which:
         homes.append(Path(which).resolve().parent.parent)
-    if os.name == "nt":
+    if _is_windows():
         base = os.environ.get("ProgramFiles", r"C:\Program Files")
         for vendor in _WIN_JAVA_VENDORS:
             root = Path(base) / vendor
@@ -146,17 +154,14 @@ def find_jdks(home: Home, settings: Settings) -> list[Jdk]:
     return found
 
 
-def maven_info(maven_home: Path) -> tuple[int, int, int] | None:
-    """Versão do Maven em `maven_home`, ou None. Usa um JDK qualquer como JAVA_HOME."""
+def maven_info(maven_home: Path, java_home: Path | None = None) -> tuple[int, int, int] | None:
+    """Versão do Maven em `maven_home`, ou None. `java_home` vira o JAVA_HOME."""
     exe = _exe(Path(maven_home), "mvn")
     if not exe.exists():
         return None
     env = dict(os.environ)
-    if not (env.get("JAVA_HOME") and java_info(Path(env["JAVA_HOME"]))):
-        for jh in _system_java_homes():
-            if java_info(jh):
-                env["JAVA_HOME"] = str(jh)
-                break
+    if java_home is not None:
+        env["JAVA_HOME"] = str(java_home)
     res = _run([str(exe), "-v"], env=env)
     return maven_version(res[1]) if res else None
 
@@ -181,6 +186,8 @@ def find_mavens(home: Home, settings: Settings) -> list[Maven]:
     if home.tools.is_dir():
         candidates += [(p, "managed") for p in sorted(home.tools.glob("apache-maven-*")) if p.is_dir()]
     candidates += [(p, "system") for p in _system_maven_homes()]
+    jdks = find_jdks(home, settings)
+    java_home = jdks[0].home if jdks else None
     found: list[Maven] = []
     seen: set[str] = set()
     for path, source in candidates:
@@ -188,7 +195,7 @@ def find_mavens(home: Home, settings: Settings) -> list[Maven]:
         if key in seen:
             continue
         seen.add(key)
-        ver = maven_info(path)
+        ver = maven_info(path, java_home)
         if ver:
             found.append(Maven(path, ver, source))
     return found
@@ -196,7 +203,7 @@ def find_mavens(home: Home, settings: Settings) -> list[Maven]:
 
 def wsl_status(settings: Settings) -> WslStatus:
     """Situação do WSL e do Defects4J dentro dele (só no Windows)."""
-    if os.name != "nt":
+    if not _is_windows():
         return WslStatus(False, [], None, "não se aplica")
     res = _run(["wsl.exe", "-l", "-q"])
     if res is None:
@@ -207,27 +214,39 @@ def wsl_status(settings: Settings) -> WslStatus:
     if not distros:
         detail = text or "nenhuma distribuição instalada"
         return WslStatus(False, [], None, f"WSL indisponível: {detail}")
-    distro = settings.get("defects4j", "wsl_distro") or distros[0]
+    distro = _pick_distro(settings, distros)
     d4j_home = (settings.get("defects4j", "home") or "").rstrip("/")
     script = "command -v defects4j"
     if d4j_home:
-        script += f" || ls {d4j_home}/framework/bin/defects4j"
-    r = _run(["wsl", "-d", distro, "--", "bash", "-lc", script])
+        script += " || ls " + shlex.quote(d4j_home + "/framework/bin/defects4j")
+    r = _run(["wsl", "-d", distro, "--", "bash", "-lc", script], merge=False)
     d4j = None
-    if r and r[0] == 0 and r[1].strip():
-        d4j = r[1].strip().splitlines()[0]
+    if r and r[0] == 0:
+        lines = [ln.strip() for ln in r[1].splitlines() if ln.strip()]
+        # banners de login vêm antes; o resultado do comando é a última linha
+        if lines and lines[-1].endswith("defects4j"):
+            d4j = lines[-1]
     msg = f"WSL disponível ({', '.join(distros)})."
     if d4j is None:
         msg += " Defects4J não encontrado na distribuição."
     return WslStatus(True, distros, d4j, msg)
 
 
+def _pick_distro(settings: Settings, distros: list[str]) -> str:
+    """Distro configurada, ou a primeira que não seja do Docker Desktop (sem bash)."""
+    chosen = settings.get("defects4j", "wsl_distro")
+    if chosen:
+        return chosen
+    usable = [d for d in distros if not d.lower().startswith("docker-desktop")]
+    return (usable or distros)[0]
+
+
 def defects4j_cmd(settings: Settings, wsl: WslStatus) -> list[str] | None:
     """Prefixo de comando para chamar o Defects4J, ou None se ausente."""
-    if os.name == "nt":
+    if _is_windows():
         if not (wsl.installed and wsl.d4j):
             return None
-        distro = settings.get("defects4j", "wsl_distro") or wsl.distros[0]
+        distro = _pick_distro(settings, wsl.distros)
         return ["wsl", "-d", distro, "--", "bash", "-lc"]
     d4j_home = settings.get("defects4j", "home")
     if d4j_home:
