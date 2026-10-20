@@ -67,6 +67,15 @@ _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositó
 # A primeira regra que casar vence (padrões casados sem diferenciar maiúsculas).
 RULES: list[Rule] = [
     Rule(st.JDK_INCOMPATIVEL,
+         r"Failed to extract descriptors|Failed to execute goal.*Index \d+ out of bounds for length \d+|"
+         r"Unsupported class file major version|"
+         r"IllegalArgumentException.*(?:org\.objectweb\.asm|ClassReader)|"
+         r"(?:org\.objectweb\.asm|ClassReader).*IllegalArgumentException",
+         "plugin antigo não lê classes do JDK atual (ASM antigo)",
+         [Suggestion(jdk=8, label="Tentar com JDK 8"),
+          Suggestion(fix="compiler-java", params={"target": 8},
+                     label="Compilar com bytecode Java 8 (compiler-java)")], only_errors=True),
+    Rule(st.JDK_INCOMPATIVEL,
          r"Unsupported class file major version|Unsupported class version|invalid target release|"
          r"invalid source release|release version \d+ not supported|UnsupportedClassVersionError|"
          r"(?:Source|Target) option \d+ is no longer supported|invalid flag: -release",

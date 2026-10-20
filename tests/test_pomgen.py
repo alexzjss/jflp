@@ -151,12 +151,22 @@ class TestPomgen(Base):
         self.assertIn("compiler-java", on.applied)
         comp = self.plugins(self.parse(on), "maven-compiler-plugin")[0]
         self.assertEqual(comp.findtext("m:version", namespaces=NS), "3.8.0")
-        self.assertEqual(comp.findtext("m:configuration/m:source", namespaces=NS), "11")
+        self.assertEqual(comp.findtext("m:configuration/m:source", namespaces=NS), "1.8")
+        self.assertEqual(comp.findtext("m:configuration/m:target", namespaces=NS), "1.8")
         self.assertEqual(comp.findtext("m:configuration/m:encoding", namespaces=NS), "UTF-8")
         off = self.gen(d, fixes_off={"compiler-java"})
         self.assertIn("compiler-java", off.detected)
         self.assertNotIn("compiler-java", off.applied)
         self.assertEqual(self.plugins(self.parse(off), "maven-compiler-plugin"), [])
+
+    def test_compiler_target_override_and_declared_level(self):
+        d = self.module("minimal.xml")
+        plan = self.gen(d, fixes_on={"compiler-java"}, params={"compiler-java": {"target": 11}})
+        comp = self.plugins(self.parse(plan), "maven-compiler-plugin")[0]
+        self.assertEqual(comp.findtext("m:configuration/m:target", namespaces=NS), "11")
+        plan = self.gen(d, fixes_on={"compiler-java"})     # sem nível declarado: 1.8
+        comp = self.plugins(self.parse(plan), "maven-compiler-plugin")[0]
+        self.assertEqual(comp.findtext("m:configuration/m:target", namespaces=NS), "1.8")
 
     def test_fixes_on_explicit_and_params(self):
         d = self.module("minimal.xml")

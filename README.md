@@ -170,7 +170,7 @@ Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), 
    | id | Título | Quando é detectada |
    |---|---|---|
    | `skip-animal-sniffer` | Ignorar o animal-sniffer | `animal-sniffer` aparece em algum POM da cadeia (módulo, pais) |
-   | `compiler-java` | Compilar com o JDK atual | o projeto declara Java < 8 (ou nada); fixa o `maven-compiler-plugin` (`jaguar2.compiler`) com source/target do JDK escolhido e UTF-8 |
+   | `compiler-java` | Compilar com bytecode antigo | o projeto declara Java < 8 (ou nada); fixa o `maven-compiler-plugin` (`jaguar2.compiler`) com source/target = `max(8, nível declarado)` (`1.8` quando 8; `params.target` sobrescreve) e UTF-8, porque plugins de build antigos não leem classes mais novas |
    | `source-dirs` | Ajustar pastas de código-fonte | fontes fora de `src/main/java` ou `src/test/java` (ex.: `src/test`); aponta `sourceDirectory`/`testSourceDirectory` sem mover arquivos |
    | `junit4` | Adicionar JUnit 4 | não há `junit:junit` na cadeia de POMs |
    | `override-version` | Forçar versões | nunca automática; redeclara versões de dependências/plugins (`params`: `deps`, `plugins`); usada pelo diagnóstico e pela busca |
@@ -214,9 +214,9 @@ As regras de diagnóstico (regex sobre o log, só em linhas de erro quando neces
 **Busca automática** (só para falhas de infraestrutura; nunca altera testes nem código-fonte). Depois da 1ª tentativa falhar, tenta, nesta ordem e sem repetir configurações:
 
 1. as sugestões do diagnóstico;
-2. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
-3. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`;
-4. JDK `11` → `17` → `8`.
+2. JDK `8` → `17` → `11` (o padrão do perfil é descartado como duplicata; plugins de build antigos costumam falhar com classes de JDKs novos, por isso o JDK vem antes de variar plugins);
+3. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
+4. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`.
 
 Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou na tela.
 

@@ -58,6 +58,16 @@ class DiagnoseTest(unittest.TestCase):
         self.assertIn("recurso remoto indisponível (maven-remote-resources-plugin)", d.cause)
         self.assertIn("-Dremoteresources.skip=true", d.cause)
 
+    def test_old_asm_reader_suggests_jdk8_then_compiler_target(self):
+        log = ("[ERROR] Failed to execute goal org.codehaus.plexus:plexus-component-metadata:1.5.5:"
+               "generate-metadata (default) on project maven-core: Error generating metadata: "
+               "Failed to extract descriptors: Index 1910 out of bounds for length 44")
+        d = self.c(log, kind="jaguar2")
+        self.assertEqual(d.status, "jdk_incompativel")
+        self.assertEqual(d.cause, "plugin antigo não lê classes do JDK atual (ASM antigo)")
+        self.assertEqual(d.suggestions[0].jdk, 8)
+        self.assertEqual((d.suggestions[1].fix, d.suggestions[1].params), ("compiler-java", {"target": 8}))
+
     def test_http_blocked_suggests_unblock_first(self):
         d = self.c("[ERROR] Blocked mirror for repositories: [apache.snapshots (http://x, default)]")
         self.assertEqual(d.status, "dependencia_nao_resolvida")

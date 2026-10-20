@@ -201,10 +201,19 @@ def _java_level(jdk: int) -> str:
     return "1.8" if jdk == 8 else str(jdk)
 
 
+def _target_level(ctx: PomContext) -> int:
+    """Bytecode alvo: max(8, nível declarado). Plugins de build antigos não leem classes mais novas."""
+    for text in ctx.chain_texts:
+        lv = declared_level(text)
+        if lv is not None:
+            return max(8, lv)
+    return 8
+
+
 def _apply_compiler(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     p = doc.ensure_plugin(*COMPILER, params.get("version") or ctx.versions["compiler"])
     cfg = doc.child(p, "configuration", create=True)
-    level = _java_level(ctx.jdk)
+    level = _java_level(int(params.get("target") or _target_level(ctx)))
     doc.set_child(cfg, "source", level)
     doc.set_child(cfg, "target", level)
     doc.set_child(cfg, "encoding", "UTF-8")
@@ -252,7 +261,7 @@ FIXES: dict[str, Fix] = {f.id: f for f in [
     Fix("skip-animal-sniffer", "Ignorar o animal-sniffer",
         "O animal-sniffer verifica a API do Java antiga e quebra a compilação em JDKs novos.",
         _detect_sniffer, _apply_sniffer, {}),
-    Fix("compiler-java", "Compilar com o JDK atual",
+    Fix("compiler-java", "Compilar com bytecode antigo",
         "O projeto declara Java antigo (ou nada); o maven-compiler-plugin é fixado no JDK escolhido.",
         _detect_compiler, _apply_compiler, {}),
     Fix("source-dirs", "Ajustar pastas de código-fonte",

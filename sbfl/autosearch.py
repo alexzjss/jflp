@@ -11,7 +11,7 @@ from .toolchain.profiles import PROFILES
 SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin"
 SUREFIRE_VERSIONS = ("3.5.3", "3.2.5", "3.0.0-M5")
 COMPILER_VERSIONS = ("3.8.0", "3.1", "3.11.0")
-JDKS = (11, 17, 8)
+JDKS = (8, 17, 11)
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -60,13 +60,13 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
     detected = set(detected or ())
     out = [_from_suggestion(first, s, kind, detected)
            for s in diag.suggestions if s.fix != "exclude-duplicates"]
+    for j in JDKS:      # JDK antes de variar plugins: sintomas de bytecode novo pedem JDK 8
+        out.append(replace(first, jdk=_default_jdk(first, kind, j) or first.jdk))
     if kind == "jaguar2":
         for v in SUREFIRE_VERSIONS:
             out.append(_with_fix(first, "override-version", {"plugins": {SUREFIRE: v}}, detected))
         for v in COMPILER_VERSIONS:
             out.append(_with_fix(first, "compiler-java", {"version": v}, detected))
-    for j in JDKS:
-        out.append(replace(first, jdk=_default_jdk(first, kind, j) or first.jdk))
     seen, result = {first.key()}, []
     for c in out:
         if c.key() not in seen:

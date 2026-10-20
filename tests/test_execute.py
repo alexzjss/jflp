@@ -182,9 +182,9 @@ class ExecuteTest(Base):
         self.settings.set("run", "max_attempts", 20)
 
         def behave(n, c):
-            if c.jdk == 17:
+            if c.jdk == 8:
                 return "missing"
-            return "ok" if c.jdk == 8 else "sniffer"
+            return "ok" if c.jdk == 17 else "sniffer"
         rel, run = self.go(behave)
         self.assertEqual(run["status"], "ok")
         self.assertEqual(run["attempts"], len(run["attempt_configs"]))
@@ -192,7 +192,7 @@ class ExecuteTest(Base):
         metas = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(d.glob("attempts/*/attempt.json"))]
         skipped = [s for s in metas if s.get("skipped")]
         self.assertEqual(len(skipped), 1)
-        self.assertIn("JDK 17", skipped[0]["skipped"])
+        self.assertIn("JDK 8", skipped[0]["skipped"])
         self.assertTrue((d / "outputs" / "jaguar2.csv").exists())
         self.assertEqual(list((self.home.work / "w").iterdir()), [])
 
@@ -200,11 +200,11 @@ class ExecuteTest(Base):
         self.settings.set("run", "max_attempts", 20)
 
         def behave(n, c):
-            if c.jdk == 17:
+            if c.jdk == 8:
                 return "missing"
-            return "ok" if c.jdk == 8 else "sniffer"
+            return "ok" if c.jdk == 17 else "sniffer"
         rel, run = self.go(behave)
-        self.assertTrue(any(w.startswith("tentativa ") and "ignorada: JDK 17 não encontrado" in w
+        self.assertTrue(any(w.startswith("tentativa ") and "ignorada: JDK 8 não encontrado" in w
                             for w in run["warnings"]), run["warnings"])
 
     def test_missing_tool_on_every_candidate_keeps_last_real(self):
@@ -288,11 +288,16 @@ class CandidatesTest(Base):
         out = candidates(AttemptConfig(), diag, "jaguar2", self.settings, {"junit4"})
         self.assertEqual(out[0].fixes_on, frozenset({"junit4", "skip-animal-sniffer"}))
         self.assertNotIn(11, [c.jdk for c in out])   # 11 é o padrão do perfil jaguar2: duplicata descartada
+        jdks = [i for i, c in enumerate(out) if c.jdk]
+        sure = [i for i, c in enumerate(out) if "override-version" in c.fixes_on]
+        comp = [i for i, c in enumerate(out) if "compiler-java" in c.fixes_on]
+        self.assertLess(max(jdks), min(sure))
+        self.assertLess(max(sure), min(comp))
         keys = [c.key() for c in out]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertNotIn(AttemptConfig().key(), keys)
         self.assertFalse(any("exclude-duplicates" in c.fixes_on for c in out))
-        self.assertEqual([c.jdk for c in out if c.jdk], [17, 8])
+        self.assertEqual([c.jdk for c in out if c.jdk], [8, 17])
         self.assertEqual(len(candidates(AttemptConfig(), diag, "jaguar2", load_settings(self.home),
                                         set())), 5)
 
@@ -300,9 +305,9 @@ class CandidatesTest(Base):
         out = candidates(AttemptConfig(), Diagnosis("x", suggestions=[Suggestion(fix="junit4")]),
                          "maven", self.settings)
         self.assertTrue(all(not c.fixes_on for c in out))
-        self.assertEqual([c.jdk for c in out], [11, 17, 8])
+        self.assertEqual([c.jdk for c in out], [8, 17, 11])
         j1 = candidates(AttemptConfig(), Diagnosis("x"), "jaguar1", self.settings)
-        self.assertEqual([c.jdk for c in j1], [11, 17])
+        self.assertEqual([c.jdk for c in j1], [17, 11])
 
 
 if __name__ == "__main__":
