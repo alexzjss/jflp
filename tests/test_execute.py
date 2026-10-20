@@ -257,6 +257,16 @@ class ProcOnLineTest(Base):
         self.assertEqual(got, ["a", "b"])
 
 
+class FirstConfigTest(Base):
+    def test_fixes_off_overrides_recipe_fixes(self):
+        recipe = recipes.Recipe("*", "jaguar2", fixes=["source-dirs", "junit4"])
+        cfg = ex._first_config(self.settings, recipe,
+                               ex.RunOptions(fixes_on=frozenset({"compiler-java"}),
+                                             fixes_off=frozenset({"source-dirs"})))
+        self.assertEqual(cfg.fixes_on, frozenset({"junit4", "compiler-java"}))
+        self.assertEqual(cfg.fixes_off, frozenset({"source-dirs"}))
+
+
 class CandidatesTest(Base):
     def test_order_dedup_and_exclusions(self):
         diag = Diagnosis("plugin_incompativel", suggestions=[

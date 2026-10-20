@@ -52,6 +52,7 @@ def _first_config(settings: Settings, recipe, opts: RunOptions) -> AttemptConfig
     fixes: set[str] = set(recipe.fixes) if recipe else set()
     if opts.fixes_on:
         fixes |= set(opts.fixes_on)
+    fixes -= set(opts.fixes_off)      # desmarcar na tela vale também contra as correções da receita
     params = deep_merge(recipe.params if recipe else {}, opts.params)
     return AttemptConfig(
         frozenset(fixes), frozenset(opts.fixes_off), params,

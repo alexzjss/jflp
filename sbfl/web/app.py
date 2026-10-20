@@ -9,7 +9,7 @@ import threading
 import time
 import webbrowser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -55,6 +55,7 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.state.local_bugs = {}     # bugs locais cadastrados nesta sessão: {key: Bug}
     app.state.tasks = {}          # downloads e prefetch em andamento: {id: {...}}
     app.state.templates = Jinja2Templates(directory=str(_HERE / "templates"))
+    app.state.templates.env.filters["q"] = lambda v: quote(str(v), safe="/")   # chaves em URLs
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
     @app.middleware("http")

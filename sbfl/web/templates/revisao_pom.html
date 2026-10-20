@@ -2,7 +2,7 @@
 {% block title %}Revisão do POM - JFLP Studio{% endblock %}
 {% block content %}
 <h1>Jaguar 2: revisão do POM</h1>
-<p><a href="/bug/{{ bug.key }}">{{ bug.key }}</a></p>
+<p><a href="/bug/{{ bug.key|q }}">{{ bug.key }}</a></p>
 
 {% if error %}
 <p class="aviso erro">Não foi possível preparar o bug: {{ error }}</p>
@@ -18,10 +18,10 @@
 <p class="aviso ok">Receita aplicada: {{ recipe.fixes|join(', ') or 'sem correções' }}{% if recipe.note %} ({{ recipe.note }}){% endif %}</p>
 {% endif %}
 
-<form method="post" action="/bug/{{ bug.key }}/jaguar2">
+<form method="post" action="/bug/{{ bug.key|q }}/jaguar2">
   <section>
     <h2>Correções</h2>
-    {% for d in plan.detected %}<input type="hidden" name="detected" value="{{ d }}">{% endfor %}
+    {% for d in shown %}<input type="hidden" name="shown" value="{{ d }}">{% endfor %}
     {% for f in fixes %}
     <div class="correcao">
       <label><input type="checkbox" name="fix" value="{{ f.id }}" {{ 'checked' if f.id in checked else '' }}>

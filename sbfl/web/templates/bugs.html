@@ -35,7 +35,7 @@
       {% for r in rows %}
         <tr>
           <td><input type="checkbox" class="sel" value="{{ r.bug.key }}"></td>
-          <td><a href="/bug/{{ r.bug.key }}">{{ r.bug.bug_id }}</a></td>
+          <td><a href="/bug/{{ r.bug.key|q }}">{{ r.bug.bug_id }}</a></td>
           {% for k, nome in kinds %}
           {% set run = r.last.get(k) %}
           <td>{% if run %}<a href="/run/{{ run.path }}" class="{{ 'ok' if run.status == 'ok' else 'erro' }}">{{ run.status }}</a>{% else %}<span class="vazio">-</span>{% endif %}</td>
@@ -60,7 +60,7 @@
     <button type="submit">Abrir</button>
   </form>
   {% if locais %}
-  <ul>{% for b in locais %}<li><a href="/bug/{{ b.key }}">{{ b.key }}</a></li>{% endfor %}</ul>
+  <ul>{% for b in locais %}<li><a href="/bug/{{ b.key|q }}">{{ b.key }}</a></li>{% endfor %}</ul>
   {% endif %}
 </section>
 {% endblock %}

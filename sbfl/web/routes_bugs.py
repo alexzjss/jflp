@@ -5,6 +5,7 @@ import asyncio
 import json
 import queue as _q
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
@@ -15,12 +16,15 @@ from ..adapters.base import Bug
 from ..errors import StageError
 from ..pomgen import FIXES, generate
 from ..prepare import bug_from_key, list_bugs, local_bug, prepare
+from ..toolchain.profiles import MissingTool, resolve
 
 router = APIRouter()
 
 BENCHMARKS = (("bugsjar", "Bugs.jar"), ("d4j", "Defects4J"))
 KINDS = (("maven", "Maven"), ("jaguar2", "Jaguar 2"), ("jaguar1", "Jaguar 1"))
 KIND_LABEL = dict(KINDS)
+PENDING_POLL = 2.0     # job na fila: aviso a cada 2 s
+START_POLL = 0.5       # job running no banco, mas o worker ainda não o tem
 
 
 def _render(request: Request, name: str, ctx: dict, status: int = 200):
@@ -111,7 +115,7 @@ def bugs_local(request: Request, spec: str = Form(...)):
     except ValueError as e:
         return _render(request, "bugs.html", _list_ctx(request, error=str(e)), 400)
     request.app.state.local_bugs[bug.key] = bug
-    return RedirectResponse(f"/bug/{bug.key}", status_code=303)
+    return RedirectResponse("/bug/" + quote(bug.key, safe="/"), status_code=303)
 
 
 # --------------------------------------------------------------------- bug
@@ -127,9 +131,16 @@ def jaguar2_get(request: Request, key: str):
     except StageError as e:
         return _render(request, "revisao_pom.html", {
             "page": "bugs", "bug": bug, "plan": None, "error": e.detail or str(e)})
+    except Exception as e:
+        return _render(request, "revisao_pom.html", {
+            "page": "bugs", "bug": bug, "plan": None, "error": f"{type(e).__name__}: {e}"})
     mod = prep.pristine if prep.module == "." else prep.pristine / prep.module
     recipe = recipes.find(st.home, bug, "jaguar2")
-    plan = generate(Path(mod), st.settings, 11,
+    try:                        # mesmo JDK que o perfil do Jaguar 2 vai usar na execução
+        jdk = resolve("jaguar2", st.home, st.settings).jdk.major
+    except MissingTool:
+        jdk = 11
+    plan = generate(Path(mod), st.settings, jdk,
                     set(recipe.fixes) if recipe and recipe.fixes else None, set(),
                     dict(recipe.params) if recipe else {})
     diff_lines = []
@@ -140,6 +151,7 @@ def jaguar2_get(request: Request, key: str):
     return _render(request, "revisao_pom.html", {
         "page": "bugs", "bug": bug, "plan": plan, "error": None, "recipe": recipe,
         "fixes": list(FIXES.values()), "checked": set(plan.applied) | set(plan.detected),
+        "shown": sorted(set(plan.applied) | set(plan.detected)),
         "diff_lines": diff_lines})
 
 
@@ -153,13 +165,13 @@ def _enqueue(request: Request, bug: Bug, kind: str, scope: str, auto: bool, extr
 
 
 @router.post("/bug/{key:path}/jaguar2")
-def jaguar2_post(request: Request, key: str, fix: list[str] = Form([]), detected: list[str] = Form([]),
+def jaguar2_post(request: Request, key: str, fix: list[str] = Form([]), shown: list[str] = Form([]),
                  scope: str = Form("relevant"), auto_search: str = Form("")):
     bug = _find_bug(request, key)
     if bug is None:
         return _not_found(request, f"Bug não encontrado: {key}")
     on = [f for f in fix if f in FIXES]
-    off = [f for f in detected if f in FIXES and f not in on]
+    off = [f for f in shown if f in FIXES and f not in on]
     return _enqueue(request, bug, "jaguar2", scope, bool(auto_search),
                     {"fixes_on": on, "fixes_off": off, "params": {}})
 
@@ -201,7 +213,8 @@ def ao_vivo(request: Request, job_id: int):
 
 def _sse(event: str | None, data: str) -> str:
     head = f"event: {event}\n" if event else ""
-    return head + "".join(f"data: {ln}\n" for ln in (data.split("\n") or [""])) + "\n"
+    lines = data.splitlines() or [""]    # \r e \r\n também quebram linha: nada injeta campos SSE
+    return head + "".join(f"data: {ln}\n" for ln in lines) + "\n"
 
 
 @router.get("/job/{job_id}/stream")
@@ -217,29 +230,39 @@ async def stream(request: Request, job_id: int):
                 if job is None:
                     yield _sse("fim", "")
                     return
-                if job["state"] != "pending":
-                    break
-                yield _sse("espera", "na fila")
-                await asyncio.sleep(2)
+                if job["state"] in ("done", "cancelled"):
+                    yield _sse("fim", job.get("run_rel") or "")
+                    return
+                if job["state"] == "pending":
+                    yield _sse("espera", "na fila")
+                    delay = PENDING_POLL
+                else:
+                    cur = worker.current()
+                    if cur and cur.get("job_id") == job_id:
+                        break
+                    delay = START_POLL     # running no banco, worker ainda não o reivindicou
+                await asyncio.sleep(delay)
                 if await request.is_disconnected():
                     return
-            if job["state"] == "running":
-                sub = worker.subscribe()           # assina antes de ler o buffer: nenhuma linha se perde
-                cur = worker.current()
-                if cur and cur.get("job_id") == job_id:
-                    for line in cur.get("log", []):
-                        yield _sse(None, line)
-                    while True:
-                        try:
-                            line = await asyncio.to_thread(sub.get, True, 1.0)
-                        except _q.Empty:
-                            if await request.is_disconnected():
-                                return
-                            continue
-                        if line is None:
-                            break
-                        yield _sse(None, line)
-                    job = await asyncio.to_thread(_job, home, job_id) or job
+            sub = worker.subscribe()       # assina antes de ler o buffer: nenhuma linha se perde
+            cur = worker.current()
+            if cur and cur.get("job_id") == job_id:
+                for line in cur.get("log", []):
+                    yield _sse(None, line)
+            while True:
+                try:
+                    line = await asyncio.to_thread(sub.get, True, 1.0)
+                except _q.Empty:
+                    j = await asyncio.to_thread(_job, home, job_id)
+                    if j is None or j["state"] != "running":   # assinante descartado: sem sentinela
+                        break
+                    if await request.is_disconnected():
+                        return
+                    continue
+                if line is None:
+                    break
+                yield _sse(None, line)
+            job = await asyncio.to_thread(_job, home, job_id) or job
             yield _sse("fim", job.get("run_rel") or "")
         finally:
             if sub is not None:

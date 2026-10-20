@@ -103,7 +103,7 @@ class WebBugs(unittest.TestCase):
     def test_post_enqueues_job_with_fixes(self):
         loc = self.register(self.local_project())
         r = self.c.post(f"{loc}/jaguar2", data={
-            "fix": ["source-dirs"], "detected": ["skip-animal-sniffer"],
+            "fix": ["source-dirs"], "shown": ["skip-animal-sniffer", "source-dirs"],
             "scope": "all", "auto_search": "1"}, follow_redirects=False)
         self.assertEqual(r.status_code, 303)
         job = jq.list_jobs(self.home)[0]
@@ -190,6 +190,125 @@ class WebBugs(unittest.TestCase):
         anon = TestClient(self.app, base_url=BASE)
         self.assertEqual(anon.get("/job/1/stream").status_code, 403)
         self.assertEqual(anon.get("/bugs").status_code, 403)
+
+    # ---- correções da revisão ----
+    def running_job(self):
+        bid = jq.create_batch(self.home, "t", [Bug("bugsjar", "commons", "9")], ["maven"], {})
+        job = jq.batch_jobs(self.home, bid)[0]
+        self.set_state(job["id"], "running")
+        return job
+
+    def set_state(self, job_id, state, rel=None):
+        import contextlib
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state=?, run_rel=? WHERE id=?", (state, rel, job_id))
+
+    def test_sse_waits_while_worker_not_yet_current(self):
+        from sbfl.web import routes_bugs
+        job = self.running_job()
+        q = _q.Queue()
+        q.put("dentro")
+        q.put(None)
+        calls = []
+
+        def cur():
+            calls.append(1)
+            if len(calls) < 3:
+                return None            # janela de reivindicação: job running, worker ainda não o tem
+            self.set_state(job["id"], "done", "r/p/9/x")
+            return {"job_id": job["id"], "log": []}
+
+        self.worker.current.side_effect = cur
+        self.worker.subscribe.return_value = q
+        with mock.patch.object(routes_bugs, "START_POLL", 0.01):
+            body = self.c.get(f"/job/{job['id']}/stream").text
+        self.assertGreaterEqual(len(calls), 3)
+        self.assertIn("data: dentro", body)
+        self.assertIn("event: fim\ndata: r/p/9/x", body)
+        self.assertEqual(body.count("event: fim"), 1)
+
+    def test_sse_ends_when_subscriber_dropped(self):
+        job = self.running_job()
+        outer = self
+
+        class Fila(_q.Queue):          # assinante descartado: nunca recebe o sentinela
+            def get(self, block=True, timeout=None):
+                outer.set_state(job["id"], "done", "r/p/9/y")
+                raise _q.Empty
+
+        self.worker.current.return_value = {"job_id": job["id"], "log": []}
+        self.worker.subscribe.return_value = Fila()
+        body = self.c.get(f"/job/{job['id']}/stream").text
+        self.assertIn("event: fim\ndata: r/p/9/y", body)
+
+    def test_sse_log_line_cannot_inject_events(self):
+        from sbfl.web.routes_bugs import _sse
+        out = _sse(None, "x\revent: fim\r\nid: 1\nok")
+        self.assertEqual(out, "data: x\ndata: event: fim\ndata: id: 1\ndata: ok\n\n")
+        job = self.running_job()
+        outer = self
+
+        class Fila(_q.Queue):
+            def get(self, block=True, timeout=None):
+                outer.set_state(job["id"], "done", "r/p/9/z")
+                return None
+
+        self.worker.current.return_value = {"job_id": job["id"], "log": ["x\revent: fim"]}
+        self.worker.subscribe.return_value = Fila()
+        body = self.c.get(f"/job/{job['id']}/stream").text
+        self.assertEqual(body.count("event: fim"), 2)    # a linha vira "data: event: fim" + o fim real
+        self.assertTrue(body.startswith("data: x\ndata: event: fim\n\n"))
+        self.assertTrue(body.endswith("event: fim\ndata: r/p/9/z\n\n"))
+
+    def test_unchecking_recipe_fix_goes_to_fixes_off(self):
+        from sbfl.recipes import Recipe
+        loc = self.register(self.local_project())
+        rec = Recipe("*", "jaguar2", fixes=["source-dirs"])
+        with mock.patch("sbfl.web.routes_bugs.recipes.find", return_value=rec):
+            page = self.c.get(f"{loc}/jaguar2").text
+        self.assertIn('name="shown" value="source-dirs"', page)
+        self.assertIn('name="shown" value="skip-animal-sniffer"', page)
+        self.c.post(f"{loc}/jaguar2", data={"fix": ["skip-animal-sniffer"],
+                                            "shown": ["source-dirs", "skip-animal-sniffer"]})
+        import json
+        import sqlite3
+        con = sqlite3.connect(str(self.home.db_path))
+        opts = json.loads(con.execute("SELECT options FROM batches").fetchone()[0])
+        con.close()
+        self.assertEqual(opts["fixes_on"], ["skip-animal-sniffer"])
+        self.assertEqual(opts["fixes_off"], ["source-dirs"])
+
+    def test_prepare_any_exception_renders_error_page(self):
+        loc = self.register(self.local_project())
+        with mock.patch("sbfl.web.routes_bugs.prepare", side_effect=RuntimeError("explodiu")):
+            r = self.c.get(f"{loc}/jaguar2")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("RuntimeError", r.text)
+        self.assertIn("explodiu", r.text)
+
+    def test_keys_with_special_chars_are_quoted(self):
+        d = self.tmp / "a#b c"
+        d.mkdir()
+        shutil.copy(POMS / "parent_sniffer.xml", d / "pom.xml")
+        r = self.c.post("/bugs/local", data={"spec": str(d)}, follow_redirects=False)
+        loc = r.headers["location"]
+        self.assertNotIn("#", loc)
+        self.assertIn("%23", loc)
+        page = self.c.get(loc)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(f'action="{loc}/rodar"', page.text)
+        self.assertIn(f'href="{loc}/jaguar2"', page.text)
+        self.assertEqual(self.c.get(f"{loc}/jaguar2").status_code, 200)
+
+    def test_preview_uses_jdk_picked_by_profile(self):
+        from sbfl import pomgen
+        loc = self.register(self.local_project())
+        te = mock.Mock()
+        te.jdk.major = 17
+        with mock.patch("sbfl.web.routes_bugs.resolve", return_value=te), \
+                mock.patch("sbfl.web.routes_bugs.generate", wraps=pomgen.generate) as g:
+            self.c.get(f"{loc}/jaguar2")
+        self.assertEqual(g.call_args.args[2], 17)
 
 
 if __name__ == "__main__":

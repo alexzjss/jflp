@@ -5,7 +5,7 @@
 
 <section>
   <h2>Executar</h2>
-  <form method="post" action="/bug/{{ bug.key }}/rodar">
+  <form method="post" action="/bug/{{ bug.key|q }}/rodar">
     <div class="linha">
       <label>Testes
         <select name="scope">
@@ -18,7 +18,7 @@
     <div class="botoes" style="margin-top:10px">
       <button type="submit" name="kind" value="maven">Rodar Maven</button>
       <button type="submit" name="kind" value="jaguar1">Rodar Jaguar 1</button>
-      <a class="botao" href="/bug/{{ bug.key }}/jaguar2">Revisar e rodar Jaguar 2</a>
+      <a class="botao" href="/bug/{{ bug.key|q }}/jaguar2">Revisar e rodar Jaguar 2</a>
     </div>
   </form>
 </section>
