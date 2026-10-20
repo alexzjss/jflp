@@ -103,6 +103,22 @@ class RunMavenTest(unittest.TestCase):
         self.assertEqual(r.toolenv["maven"]["version"], "3.6.3")
         self.assertIn("ARGS", log.read_text(encoding="utf-8"))
 
+    def test_unblock_http_adds_settings_file(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        te = self._fake_toolenv()
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work,
+                      AttemptConfig(fixes_on=frozenset({"unblock-http"})), self.tmp / "l.log", toolenv=te)
+        i = r.command.index("-s")
+        f = Path(r.command[i + 1])
+        self.assertEqual(f, self.home.tools / "jflp-settings-unblock.xml")
+        text = f.read_text(encoding="utf-8")
+        self.assertIn("maven-default-http-blocker", text)
+        self.assertIn("<blocked>false</blocked>", text)
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work,
+                      AttemptConfig(), self.tmp / "l2.log", toolenv=te)
+        self.assertNotIn("-s", r.command)
+
     def test_fake_mvn_receives_comma_list_as_one_argument(self):
         work = self.tmp / "w"
         work.mkdir()

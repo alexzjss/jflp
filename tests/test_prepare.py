@@ -107,6 +107,16 @@ class PrepareTests(Base):
         self.assertEqual((prep.pristine / "a.txt").read_text(), "1")
         self.assertNotEqual(w, P.working_copy(prep, self.home))
 
+    def test_working_copy_skips_bugsjar_metadata(self):
+        src = self.root / "p3"
+        (src / ".bugs-dot-jar").mkdir(parents=True)
+        (src / ".bugs-dot-jar" / "info.json").write_text("{}")
+        (src / "a.txt").write_text("1")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        w = P.working_copy(prep, self.home)
+        self.assertTrue((w / "a.txt").exists())
+        self.assertFalse((w / ".bugs-dot-jar").exists())
+
     def test_local_url_commit_spec(self):
         b = P.local_bug("https://github.com/x/repo.git@abcdef1234567890")
         self.assertEqual((b.project, b.bug_id), ("repo", "abcdef123456"))

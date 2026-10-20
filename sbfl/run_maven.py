@@ -66,11 +66,37 @@ def test_selection_args(prep: Prepared, scope: str, workdir: Path) -> list[str]:
     return [f"-Dsurefire.includesFile={INCLUDES_FILE}"]
 
 
+UNBLOCK_HTTP = "unblock-http"
+_UNBLOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+  <mirrors>
+    <mirror>
+      <id>maven-default-http-blocker</id>
+      <mirrorOf>external:dummy:*</mirrorOf>
+      <name>jflp: desbloqueio http</name>
+      <url>http://0.0.0.0/</url>
+      <blocked>false</blocked>
+    </mirror>
+  </mirrors>
+</settings>
+"""
+
+
+def settings_args(home: Home, cfg: AttemptConfig) -> list[str]:
+    """`-s <settings>` que desliga o bloqueio de repositórios http:// do Maven >= 3.8.1 (correção unblock-http)."""
+    if UNBLOCK_HTTP not in cfg.fixes_on:
+        return []
+    path = home.tools / "jflp-settings-unblock.xml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_UNBLOCK_XML, encoding="utf-8", newline="\n")
+    return ["-s", str(path)]
+
+
 def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg: AttemptConfig,
               log: Path, toolenv: ToolEnv | None = None, on_line=None) -> AttemptResult:
     mod = module_dir(prep, workdir)
     te = toolenv or resolve("maven", home, settings, pom_dir=mod, jdk=cfg.jdk, maven=cfg.maven)
-    cmd = te.mvn("clean", "test", *(settings.get("run", "skip_flags", []) or []),
+    cmd = te.mvn(*settings_args(home, cfg), "clean", "test", *(settings.get("run", "skip_flags", []) or []),
                  "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                  "-Dsurefire.failIfNoSpecifiedTests=false",
                  *test_selection_args(prep, cfg.test_scope, workdir))
@@ -100,13 +126,13 @@ def log_phase(log: Path, name: str, on_line=None) -> None:
 
 
 def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
-                    log: Path, on_line=None) -> dict | None:
+                    log: Path, on_line=None, extra: list | None = None) -> dict | None:
     """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
         return None
     log_phase(log, "reactor", on_line)
-    cmd = te.mvn("install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
+    cmd = te.mvn(*(extra or []), "install", "-DskipTests", *(settings.get("run", "skip_flags", []) or []))
     r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
                  on_line=on_line)
     r["command"] = cmd

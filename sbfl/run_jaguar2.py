@@ -10,8 +10,8 @@ from .outputs import parse_surefire
 from .pomgen import generate, write
 from .pomgen.fixes import JAGUAR_ARTIFACTS, JAGUAR_GROUP
 from .prepare import Prepared
-from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir,
-                        reactor_failure, test_selection_args)
+from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
+                        reactor_failure, test_selection_args, UNBLOCK_HTTP)
 from .toolchain.profiles import ToolEnv, resolve
 
 FAIL_IGNORE = ["-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
@@ -29,7 +29,8 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     desc = te.describe()
     total = 0.0
 
-    r = install_reactor(te, settings, prep, workdir, log, on_line)
+    sargs = settings_args(home, cfg)
+    r = install_reactor(te, settings, prep, workdir, log, on_line, sargs)
     if r is not None:
         total += r["seconds"]
         failed = reactor_failure(r, log, desc)
@@ -38,8 +39,9 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
 
     log_phase(log, "pom", on_line)
     # fixes_on vazio (padrão do AttemptConfig) = "usar as correções detectadas" (None no gerador)
-    plan = generate(mod, settings, te.jdk.major, set(cfg.fixes_on) if cfg.fixes_on else None,
-                    set(cfg.fixes_off), cfg.params)
+    # correções de execução (unblock-http) não são do POM; se só restarem elas, vale "detectadas"
+    pom_fixes = set(cfg.fixes_on) - {UNBLOCK_HTTP}
+    plan = generate(mod, settings, te.jdk.major, pom_fixes or None, set(cfg.fixes_off), cfg.params)
     extra: dict = {"pom_plan": dataclasses.asdict(plan)}
     try:
         pom = write(plan, mod)
@@ -52,7 +54,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     # O Jaguar 2 só analisa as classes listadas em jaguar2.classesDirs (propriedade de sistema da JVM
     # do Surefire, que repassa as -D do Maven). Sem ela o relatório sai vazio.
     classes_dirs = f"-Djaguar2.classesDirs={mod / 'target' / 'classes'}"
-    cmd = te.mvn("-f", "jaguar2-pom.xml", "clean", "test", classes_dirs, *FAIL_IGNORE, *skip,
+    cmd = te.mvn(*sargs, "-f", "jaguar2-pom.xml", "clean", "test", classes_dirs, *FAIL_IGNORE, *skip,
                  *test_selection_args(prep, cfg.test_scope, workdir))
     # O CSV usa o locale da JVM (decimal "0,7071" em pt-BR, quebrando as colunas): força en-US
     # na JVM do Surefire via JAVA_TOOL_OPTIONS (só nesta chamada), preservando opções já existentes.

@@ -339,7 +339,7 @@ def working_copy(prep: Prepared, home: Home) -> Path:
     dest = home.work / "w" / secrets.token_hex(4)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(long_path(prep.pristine), long_path(dest),
-                    ignore=shutil.ignore_patterns("target", ".git", MARKER))
+                    ignore=shutil.ignore_patterns("target", ".git", ".bugs-dot-jar", MARKER))
     return dest
 
 

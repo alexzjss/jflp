@@ -43,7 +43,7 @@ def _default_jdk(first: AttemptConfig, kind: str, jdk: int | None) -> int | None
 
 def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: set[str]) -> AttemptConfig:
     cfg = replace(first)
-    if s.fix and kind == "jaguar2":   # só o Jaguar 2 usa correções do POM
+    if s.fix and (kind == "jaguar2" or s.fix == "unblock-http"):   # só o Jaguar 2 usa correções do POM
         cfg = _with_fix(cfg, s.fix, s.params, detected)
     if s.jdk is not None:
         cfg = replace(cfg, jdk=_default_jdk(first, kind, s.jdk) or first.jdk)

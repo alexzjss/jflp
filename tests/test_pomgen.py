@@ -292,7 +292,26 @@ class TestPomgen(Base):
 
     def test_fixes_registry(self):
         self.assertEqual(list(FIXES), ["skip-animal-sniffer", "compiler-java", "source-dirs",
-                                       "junit4", "override-version", "exclude-duplicates"])
+                                       "junit4", "override-version", "exclude-duplicates",
+                                       "skip-rat"])
+
+    def test_skip_rat_detected_and_applied(self):
+        self.module("parent_sniffer.xml")
+        d = self.module("child_sniffer.xml", "child")
+        self.assertNotIn("skip-rat", self.gen(d).detected)
+        rat = ("<plugin><groupId>org.apache.rat</groupId><artifactId>apache-rat-plugin</artifactId>"
+               "<version>0.10</version></plugin>")
+        text = (d / "pom.xml").read_text(encoding="utf-8").replace("<build>", "<build><plugins>" + rat + "</plugins>", 1)
+        if "<plugins>" + rat not in text:
+            text = text.replace("</project>", "<build><plugins>" + rat + "</plugins></build></project>")
+        (d / "pom.xml").write_text(text, encoding="utf-8")
+        plan = self.gen(d)
+        self.assertIn("skip-rat", plan.detected)
+        self.assertIn("skip-rat", plan.applied)
+        p = self.plugins(self.parse(plan), "apache-rat-plugin")
+        self.assertEqual(len(p), 1)
+        self.assertEqual(p[0].findtext("m:configuration/m:skip", namespaces=NS), "true")
+        self.assertEqual(p[0].findtext("m:configuration/m:numUnapprovedLicenses", namespaces=NS), "999999")
 
 
 if __name__ == "__main__":

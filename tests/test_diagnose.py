@@ -41,6 +41,20 @@ class DiagnoseTest(unittest.TestCase):
             self.assertEqual(self.c(log).status, status, log)
         self.assertGreaterEqual(len(RULES), 8)
 
+    def test_rat_unapproved_license(self):
+        log = ("[ERROR] Failed to execute goal org.apache.rat:apache-rat-plugin:0.10:check (check) "
+               "on project maven: Too many files with unapproved license: 4 See RAT report")
+        d = self.c(log, kind="jaguar2")
+        self.assertEqual(d.status, "plugin_incompativel")
+        self.assertIn("Apache RAT", d.cause)
+        self.assertEqual(d.suggestions[0].fix, "skip-rat")
+
+    def test_http_blocked_suggests_unblock_first(self):
+        d = self.c("[ERROR] Blocked mirror for repositories: [apache.snapshots (http://x, default)]")
+        self.assertEqual(d.status, "dependencia_nao_resolvida")
+        self.assertEqual(d.suggestions[0].fix, "unblock-http")
+        self.assertEqual(d.suggestions[1].maven, "3.6.3")
+
     def test_suggestion_ids(self):
         d = self.c("[ERROR] Failed to execute goal maven-surefire-plugin:2.12.4:test")
         self.assertEqual(d.suggestions[0].fix, "override-version")
@@ -49,7 +63,7 @@ class DiagnoseTest(unittest.TestCase):
         d = self.c("[ERROR] maven-compiler-plugin:3.1 Fatal error compiling")
         self.assertEqual((d.suggestions[0].fix, d.suggestions[0].params), ("compiler-java", {"version": "3.1"}))
         d = self.c("Blocked mirror for repositories")
-        self.assertEqual((d.suggestions[0].fix, d.suggestions[0].maven), (None, "3.6.3"))
+        self.assertEqual((d.suggestions[0].fix, d.suggestions[1].maven), ("unblock-http", "3.6.3"))
         d = self.c("No tests were executed")
         self.assertEqual(d.suggestions[-1].params, {"test_scope": "all"})
         self.assertIsNone(d.suggestions[-1].fix)

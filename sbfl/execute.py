@@ -156,6 +156,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         real_n = 0
         keep: Path | None = None       # cópia de trabalho da última tentativa real
         missing: MissingTool | None = None
+        skipped: list[str] = []        # candidatas ignoradas por falta de ferramenta
         try:
             n = 0
             while cfg is not None:
@@ -172,6 +173,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     w.write_json(f"attempts/{n}/attempt.json", {"config": cfg.to_dict(), "skipped": e.message})
                     if cb:
                         cb(f"# jflp tentativa {n} ignorada: {e.message}")
+                    skipped.append(f"tentativa {n} ignorada: {e.message}")
                     if n == 1:
                         missing = e
                         break
@@ -198,7 +200,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 _stopped(w, status, missing.message, attempts=1,
                          attempt_configs=[c.to_dict() for c in configs], **base)
             else:
-                _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base)
+                _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base, skipped)
         finally:
             if keep is not None:
                 _rmtree(keep)
@@ -220,11 +222,11 @@ def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
 
 
 def _finalize(settings, w: RunWriter, kind, prep, opts, res: AttemptResult, diag: Diagnosis,
-              workdir: Path, configs, real_n: int, base) -> None:
+              workdir: Path, configs, real_n: int, base, skipped: list[str] | None = None) -> None:
     _copy_outputs(w, kind, res, real_n)
     w.write_json("env.json", _env_info(prep, res))
     w.write_text("command.txt", shlex.join(str(c) for c in res.command) + "\n" if res.command else "")
-    warnings = list(diag.warnings)
+    warnings = list(diag.warnings) + list(skipped or [])
     run = {"status": diag.status, "diagnosis": diag.to_dict(), "warnings": warnings,
            "tests": _count_tests(res.tests), "attempts": len(configs),
            "attempt_configs": [c.to_dict() for c in configs], **base}

@@ -132,6 +132,22 @@ class Jaguar2Test(Base):
         self.assertIn("# jflp fase: reactor", text)
         self.assertIn("# jflp fase: jaguar2", text)
 
+    def test_jaguar2_unblock_http_passes_settings_to_every_mvn_call(self):
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text(POM.format("root"))
+        (work / "core" / "pom.xml").write_text(POM.format("core"))
+        r = run_jaguar2(self.home, self.settings, self._prep(work, "core", ["a.BTest"]), work,
+                        AttemptConfig(fixes_on=frozenset({"unblock-http"})), self.tmp / "l" / "run.log",
+                        toolenv=self.toolenv())
+        calls = self.read_calls()
+        self.assertEqual(len(calls), 2)
+        for c in calls:
+            i = c["argv"].index("-s")
+            self.assertTrue(c["argv"][i + 1].endswith("jflp-settings-unblock.xml"))
+        # a correção de execução não vira "correção desconhecida" no gerador do POM
+        self.assertEqual(r.extra["pom_plan"]["warnings"], [])
+
     def test_jaguar2_reactor_failure_stops(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)

@@ -9,7 +9,7 @@ from .adapters.base import Ctx, scan_tests
 from .home import Home, Settings
 from .jaguar import JaguarOptions, run_jaguar
 from .prepare import Prepared
-from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir,
+from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
                         reactor_failure)
 from .toolchain.profiles import ToolEnv, resolve
 
@@ -34,7 +34,8 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     timeout = settings.get("run", "timeout_s")
     total = 0.0
 
-    r = install_reactor(te, settings, prep, workdir, log, on_line)
+    sargs = settings_args(home, cfg)
+    r = install_reactor(te, settings, prep, workdir, log, on_line, sargs)
     if r is not None:
         total += r["seconds"]
         failed = reactor_failure(r, log, desc)
@@ -46,7 +47,7 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
                        ("dependencias", ("dependency:copy-dependencies",
                                          "-DoutputDirectory=target/dependency", *skip))):
         log_phase(log, fase, on_line)
-        cmd = te.mvn(*args)
+        cmd = te.mvn(*sargs, *args)
         r = proc.run(cmd, cwd=mod, env=te.env, timeout=timeout, log_path=log, on_line=on_line)
         total += r["seconds"]
         if r["rc"] != 0 or r["timed_out"]:

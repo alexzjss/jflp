@@ -61,6 +61,7 @@ def _compiler(version: str) -> Suggestion:
                       label=f"Usar o maven-compiler-plugin {version}")
 
 
+_UNBLOCK_HTTP = Suggestion(fix="unblock-http", label="Liberar repositórios http:// (settings do JFLP)")
 _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositórios http)")
 
 # A primeira regra que casar vence (padrões casados sem diferenciar maiúsculas).
@@ -75,6 +76,9 @@ RULES: list[Rule] = [
     Rule(st.PLUGIN_INCOMPATIVEL, r"animal-sniffer|Undefined reference",
          "O plugin animal-sniffer bloqueou o build",
          [Suggestion(fix="skip-animal-sniffer", label="Pular o animal-sniffer")], only_errors=True),
+    Rule(st.PLUGIN_INCOMPATIVEL, r"apache-rat-plugin.*unapproved license",
+         "verificação de licenças (Apache RAT) reprovou arquivos",
+         [Suggestion(fix="skip-rat", label="Pular o Apache RAT")], only_errors=True),
     Rule(st.PLUGIN_INCOMPATIVEL,
          r"maven-surefire-plugin:2\.|SurefireBooterForkException|The forked VM terminated",
          "Surefire incompatível ou JVM de teste caiu", [_surefire("3.2.5"), _surefire("3.0.0-M5")],
@@ -83,7 +87,7 @@ RULES: list[Rule] = [
          "maven-compiler-plugin incompatível com o JDK", [_compiler("3.1"), _compiler("3.11.0")],
          only_errors=True),
     Rule(st.DEPENDENCIA_NAO_RESOLVIDA, r"Blocked mirror for repositories|maven-default-http-blocker",
-         "Maven recente bloqueia repositórios http://", [_MAVEN_363]),
+         "Maven recente bloqueia repositórios http://", [_UNBLOCK_HTTP, _MAVEN_363]),
     Rule(st.DEPENDENCIA_NAO_RESOLVIDA,
          r"Could not resolve dependencies|Could not transfer artifact|Could not find artifact|"
          r"Failed to collect dependencies|Plugin \S+ or one of its dependencies could not be resolved",

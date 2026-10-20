@@ -66,6 +66,13 @@ class CliTests(unittest.TestCase):
             rc, out, _ = _run_main(["run", "maven", "d4j/Jsoup/93"], self.tmp / "h")
         self.assertEqual(rc, 1)
 
+    def test_run_prints_warnings(self):
+        with mock.patch("sbfl.cli.execute", return_value="r"),                 mock.patch("sbfl.cli.load_run", return_value={
+                    "status": "ok", "warnings": ["tentativa 2 ignorada: Maven 3.6.3 não encontrado"]}):
+            rc, out, _ = _run_main(["run", "maven", "d4j/Jsoup/93"], self.tmp / "h")
+        self.assertEqual(rc, 0)
+        self.assertIn("aviso: tentativa 2 ignorada: Maven 3.6.3 não encontrado", out)
+
     def test_run_unexpected_error_returns_1_with_log(self):
         h = self.tmp / "h"
         with mock.patch("sbfl.cli.execute", side_effect=RuntimeError("quebrou")):

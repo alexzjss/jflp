@@ -196,6 +196,17 @@ class ExecuteTest(Base):
         self.assertTrue((d / "outputs" / "jaguar2.csv").exists())
         self.assertEqual(list((self.home.work / "w").iterdir()), [])
 
+    def test_skipped_candidate_is_reported_in_warnings(self):
+        self.settings.set("run", "max_attempts", 20)
+
+        def behave(n, c):
+            if c.jdk == 17:
+                return "missing"
+            return "ok" if c.jdk == 8 else "sniffer"
+        rel, run = self.go(behave)
+        self.assertTrue(any(w.startswith("tentativa ") and "ignorada: JDK 17 não encontrado" in w
+                            for w in run["warnings"]), run["warnings"])
+
     def test_missing_tool_on_every_candidate_keeps_last_real(self):
         self.settings.set("run", "max_attempts", 20)
         rel, run = self.go(lambda n, c: "sniffer" if n == 1 else "missing")

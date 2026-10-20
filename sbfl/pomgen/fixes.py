@@ -159,6 +159,10 @@ def _detect_junit4(ctx: PomContext) -> bool:
     return not ctx.has_junit4
 
 
+def _detect_rat(ctx: PomContext) -> bool:
+    return any("apache-rat-plugin" in t for t in ctx.chain_texts)
+
+
 def _never(ctx: PomContext) -> bool:
     return False
 
@@ -176,6 +180,21 @@ def _apply_sniffer(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     p = doc.ensure_plugin("org.codehaus.mojo", "animal-sniffer-maven-plugin",
                           version or SNIFFER_DEFAULT)
     doc.set_child(doc.child(p, "configuration", create=True), "skip", "true")
+
+
+def _apply_rat(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    version = params.get("version")
+    if not version:
+        for text in ctx.chain_texts:
+            m = re.search(r"<artifactId>\s*apache-rat-plugin\s*</artifactId>\s*"
+                          r"<version>\s*([^<\s]+)\s*</version>", text)
+            if m:
+                version = m.group(1)
+                break
+    p = doc.ensure_plugin("org.apache.rat", "apache-rat-plugin", version, overwrite=False)
+    cfg = doc.child(p, "configuration", create=True)
+    doc.set_child(cfg, "skip", "true")
+    doc.set_child(cfg, "numUnapprovedLicenses", "999999")
 
 
 def _java_level(jdk: int) -> str:
@@ -249,4 +268,7 @@ FIXES: dict[str, Fix] = {f.id: f for f in [
     Fix("exclude-duplicates", "Excluir classes duplicadas",
         "Exclui da compilação arquivos que duplicam classes.",
         _never, _apply_excludes, {"files": []}),
+    Fix("skip-rat", "Ignorar o Apache RAT",
+        "A verificação de licenças (apache-rat-plugin) reprova arquivos do checkout antigo.",
+        _detect_rat, _apply_rat, {}),
 ]}
