@@ -22,11 +22,14 @@ _TIMEOUT = 60
 _CHUNK = 1 << 16
 _HEADERS = {"User-Agent": "jflp"}
 
-_JAGUAR1_URLS = (
+# URL -> SHA-256 fixo (o download é recusado se o arquivo não conferir).
+_JAGUAR1_JARS = {
     "https://github.com/saeg/jaguar/releases/download/jaguar-0.0.6-4f9d6f0/"
-    "br.usp.each.saeg.jaguar.core-0.0.6-SNAPSHOT-jar-with-dependencies.jar",
-    "https://github.com/saeg/jaguar/releases/download/jaguar-cli-0.0.1/jacocoagent.jar",
-)
+    "br.usp.each.saeg.jaguar.core-0.0.6-SNAPSHOT-jar-with-dependencies.jar":
+        "cc7e4a3f987b7cca047f8adee623592c92d1b5879ad7180b1a5ba7bffaa7941a",
+    "https://github.com/saeg/jaguar/releases/download/jaguar-cli-0.0.1/jacocoagent.jar":
+        "d72599cbdbd42b647f61cafbc7148321aaf157d4f62799b01cea00b8a1c24ab1",
+}
 
 
 class DownloadError(Exception):
@@ -73,7 +76,10 @@ def plan_jdk(home: Home, major: int, os_name: str | None = None, arch: str | Non
         item = json.loads(_read(url))[0]
         pkg = item["binary"]["package"]
         release = item["release_name"]
-        return Download(f"JDK {major} (Temurin)", pkg["link"], pkg.get("size"), pkg.get("checksum"),
+        if not pkg.get("checksum"):
+            raise DownloadError(f"O Adoptium não informou o checksum do JDK {major}; "
+                                "o download foi recusado por segurança.")
+        return Download(f"JDK {major} (Temurin)", pkg["link"], pkg.get("size"), pkg["checksum"],
                         "sha256", True, home.tools / f"jdk-{release}", home.tools / "_dl")
     except DownloadError:
         raise
@@ -93,8 +99,8 @@ def plan_maven(home: Home, version: str) -> Download:
 
 def plan_jaguar1(home: Home) -> list[Download]:
     dest = home.tools / "jaguar1/lib"
-    return [Download(f"Jaguar 1 ({url.rsplit('/', 1)[1]})", url, None, None, None, False, dest,
-                     home.tools / "_dl") for url in _JAGUAR1_URLS]
+    return [Download(f"Jaguar 1 ({url.rsplit('/', 1)[1]})", url, None, sha, "sha256", False, dest,
+                     home.tools / "_dl") for url, sha in _JAGUAR1_JARS.items()]
 
 
 def _rm(p: Path) -> None:
@@ -109,6 +115,8 @@ def _rm(p: Path) -> None:
 
 def fetch(d: Download, progress: Callable[[int, int | None], None] | None = None) -> Path:
     """Baixa, verifica o checksum e instala em d.dest; nunca deixa dest parcial."""
+    if not d.checksum or not d.algo:     # falha fechada: nada é instalado sem verificação
+        raise DownloadError(f"Sem checksum para {d.name}: o download foi recusado por segurança.")
     cache = d.cache or d.dest.parent / "_dl"
     fname = urllib.parse.urlparse(d.url).path.rsplit("/", 1)[-1] or "download"
     part = cache / (fname + ".part")

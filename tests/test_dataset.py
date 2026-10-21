@@ -87,6 +87,31 @@ class DatasetTests(Base):
             self.assertEqual(list(csv.DictReader(f))[0]["status"], "sem_execucao")
         self.assertIn("sem_execucao", (out / "README.md").read_text(encoding="utf-8"))
 
+    def test_jaguar2_version_comes_from_the_run_plan(self):
+        bug = Bug("d4j", "Lang", "1")
+        w = RunWriter(self.home, bug, "jaguar2")
+        (w.dir / "outputs").mkdir()
+        (w.dir / "outputs" / "jaguar2.csv").write_text("a/B,3\n")
+        w.write_json("attempts/1/attempt.json", {"extra": {"pom_plan": {"jaguar2_version": "0.0.1"}}})
+        w.finish({"status": "ok", "tests": {"total": 1, "failed": 0}})
+        out = dataset.export(self.home, "ds", [bug])
+        with open(out / "manifest.csv", encoding="utf-8", newline="") as f:
+            self.assertEqual(list(csv.DictReader(f))[0]["jaguar2_version"], "0.0.1")
+
+    def test_copied_files_are_writable_and_stale_tmp_is_removed(self):
+        import os
+        bug = Bug("d4j", "Lang", "1")
+        self.make_run(bug, "ok")
+        stale = self.home.datasets / ".ds.tmp"
+        stale.mkdir()
+        (stale / "velho.txt").write_text("x")
+        os.chmod(stale / "velho.txt", 0o444)
+        out = dataset.export(self.home, "ds", [bug])
+        self.assertFalse(stale.exists())
+        for f in ("jaguar2.csv", "jaguar2.xml", "env.json", "surefire-reports/r.xml"):
+            self.assertTrue(os.access(out / "d4j" / "Lang" / "1" / f, os.W_OK), f)
+        shutil.rmtree(out)      # um dataset exportado se apaga sem truques
+
     def test_refuses_overwrite(self):
         bug = Bug("d4j", "Lang", "1")
         self.make_run(bug, "ok")

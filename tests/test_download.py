@@ -89,13 +89,44 @@ class DownloadTests(unittest.TestCase):
             d = dl.plan_maven(self.home, "3.6.3")
         self.assertEqual(d.checksum, "ee" * 64)
 
+    def test_plan_jdk_without_checksum_fails_closed(self):
+        payload = [{"release_name": "jdk-11.0.24+8", "binary": {"package": {
+            "link": "https://github.com/adoptium/jdk.zip", "size": 123}}}]
+        with mock.patch("urllib.request.urlopen", mock.Mock(return_value=_Resp(json.dumps(payload).encode()))):
+            with self.assertRaises(dl.DownloadError) as cm:
+                dl.plan_jdk(self.home, 11, os_name="windows", arch="x64")
+        self.assertIn("checksum", str(cm.exception).lower())
+
+    def test_fetch_without_checksum_fails_before_touching_the_network(self):
+        d = dl.Download("sem", "https://example.test/x.jar", None, None, None, False, self.home.tools / "l")
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("rede")):
+            with self.assertRaises(dl.DownloadError) as cm:
+                dl.fetch(d)
+        self.assertIn("checksum", str(cm.exception).lower())
+        self.assertFalse(d.dest.exists())
+
+    def test_plan_jaguar1_pins_sha256(self):
+        with mock.patch("urllib.request.urlopen", side_effect=AssertionError("rede")):
+            ds = dl.plan_jaguar1(self.home)
+        for d in ds:
+            self.assertEqual(d.algo, "sha256")
+            self.assertRegex(d.checksum, r"^[0-9a-f]{64}$")
+        self.assertEqual(len({d.checksum for d in ds}), 2)
+
+    def test_jaguar1_jar_with_wrong_digest_is_rejected(self):
+        d = dl.plan_jaguar1(self.home)[1]
+        with mock.patch("urllib.request.urlopen", _router({d.url: b"jar adulterado"})):
+            with self.assertRaises(dl.DownloadError) as cm:
+                dl.fetch(d)
+        self.assertIn("checksum", str(cm.exception).lower())
+        self.assertFalse((d.dest / "jacocoagent.jar").exists())
+
     def test_plan_jaguar1_no_network(self):
         with mock.patch("urllib.request.urlopen", side_effect=AssertionError("rede")):
             ds = dl.plan_jaguar1(self.home)
         self.assertEqual(len(ds), 2)
         for d in ds:
             self.assertFalse(d.archive)
-            self.assertIsNone(d.checksum)
             self.assertIsNone(d.size)
             self.assertEqual(d.dest, self.home.tools / "jaguar1/lib")
         self.assertTrue(ds[1].url.endswith("/jaguar-cli-0.0.1/jacocoagent.jar"))
@@ -196,8 +227,8 @@ class DownloadTests(unittest.TestCase):
 
     def test_fetch_plain_file(self):
         data = b"jar-bytes"
-        d = dl.Download("jaguar", "https://example.test/x/jacocoagent.jar", None, None, None,
-                        False, self.home.tools / "jaguar1/lib")
+        d = dl.Download("jaguar", "https://example.test/x/jacocoagent.jar", None,
+                        hashlib.sha256(data).hexdigest(), "sha256", False, self.home.tools / "jaguar1/lib")
         with mock.patch("urllib.request.urlopen", _router({d.url: data})):
             out = dl.fetch(d)
         self.assertEqual(out, d.dest)

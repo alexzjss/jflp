@@ -1,5 +1,5 @@
-"""Mini projeto com um defeito conhecido (sbfl/selftest_data) para validar o ambiente.
-O runner do autoteste volta a ser ligado nas tarefas seguintes do JFLP Studio."""
+"""Mini projeto com um defeito conhecido (sbfl/selftest_data), usado por `jflp selftest` (cli.py)
+e pelos testes para validar o ambiente; aqui ficam só os dados e o repositório git de exemplo."""
 from __future__ import annotations
 
 import shutil

@@ -243,6 +243,22 @@ class ServeBind(unittest.TestCase):
         wb.assert_not_called()
         self.assertIn("porta", out.getvalue().lower())
 
+    def test_serve_malformed_config_returns_1_with_message(self):
+        import contextlib
+        import io
+        from sbfl.web import app as webapp
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        home = Home(tmp / "h")
+        home.root.mkdir(parents=True)
+        home.config_path.write_text("[run\n", encoding="utf-8")
+        err = io.StringIO()
+        with mock.patch("webbrowser.open") as wb, contextlib.redirect_stderr(err):
+            rc = webapp.serve(home, 0, True)
+        self.assertEqual(rc, 1)
+        wb.assert_not_called()
+        self.assertIn("config.toml", err.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

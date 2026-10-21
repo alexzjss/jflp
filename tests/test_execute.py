@@ -164,6 +164,34 @@ class ExecuteTest(Base):
         r = recipes.find(self.home, BUG, "jaguar2")
         self.assertEqual((r.jdk, r.note, r.params["override-version"]["plugins"]["a:b"]), (8, "uma", "1"))
 
+    def test_recipe_saves_and_applies_fixes_off_and_test_scope(self):
+        recipes.save(self.home, BUG, "jaguar2", "bug",
+                     AttemptConfig(frozenset({"junit4"}), frozenset({"source-dirs"}), test_scope="all"))
+        text = (self.home.recipes / "local" / "proj.toml").read_text(encoding="utf-8")
+        self.assertIn('fixes_off = ["source-dirs"]', text)
+        self.assertIn('test_scope = "all"', text)
+        r = recipes.find(self.home, BUG, "jaguar2")
+        self.assertEqual((r.fixes_off, r.test_scope), (["source-dirs"], "all"))
+        _, run = self.go(lambda n, c: "ok")
+        self.assertEqual(self.cfgs[0].fixes_off, frozenset({"source-dirs"}))
+        self.assertEqual(self.cfgs[0].test_scope, "all")
+        self.assertEqual(run["test_scope"], "all")
+        self.cfgs.clear()
+        self.go(lambda n, c: "ok", ex.RunOptions(test_scope="relevant"))   # a opção explícita vence a receita
+        self.assertEqual(self.cfgs[0].test_scope, "relevant")
+
+    def test_recipe_default_scope_is_not_written(self):
+        recipes.save(self.home, BUG, "jaguar2", "bug", AttemptConfig(frozenset({"junit4"})))
+        text = (self.home.recipes / "local" / "proj.toml").read_text(encoding="utf-8")
+        self.assertNotIn("test_scope", text)
+        self.assertNotIn("fixes_off", text)
+
+    def test_recipe_fixes_off_dropped_when_explicitly_enabled(self):
+        recipe = recipes.Recipe("*", "jaguar2", fixes=["junit4"], fixes_off=["source-dirs"])
+        cfg = ex._first_config(self.settings, recipe, ex.RunOptions(fixes_on=frozenset({"source-dirs"})))
+        self.assertIn("source-dirs", cfg.fixes_on)
+        self.assertNotIn("source-dirs", cfg.fixes_off)
+
     def test_prepare_failure_and_missing_tool(self):
         with mock.patch.object(ex, "prepare", side_effect=StageError("checkout_falhou", "sem rede")):
             rel = ex.execute(self.home, self.settings, BUG, "jaguar2", ex.RunOptions())

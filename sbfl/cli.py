@@ -492,7 +492,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "tools" and args.action == "get" and args.what != "jaguar1" and not args.value:
         ap.error("informe a versão (ex.: `tools get jdk 11`)")
     home = Home.default().ensure()
-    settings = load_settings(home)
+    try:
+        settings = load_settings(home)
+    except ValueError as e:         # config.toml inválido: mensagem com linha/coluna, sem traceback
+        print(f"erro: {e}", file=sys.stderr)
+        return 1
     try:
         return args.fn(home, settings, args)
     except StageError as e:

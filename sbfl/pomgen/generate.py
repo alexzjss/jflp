@@ -21,6 +21,7 @@ class PomPlan:
     applied: list[str] = field(default_factory=list)
     params: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    jaguar2_version: str = ""      # versão do Jaguar 2 que entrou no POM gerado
 
 
 def generate(module_dir: Path, settings, jdk: int, fixes_on: set[str] | None = None,
@@ -64,7 +65,8 @@ def generate(module_dir: Path, settings, jdk: int, fixes_on: set[str] | None = N
     text = doc.serialize()
     diff = "\n".join(difflib.unified_diff(original.splitlines(), text.splitlines(),
                                           "pom.xml", "jaguar2-pom.xml", lineterm=""))
-    return PomPlan(text, diff, detected, applied, used, warnings)
+    return PomPlan(text, diff, detected, applied, used, warnings,
+                   str((ctx.versions or {}).get("version") or ""))
 
 
 def write(plan: PomPlan, module_dir: Path) -> Path:

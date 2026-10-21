@@ -109,7 +109,11 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     import uvicorn
 
     home.ensure()
-    settings = load_settings(home)
+    try:
+        settings = load_settings(home)
+    except ValueError as e:         # config.toml inválido
+        print(f"erro: {e}", file=sys.stderr)
+        return 1
     port = port or _free_port()
     token = secrets.token_urlsafe(24)
     worker = Worker(home, settings)
@@ -145,6 +149,8 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
         pass
     finally:
         server.should_exit = True
-        worker.stop()
+        worker.stop()                 # mata o Maven em andamento e devolve o job à fila
+        if worker.is_alive():
+            worker.join(10)
         thread.join(5)
     return 0

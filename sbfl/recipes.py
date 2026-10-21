@@ -21,6 +21,8 @@ class Recipe:
     maven: str | None = None
     note: str = ""
     source: Path = Path()
+    fixes_off: list[str] = field(default_factory=list)
+    test_scope: str | None = None
 
 
 def _file(home: Home, bug: Bug) -> Path:
@@ -51,7 +53,7 @@ def _load(path: Path) -> list[Recipe]:
     for t in data.get("recipe", []):
         out.append(Recipe(t.get("match", "*"), t.get("kind", "*"), list(t.get("fixes") or []),
                           dict(t.get("params") or {}), t.get("jdk"), t.get("maven"),
-                          t.get("note", ""), path))
+                          t.get("note", ""), path, list(t.get("fixes_off") or []), t.get("test_scope")))
     return out
 
 
@@ -91,6 +93,10 @@ def save(home: Home, bug: Bug, kind: str, scope: str, cfg: AttemptConfig,
         raise ValueError(f"scope inválido: {scope}")
     lines = ["[[recipe]]", f"match = {_inline(match)}", f"kind = {_inline(kind)}",
              f"fixes = {_inline(sorted(cfg.fixes_on))}"]
+    if cfg.fixes_off:
+        lines.append(f"fixes_off = {_inline(sorted(cfg.fixes_off))}")
+    if cfg.test_scope and cfg.test_scope != "relevant":
+        lines.append(f"test_scope = {_inline(cfg.test_scope)}")
     if cfg.params:
         lines.append(f"params = {_inline(cfg.params)}")
     if cfg.jdk is not None:

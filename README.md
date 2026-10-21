@@ -106,7 +106,7 @@ No Linux, o `defects4j` vem do PATH ou de `defects4j.home` (pasta nativa). A tel
 
 ## 4. Configurações (`config.toml`)
 
-Fica em `<pasta do JFLP>/config.toml` e é criado com os padrões na primeira vez; a tela Ambiente também grava nele. Chaves ausentes usam o padrão abaixo.
+Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O arquivo guarda só os valores que diferem do padrão**: chaves ausentes usam o padrão abaixo (assim, quando um padrão muda numa versão nova, ele chega também a quem já tem `config.toml`). Se o arquivo estiver inválido, a CLI e `jflp ui` imprimem o arquivo, a linha e a coluna do erro e saem com código 1; em caminhos do Windows use aspas simples (`'C:\Java\jdk-11'`) ou barras (`"C:/Java/jdk-11"`).
 
 | Seção.chave | Padrão | Significado |
 |---|---|---|
@@ -207,7 +207,9 @@ Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), 
 | `interrompido` | a execução foi interrompida antes de terminar (recuperada na abertura) | não |
 | `desconhecido` | falha não reconhecida; veja o log | sim |
 
-As regras de diagnóstico (regex sobre o log, só em linhas de erro quando necessário) mapeiam o sintoma para causa em português, o trecho do log que disparou a regra e correções sugeridas. Para o Jaguar 2, se nenhum teste falhou e o relatório está vazio, a execução continua `ok` mas com o aviso "defeito não reproduzido".
+As regras de diagnóstico (regex sobre o log, só em linhas de erro quando necessário) mapeiam o sintoma para causa em português, o trecho do log que disparou a regra e correções sugeridas. Para o Jaguar 2, se nenhum teste falhou e o relatório está vazio, a execução continua `ok` mas com o aviso "defeito não reproduzido"; se **há testes falhando e o CSV está vazio**, o status é `jaguar_sem_saida` ("testes falharam mas o relatório do Jaguar 2 está vazio (cobertura/classesDirs não ligados)"): sucesso exige relatório não vazio. Um módulo sem `pom.xml` termina como `desconhecido` ("projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)") sem busca.
+
+**Sugestões por tipo:** as correções do POM (`junit4`, `source-dirs`, `skip-rat`...) só são sugeridas, mostradas e aplicadas ao **Jaguar 2**; `unblock-http` vale para todos os tipos. O Jaguar 2 nunca recebe a sugestão `maven=3.6.3` (exige Maven ≥ 3.9.9): para repositórios `http` bloqueados só se sugere `unblock-http`.
 
 ## 7. Busca automática e receitas
 
@@ -235,7 +237,9 @@ maven = "3.6.3"                   # opcional
 note = "animal-sniffer exige Java 7"
 ```
 
-Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale a mais recente do arquivo. Opções dadas na execução (`--fix`, `--no-fix`, `--jdk`, `--maven`) somam-se à receita; `--no-fix` vence a receita. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
+Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale a mais recente do arquivo. Opções dadas na execução (`--fix`, `--no-fix`, `--jdk`, `--maven`) somam-se à receita; `--no-fix` vence a receita. A receita guarda também `fixes_off` (correções desligadas) e `test_scope` (só quando não é `relevant`), e ambos são reaplicados.
+
+`--fix ID` **acrescenta** à lista detectada (não a substitui). "Tentar de novo com esta correção" na tela de execução também parte das correções detectadas na última tentativa (menos as desligadas) e soma a sugestão. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
 
 ## 8. Layout da pasta de execução
 
@@ -245,7 +249,7 @@ Cada execução é uma pasta nova (nunca sobrescrita). Ela é gravada em `.<nome
 runs/<benchmark>/<projeto>/<bug>/<AAAAMMDD-HHMMSS>-<tipo>/
   run.json            # status, tipo, tempos, resumo dos testes, diagnóstico, receita, ground truth, tentativas
   env.json            # SO, Python, Git, JDK/Maven exatos, commit do checkout, versão do jflp
-  command.txt         # comando exato da última tentativa
+  command.txt         # comando de cada fase (reactor, compilar, jaguar2...) com JAVA_HOME/MAVEN_OPTS/JAVA_TOOL_OPTIONS, já com as aspas da plataforma
   pom/                # jaguar2-pom.xml usado e jaguar2-pom.diff (Jaguar 2)
   attempts/
     0-prepare.log     # log da preparação do bug
@@ -273,7 +277,7 @@ manifest.json         # o mesmo, com schema_version (atual: 1)
 
 O `jaguar2.csv` exportado também **não tem linha de cabeçalho** (colunas `classe,linha,cef,cnf,cep,cnp,susp`).
 
-Colunas do manifest: `benchmark, project, bug, status, test_scope, n_tests, n_failed, jdk, maven, jaguar2_version, recipe, path`. Bugs sem execução bem-sucedida entram com o status da última tentativa e `path` vazio, para a taxa de sucesso ficar explícita; além dos status da seção 6, o manifest usa `sem_execucao`, `cancelado` e `desconhecido` (job que terminou com erro, sem execução gravada). `jaguar2_version` vem da configuração no momento da exportação.
+Colunas do manifest: `benchmark, project, bug, status, test_scope, n_tests, n_failed, jdk, maven, jaguar2_version, recipe, path`. Bugs sem execução bem-sucedida entram com o status da última tentativa e `path` vazio, para a taxa de sucesso ficar explícita; além dos status da seção 6, o manifest usa `sem_execucao`, `cancelado` e `desconhecido` (job que terminou com erro, sem execução gravada). `jaguar2_version` vem do plano do POM da execução usada (se não houver registro, da configuração no momento da exportação). Os arquivos copiados para o dataset são graváveis (as execuções originais continuam somente leitura).
 
 ## 10. Referência da linha de comando
 
@@ -289,19 +293,19 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 | `jflp tools get {jdk\|maven\|jaguar1} [valor] [--yes]` | baixa uma ferramenta (`valor` = versão do JDK ou do Maven); pergunta antes, salvo `--yes` |
 | `jflp fetch [projeto]` | clona/atualiza os projetos do Bugs.jar (`bugsjar.root`, `bugsjar.projects`) |
 | `jflp bugs {d4j\|bugsjar} [projeto]` | lista os bugs de um benchmark |
-| `jflp prepare <bug>` | faz o checkout e mostra módulo e linhas defeituosas conhecidas |
+| `jflp prepare <bug> [--refresh]` | faz o checkout e mostra módulo e linhas defeituosas conhecidas; `--refresh` refaz a cópia pristine do zero |
 | `jflp run {maven\|jaguar2\|jaguar1} <bug> [opções]` | executa; sai com 0 se o status for `ok`/`ok_testes_falhando` |
 | `jflp runs [bug]` | lista execuções gravadas |
 | `jflp compare <execução-A> <execução-B>` | compara duas execuções (caminhos relativos a `runs/`, como em `jflp runs`) |
 | `jflp batch create <nome> <tipos> <bug>...` | cria um lote; `tipos` separados por vírgula (`maven,jaguar2`) |
-| `jflp batch run` | roda a fila em primeiro plano até esvaziar (Ctrl+C espera o job atual) |
+| `jflp batch run` | roda a fila em primeiro plano até esvaziar (Ctrl+C espera o job atual; um 2º Ctrl+C mata o Maven e devolve o job à fila). Recusa se outra instância (`jflp ui`) já processa a fila |
 | `jflp batch status <id>` | situação e resumo por projeto |
 | `jflp export <nome> [bug...] [--batch ID]` | exporta o dataset (informe `--batch` **ou** bugs) |
 | `jflp recipes [benchmark/projeto]` | lista as receitas, ou mostra a de um projeto |
 | `jflp reindex` | reconstrói o índice varrendo `runs/` |
 | `jflp selftest` | valida o ambiente com um projeto de exemplo |
 
-Opções de `jflp run`: `--all-tests` (suíte inteira), `--fix ID` e `--no-fix ID` (repetíveis), `--jdk N`, `--maven VERSÃO`, `--no-search` (sem busca automática), `--no-archive` (não arquiva o checkout).
+Opções de `jflp run`: `--all-tests` (suíte inteira), `--fix ID` (acrescenta às correções detectadas) e `--no-fix ID` (repetíveis), `--jdk N`, `--maven VERSÃO`, `--no-search` (sem busca automática), `--no-archive` (não arquiva o checkout), `--refresh` (refaz a cópia pristine antes de rodar). `jflp run` também recusa (código 1) quando outra instância está processando a fila.
 
 Exemplo completo:
 
@@ -328,7 +332,11 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 - **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada na revisão, o diagnóstico a sugere de volta.
 - **Surefire 2.x** ("maven-surefire-plugin:2.x", "The forked VM terminated"): o Jaguar 2 precisa do Surefire 3. O POM gerado fixa `jaguar2.surefire`; se ainda falhar, a busca tenta 3.2.5 e 3.0.0-M5.
 - **Testes fora de `src/test/java`** (ex.: `src/test/org/...`; "Nenhum teste foi executado" ou "package ... does not exist"): a correção `source-dirs` aponta `testSourceDirectory` para a pasta real, sem mover arquivos.
-- **Jaguar 2 com relatório vazio**: se nenhum teste falhou, o defeito **não foi reproduzido** (aviso na execução; confira o escopo `relevant` e tente `--all-tests`). Se há testes falhando e o CSV está vazio, confirme que a execução usou `-Djaguar2.classesDirs` (veja `command.txt`) e que o módulo certo foi escolhido.
+- **Jaguar 2 com relatório vazio**: se nenhum teste falhou, o defeito **não foi reproduzido** (aviso na execução, status `ok`; confira o escopo `relevant` e tente `--all-tests`). Se há testes falhando e o CSV está vazio, o status é `jaguar_sem_saida`: confirme que a execução usou `-Djaguar2.classesDirs` (veja `command.txt`) e que o módulo certo foi escolhido.
+- **"outra instância está processando a fila"**: só um processo por pasta do JFLP executa jobs, por causa do arquivo `worker.lock`. A interface continua aceitando enfileirar; os jobs rodam quando a outra instância (outra `jflp ui` ou `jflp batch run`) terminar. A trava some sozinha se o processo morrer. Uma `.partial` só é recuperada quando o processo dono (PID gravado em `.writer.json`) não existe mais.
+- **Editei a pasta local e a execução não mudou**: bugs `local:<pasta>` são recopiados sozinhos quando a árvore muda (nº de arquivos, data de modificação mais nova e tamanho total, ignorando `target/` de módulos e `.idea`). Para forçar, use o botão **Re-preparar** na página do bug ou `--refresh` no CLI. Pastas `target/` sem `pom.xml` ao lado e arquivos `*.class` em `src/` são entradas de teste e sempre são copiados.
+- **Fechei o app no meio de uma execução**: o Maven em andamento é encerrado, a execução vira `interrompido` e o job volta para a fila; as cópias de trabalho (`work/w/`) órfãs são apagadas na próxima abertura.
+- **Download recusado por checksum**: `tools get` só instala arquivos verificados. O JDK exige o SHA-256 informado pelo Adoptium (sem ele o download é recusado), o Maven usa o `.sha512` oficial e os dois jars do Jaguar 1 têm SHA-256 fixo no código; um arquivo adulterado ou trocado no servidor é rejeitado.
 - **Projeto sem `pom.xml` ou sem JUnit 4**: o Jaguar 2 não se aplica (aparece como "não suportado"); use o Jaguar 1.
 - **CSV com colunas quebradas / vírgula decimal**: a ferramenta já força o locale en-US na JVM do Surefire; ao rodar o Maven por fora, passe `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`.
 - **WSL / Defects4J ausente** ("WSL/Defects4J: ..." em `doctor`): siga a seção 3 e confira `defects4j.home` e `defects4j.wsl_distro`. Sem WSL, use Bugs.jar ou projetos locais.

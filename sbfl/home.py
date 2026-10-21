@@ -121,8 +121,10 @@ class Settings:
         self.data.setdefault(section, {})[key] = value
 
     def save(self) -> None:
-        text = "# Configurações do JFLP Studio.\n\n"
-        body = _dump(self.data, _NOTES)
+        """Grava só o que difere do padrão: assim, mudar um padrão chega também a quem já tem config.toml."""
+        text = ("# Configurações do JFLP Studio.\n"
+                "# Só aparecem aqui os valores diferentes do padrão; o resto segue o padrão da versão.\n\n")
+        body = _dump(_non_default(self.data, DEFAULTS), _NOTES)
         self.home.root.mkdir(parents=True, exist_ok=True)
         self.home.config_path.write_text(text + body, encoding="utf-8")
 
@@ -131,9 +133,40 @@ def load_settings(home: Home) -> Settings:
     """Lê config.toml (se existir) e mescla com DEFAULTS."""
     data = copy.deepcopy(DEFAULTS)
     if home.config_path.exists():
-        with open(home.config_path, "rb") as f:
-            _merge(data, tomllib.load(f))
+        try:
+            with open(home.config_path, "rb") as f:
+                _merge(data, tomllib.load(f))
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError(_toml_message(home.config_path, e)) from e
+        except UnicodeDecodeError as e:
+            raise ValueError(f"O arquivo {home.config_path} não está em UTF-8 ({e.reason}). "
+                             "Salve-o como UTF-8.") from e
     return Settings(home, data)
+
+
+def _toml_message(path: Path, e: Exception) -> str:
+    """Mensagem em português para um config.toml inválido, com linha e coluna."""
+    line, col = getattr(e, "lineno", None), getattr(e, "colno", None)
+    if line is None:
+        m = re.search(r"line (\d+), column (\d+)", str(e))
+        line, col = (int(m.group(1)), int(m.group(2))) if m else (None, None)
+    where = f" (linha {line}, coluna {col})" if line is not None else ""
+    return (f"O arquivo {path} (config.toml) é inválido{where}: {e}. "
+            "Dica para caminhos do Windows: use aspas simples ('C:\\Java\\jdk-11') ou barras (\"C:/Java/jdk-11\").")
+
+
+def _non_default(data: dict, defaults: dict) -> dict:
+    """Subconjunto de `data` que difere de `defaults` (tabelas vazias somem)."""
+    out: dict = {}
+    for key, value in data.items():
+        base = defaults.get(key)
+        if isinstance(value, dict):
+            sub = _non_default(value, base if isinstance(base, dict) else {})
+            if sub:
+                out[key] = sub
+        elif key not in defaults or base != value:
+            out[key] = value
+    return out
 
 
 def _merge(base: dict, over: dict) -> None:

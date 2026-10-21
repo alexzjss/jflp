@@ -55,13 +55,15 @@ def _first_config(settings: Settings, recipe, opts: RunOptions) -> AttemptConfig
     fixes: set[str] = set(recipe.fixes) if recipe else set()
     if opts.fixes_on:
         fixes |= set(opts.fixes_on)
-    fixes -= set(opts.fixes_off)      # desmarcar na tela vale também contra as correções da receita
+    # desmarcar na tela vale também contra as correções da receita; ligar na tela vence o fixes_off dela
+    off = (set(recipe.fixes_off) - set(opts.fixes_on or ()) if recipe else set()) | set(opts.fixes_off)
+    fixes -= off
     params = deep_merge(recipe.params if recipe else {}, opts.params)
     return AttemptConfig(
-        frozenset(fixes), frozenset(opts.fixes_off), params,
+        frozenset(fixes), frozenset(off), params,
         opts.jdk if opts.jdk is not None else (recipe.jdk if recipe else None),
         opts.maven or (recipe.maven if recipe else None),
-        opts.test_scope or settings.get("run", "test_scope", "relevant"))
+        opts.test_scope or (recipe.test_scope if recipe else None) or settings.get("run", "test_scope", "relevant"))
 
 
 def _count_tests(tests: dict) -> dict:
@@ -160,6 +162,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 "truth": [f.to_dict() for f in prep.truth],
                 "recipe": ({"match": recipe.match, "kind": recipe.kind, "fixes": recipe.fixes,
                             "params": recipe.params, "jdk": recipe.jdk, "maven": recipe.maven,
+                            "fixes_off": recipe.fixes_off, "test_scope": recipe.test_scope,
                             "note": recipe.note, "source": str(recipe.source)} if recipe else None)}
 
         configs: list[AttemptConfig] = []

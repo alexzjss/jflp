@@ -102,6 +102,16 @@ class CliTests(unittest.TestCase):
             _run_main(["run", "maven", "d4j/Jsoup/93", "--refresh"], self.tmp / "h")
         self.assertTrue(ex.call_args.args[4].refresh)
 
+    def test_malformed_config_prints_message_and_returns_1(self):
+        h = self.tmp / "h"
+        h.mkdir()
+        (h / "config.toml").write_text('[tools.jdks]\n"11" = "C:\\x"\n', encoding="utf-8")
+        rc, out, err = _run_main(["doctor"], h)
+        self.assertEqual(rc, 1)
+        self.assertIn("config.toml", err)
+        self.assertIn("aspas simples", err)
+        self.assertNotIn("Traceback", err)
+
     def test_run_failure_status_returns_1(self):
         with mock.patch("sbfl.cli.execute", return_value="r"), \
                 mock.patch("sbfl.cli.load_run", return_value={"status": "compilacao_falhou"}):

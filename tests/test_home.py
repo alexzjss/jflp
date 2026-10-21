@@ -30,7 +30,8 @@ class HomeTests(unittest.TestCase):
         self.assertTrue(home.config_path.is_file())
         text = home.config_path.read_text(encoding="utf-8")
         self.assertIn("#", text)
-        self.assertEqual(tomllib.loads(text)["jaguar2"]["surefire"], "3.5.3")
+        self.assertEqual(tomllib.loads(text), {})                      # só o que difere do padrão
+        self.assertEqual(load_settings(home).get("jaguar2", "surefire"), "3.5.3")
 
     def test_ensure_keeps_existing_config(self):
         home = Home(self.tmp / "h")
@@ -71,6 +72,36 @@ class HomeTests(unittest.TestCase):
         self.assertIs(again.get("run", "archive_checkout"), False)
         self.assertEqual(again.get("ui", "port"), 8123)
         self.assertEqual(again.get("bugsjar", "projects"), ["Lang", "Math"])
+
+    def test_malformed_config_raises_portuguese_value_error(self):
+        home = Home(self.tmp / "h")
+        home.root.mkdir(parents=True)
+        home.config_path.write_text('[tools.jdks]\n"11" = "C:\\Java\\jdk-11"\n', encoding="utf-8")
+        with self.assertRaises(ValueError) as cm:
+            load_settings(home)
+        msg = str(cm.exception)
+        self.assertIn("config.toml", msg)
+        self.assertIn("linha 2", msg)
+        self.assertIn("coluna", msg)
+        self.assertIn("aspas simples", msg)
+
+    def test_save_writes_only_keys_that_differ_from_defaults(self):
+        home = Home(self.tmp / "h").ensure()
+        s = load_settings(home)
+        s.set("run", "test_scope", "all")
+        s.set("tools", "jdks", {"11": "C:/jdk"})
+        s.save()
+        data = tomllib.loads(home.config_path.read_text(encoding="utf-8"))
+        self.assertEqual(data, {"run": {"test_scope": "all"}, "tools": {"jdks": {"11": "C:/jdk"}}})
+        self.assertNotIn("skip_flags", home.config_path.read_text(encoding="utf-8"))
+
+    def test_changed_default_reaches_existing_config(self):
+        home = Home(self.tmp / "h").ensure()
+        s = load_settings(home)
+        s.set("run", "test_scope", "all")
+        s.save()
+        with mock.patch.dict(DEFAULTS["run"], {"skip_flags": ["-Dnovo=true"]}):
+            self.assertEqual(load_settings(home).get("run", "skip_flags"), ["-Dnovo=true"])
 
     def test_defaults_merged(self):
         home = Home(self.tmp / "vazio")

@@ -12,6 +12,7 @@ from . import status as st
 from . import store
 from .adapters.base import Bug
 from .home import Home, load_settings
+from .prepare import _rmtree
 from .winpath import long_path
 
 SCHEMA_VERSION = 1
@@ -46,7 +47,7 @@ manifest.json
 - `test_scope`: escopo de testes (`relevant` ou `all`).
 - `n_tests`, `n_failed`: total de testes e quantos falharam ou deram erro.
 - `jdk`, `maven`: versões usadas na execução.
-- `jaguar2_version`: versão do Jaguar 2 (da configuração no momento da exportação).
+- `jaguar2_version`: versão do Jaguar 2 usada na execução (do plano do POM; se não houver registro, a da configuração no momento da exportação).
 - `recipe`: receita aplicada, se houver.
 - `path`: pasta do bug dentro do dataset, relativa à raiz.
 
@@ -99,6 +100,21 @@ def _toolenv(home: Home, rel: str) -> dict:
         return {}
 
 
+def _run_jaguar2_version(home: Home, rel: str, fallback: str) -> str:
+    """Versão do Jaguar 2 gravada no plano do POM da última tentativa real; senão a da configuração atual."""
+    attempts = store.run_dir(home, rel) / "attempts"
+    nums = sorted((int(d.name) for d in attempts.iterdir() if d.name.isdigit()), reverse=True)         if attempts.is_dir() else []
+    for n in nums:
+        try:
+            data = json.loads((attempts / str(n) / "attempt.json").read_text(encoding="utf-8"))
+            v = ((data.get("extra") or {}).get("pom_plan") or {}).get("jaguar2_version")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if v:
+            return str(v)
+    return fallback
+
+
 def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int | None = None) -> Path:
     name = _safe_name(name)
     dest = home.datasets / name
@@ -113,7 +129,7 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
     version = str(load_settings(home).get("jaguar2", "version", ""))
     rows: list[dict] = []
     tmp = home.datasets / f".{name}.tmp"
-    shutil.rmtree(long_path(tmp), ignore_errors=True)
+    _rmtree(tmp, strict=False)          # sobra de uma exportação interrompida (apaga até somente-leitura)
     tmp.mkdir(parents=True)
     try:
         for bug in bugs:
@@ -141,13 +157,15 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
                     shutil.copytree(long_path(src / "outputs" / "surefire-reports"), long_path(out / "surefire-reports"))
                 if (src / "env.json").is_file():
                     shutil.copyfile(long_path(src / "env.json"), long_path(out / "env.json"))
+                store.make_writable(out)    # as execuções são somente-leitura; o dataset exportado não
             rows.append({
                 "benchmark": bug.benchmark, "project": bug.project, "bug": bug.bug_id,
                 "status": run.get("status") or use["status"], "test_scope": run.get("test_scope") or "",
                 "n_tests": tests.get("total", ""),
                 "n_failed": ((tests.get("failed") or 0) + (tests.get("error") or 0)) if tests else "",
                 "jdk": (te.get("jdk") or {}).get("major", ""), "maven": (te.get("maven") or {}).get("version", ""),
-                "jaguar2_version": version, "recipe": _recipe_name(run), "path": rel_dir})
+                "jaguar2_version": _run_jaguar2_version(home, use["path"], version),
+                "recipe": _recipe_name(run), "path": rel_dir})
         with open(tmp / "manifest.csv", "w", encoding="utf-8", newline="") as f:
             w = csv.DictWriter(f, fieldnames=COLUMNS, lineterminator="\n")
             w.writeheader()
@@ -158,6 +176,6 @@ def export(home: Home, name: str, bugs: list[Bug] | None = None, batch_id: int |
         (tmp / "README.md").write_text(README.replace("__VERSION__", str(SCHEMA_VERSION)), encoding="utf-8")
         tmp.rename(dest)
     except BaseException:
-        shutil.rmtree(long_path(tmp), ignore_errors=True)
+        _rmtree(tmp, strict=False)
         raise
     return dest

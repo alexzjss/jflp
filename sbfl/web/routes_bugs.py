@@ -142,7 +142,8 @@ def jaguar2_get(request: Request, key: str):
     except MissingTool:
         jdk = 11
     plan = generate(Path(mod), st.settings, jdk,
-                    set(recipe.fixes) if recipe and recipe.fixes else None, set(),
+                    set(recipe.fixes) if recipe and recipe.fixes else None,
+                    set(recipe.fixes_off) if recipe else set(),
                     dict(recipe.params) if recipe else {})
     diff_lines = []
     for ln in plan.diff.splitlines():
