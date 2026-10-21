@@ -168,6 +168,50 @@ class TestPomgen(Base):
         comp = self.plugins(self.parse(plan), "maven-compiler-plugin")[0]
         self.assertEqual(comp.findtext("m:configuration/m:target", namespaces=NS), "1.8")
 
+    def _junit_module(self, parent_junit, child_extra=""):
+        (self.root / "pj").mkdir(exist_ok=True)
+        (self.root / "pj" / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>'
+            '<groupId>g</groupId><artifactId>par</artifactId><version>1</version><packaging>pom</packaging>'
+            + parent_junit + '</project>', encoding="utf-8")
+        d = self.root / "pj" / "child"
+        d.mkdir(exist_ok=True)
+        (d / "pom.xml").write_text(
+            '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>'
+            '<parent><groupId>g</groupId><artifactId>par</artifactId><version>1</version></parent>'
+            '<artifactId>child</artifactId>' + child_extra + '</project>', encoding="utf-8")
+        return d
+
+    def _junit_deps(self, plan):
+        root = self.parse(plan)
+        return [(x.findtext("m:version", namespaces=NS), x.findtext("m:scope", namespaces=NS))
+                for x in root.findall("m:dependencies/m:dependency", NS)
+                if x.findtext("m:artifactId", namespaces=NS) == "junit"], root
+
+    def test_junit3_property_in_parent_detected_and_overridden(self):
+        d = self._junit_module(
+            "<properties><junitVersion>3.8.2</junitVersion></properties><dependencyManagement><dependencies>"
+            "<dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+            "<version>${junitVersion}</version></dependency></dependencies></dependencyManagement>",
+            "<dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+            "<scope>test</scope></dependency></dependencies>")
+        plan = self.gen(d)
+        self.assertIn("junit4", plan.detected)
+        self.assertIn("junit4", plan.applied)
+        deps, root = self._junit_deps(plan)
+        self.assertEqual(deps, [("4.12", "test")])
+        self.assertEqual(root.findtext("m:properties/m:junitVersion", namespaces=NS), "4.12")
+
+    def test_junit_literal_old_overridden_and_new_not_detected(self):
+        dep = ("<dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+               "<version>%s</version><scope>test</scope></dependency></dependencies>")
+        d = self._junit_module("", dep % "3.8.1")
+        plan = self.gen(d)
+        self.assertIn("junit4", plan.applied)
+        self.assertEqual(self._junit_deps(plan)[0], [("4.12", "test")])
+        d = self._junit_module("", dep % "4.11")
+        self.assertNotIn("junit4", self.gen(d).detected)
+
     def test_fixes_on_explicit_and_params(self):
         d = self.module("minimal.xml")
         plan = self.gen(d, fixes_on={"override-version", "exclude-duplicates"}, params={

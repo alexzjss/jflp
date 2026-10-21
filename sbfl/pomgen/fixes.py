@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from ..jdk import declared_level
-from .pom import DEFAULT_GROUP, PomContext, PomDoc
+from .pom import DEFAULT_GROUP, PomContext, PomDoc, junit_declared, junit_is_old
 
 JAGUAR_GROUP = "br.usp.each.saeg"
 JAGUAR_ARTIFACTS = ["jaguar2-junit4", "jaguar2-jacoco-provider", "jaguar2-core",
@@ -156,7 +156,9 @@ def _detect_source_dirs(ctx: PomContext) -> bool:
 
 
 def _detect_junit4(ctx: PomContext) -> bool:
-    return not ctx.has_junit4
+    if not ctx.has_junit4:
+        return True
+    return junit_is_old(junit_declared(ctx.chain_texts)[0])
 
 
 def _detect_rat(ctx: PomContext) -> bool:
@@ -227,7 +229,11 @@ def _apply_source_dirs(doc: PomDoc, ctx: PomContext, params: dict) -> None:
 
 
 def _apply_junit4(doc: PomDoc, ctx: PomContext, params: dict) -> None:
-    doc.ensure_dependency("junit", "junit", ctx.versions["junit"], "test")
+    version = ctx.versions["junit"]
+    doc.ensure_dependency("junit", "junit", version, "test")
+    prop = junit_declared(ctx.chain_texts)[1]
+    if prop:        # versão vem de uma propriedade: quem usa dependencyManagement também passa a ver 4.x
+        doc.set_child(doc.child(doc.root, "properties", create=True), prop, version)
 
 
 def _split(coord: str, is_plugin: bool) -> tuple[str, str]:
@@ -269,7 +275,8 @@ FIXES: dict[str, Fix] = {f.id: f for f in [
         "sem mover arquivos.",
         _detect_source_dirs, _apply_source_dirs, {}),
     Fix("junit4", "Adicionar JUnit 4",
-        "Não há junit:junit na cadeia de POMs, e o Jaguar 2 só roda testes JUnit 4.",
+        "JUnit 3 detectado: o Surefire usaria o provedor JUnit 3, que ignora o listener do Jaguar 2 "
+        "(ou não há junit:junit na cadeia de POMs; o Jaguar 2 só roda testes JUnit 4).",
         _detect_junit4, _apply_junit4, {}),
     Fix("override-version", "Forçar versões",
         "Redeclara versões de dependências e plugins no POM gerado.",

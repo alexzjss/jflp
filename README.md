@@ -172,7 +172,7 @@ Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), 
    | `skip-animal-sniffer` | Ignorar o animal-sniffer | `animal-sniffer` aparece em algum POM da cadeia (módulo, pais) |
    | `compiler-java` | Compilar com bytecode antigo | o projeto declara Java < 8 (ou nada); fixa o `maven-compiler-plugin` (`jaguar2.compiler`) com source/target = `max(8, nível declarado)` (`1.8` quando 8; `params.target` sobrescreve) e UTF-8, porque plugins de build antigos não leem classes mais novas |
    | `source-dirs` | Ajustar pastas de código-fonte | fontes fora de `src/main/java` ou `src/test/java` (ex.: `src/test`); aponta `sourceDirectory`/`testSourceDirectory` sem mover arquivos |
-   | `junit4` | Adicionar JUnit 4 | não há `junit:junit` na cadeia de POMs |
+   | `junit4` | Adicionar JUnit 4 | não há `junit:junit` na cadeia de POMs, ou a versão efetiva (resolvendo `${...}` pelas propriedades da cadeia) é < 4: o Surefire usaria o provedor JUnit 3, que ignora o listener do Jaguar 2. Redeclara `junit:junit:4.12` (`jaguar2.junit`) no POM gerado e, se a versão vem de uma propriedade, redefine a propriedade também |
    | `override-version` | Forçar versões | nunca automática; redeclara versões de dependências/plugins (`params`: `deps`, `plugins`); usada pelo diagnóstico e pela busca |
    | `exclude-duplicates` | Excluir classes duplicadas | nunca automática; exclui arquivos duplicados da compilação, só por sugestão do diagnóstico |
    | `skip-rat` | Ignorar o Apache RAT | `apache-rat-plugin` aparece em algum POM da cadeia; define `skip` e `numUnapprovedLicenses=999999` no POM gerado |
@@ -217,6 +217,8 @@ As regras de diagnóstico (regex sobre o log, só em linhas de erro quando neces
 2. JDK `8` → `17` → `11` (o padrão do perfil é descartado como duplicata; plugins de build antigos costumam falhar com classes de JDKs novos, por isso o JDK vem antes de variar plugins);
 3. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
 4. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`.
+
+Se uma tentativa com outro JDK chegou até os testes (sucesso ou `jaguar_sem_saida`), as candidatas seguintes sem JDK próprio herdam esse JDK.
 
 Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou na tela.
 
@@ -322,6 +324,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 - **Maven bloqueia repositório `http`** ("Blocked mirror for repositories", `maven-default-http-blocker`): projetos antigos usam repositórios `http://`, que o Maven ≥ 3.8.1 bloqueia. O diagnóstico sugere primeiro a correção **`unblock-http`** (funciona também com o Maven ≥ 3.9.9 que o Jaguar 2 exige) e depois o **Maven 3.6.3** (`--maven 3.6.3`, ou receita com `maven = "3.6.3"`). Baixe-o em `jflp tools get maven 3.6.3`.
 - **maven-remote-resources-plugin** ("Could not find resource ..."): o reactor instala só o módulo do bug (`-pl <módulo> -am`) e `-Dremoteresources.skip=true` está em `run.skip_flags`; se o erro voltar, confira se o flag não foi removido da configuração.
 - **Apache RAT** ("Too many files with unapproved license"): o checkout do Bugs.jar não leva mais a pasta `.bugs-dot-jar` para a cópia de trabalho e os flags `-Drat.*` estão em `run.skip_flags`; se ainda falhar, a correção `skip-rat` desliga o plugin no POM gerado.
+- **JUnit 3 / sem `jaguar2.csv`** (testes rodaram, há relatórios do Surefire, mas o Jaguar 2 não foi acionado): o POM do projeto usa `junit` < 4 e o Surefire escolhe o provedor JUnit 3. A correção `junit4` é detectada e aplicada sozinha; o diagnóstico `jaguar_sem_saida` também a sugere. O JUnit 4 executa classes `TestCase` do JUnit 3, então os testes continuam os mesmos.
 - **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada na revisão, o diagnóstico a sugere de volta.
 - **Surefire 2.x** ("maven-surefire-plugin:2.x", "The forked VM terminated"): o Jaguar 2 precisa do Surefire 3. O POM gerado fixa `jaguar2.surefire`; se ainda falhar, a busca tenta 3.2.5 e 3.0.0-M5.
 - **Testes fora de `src/test/java`** (ex.: `src/test/org/...`; "Nenhum teste foi executado" ou "package ... does not exist"): a correção `source-dirs` aponta `testSourceDirectory` para a pasta real, sem mover arquivos.

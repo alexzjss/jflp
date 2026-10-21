@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import status as st
 from .outputs import parse_jaguar2_csv
+from .pomgen.pom import junit_declared, junit_is_old
 from .run_maven import AttemptResult
 
 MAX_LOG_BYTES = 400_000
@@ -119,6 +120,14 @@ RULES: list[Rule] = [
 
 _DUP_CLASS = re.compile(r"duplicate class:?\s+([\w.$]+)", re.I)
 _DUP_FILE = re.compile(r"(\S+\.java):\[\d+,\d+\]\s+duplicate class", re.I)
+
+
+def _pom_has_old_junit(res: AttemptResult) -> bool:
+    pom = res.outputs.get("pom")
+    try:
+        return junit_is_old(junit_declared([Path(pom).read_text(encoding="utf-8", errors="replace")])[0])
+    except (OSError, TypeError):
+        return False
 
 
 def _read_tail(log: Path | None) -> str:
@@ -241,6 +250,14 @@ def classify(kind: str, res: AttemptResult) -> Diagnosis:
     if d and not (no_csv and not from_err):
         return d
     if no_csv:
+        junit4 = Suggestion(fix="junit4", label="Forçar JUnit 4 (o Surefire pode estar usando o provedor JUnit 3)")
+        if res.outputs.get("surefire"):      # os testes rodaram, só o listener não foi acionado
+            if "surefire-junit3" in text or _pom_has_old_junit(res):
+                return Diagnosis(st.JAGUAR_SEM_SAIDA,
+                                 "testes rodaram mas o Jaguar 2 não foi acionado (provedor JUnit 3)",
+                                 suggestions=[junit4])
+            return Diagnosis(st.JAGUAR_SEM_SAIDA, "O build terminou mas o Jaguar 2 não gerou o CSV",
+                             suggestions=[junit4])
         return Diagnosis(st.JAGUAR_SEM_SAIDA, "O build terminou mas o Jaguar 2 não gerou o CSV")
     if kind == "jaguar1" and extra.get("meta_status") == st.JAGUAR_CRASH:
         return Diagnosis(st.JAGUAR_CRASH, "A JVM do Jaguar 1 caiu")

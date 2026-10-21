@@ -7,7 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -156,11 +156,14 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         real_n = 0
         keep: Path | None = None       # cópia de trabalho da última tentativa real
         missing: MissingTool | None = None
+        carry_jdk: int | None = None   # JDK que levou o build até a fase de testes
         skipped: list[str] = []        # candidatas ignoradas por falta de ferramenta
         try:
             n = 0
             while cfg is not None:
                 n += 1
+                if cfg.jdk is None and carry_jdk is not None:
+                    cfg = replace(cfg, jdk=carry_jdk)
                 configs.append(cfg)
                 if cb:
                     cb(f"# jflp tentativa {n}")
@@ -186,6 +189,8 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     _rmtree(keep)
                 res, keep, real_n = r, workdir, n
                 diag = classify(kind, res)
+                if cfg.jdk is not None and (diag.status == st.JAGUAR_SEM_SAIDA or st.is_success(diag.status)):
+                    carry_jdk = cfg.jdk
                 _write_attempt(w, n, cfg, diag, res, log)
                 stop = (st.is_success(diag.status) or not opts.auto_search or n >= max_attempts
                         or diag.status == st.TIMEOUT)

@@ -68,6 +68,22 @@ class DiagnoseTest(unittest.TestCase):
         self.assertEqual(d.suggestions[0].jdk, 8)
         self.assertEqual((d.suggestions[1].fix, d.suggestions[1].params), ("compiler-java", {"target": 8}))
 
+    def test_junit3_provider_no_csv_suggests_junit4(self):
+        reports = Path(self.tmp) / "surefire-reports"
+        reports.mkdir()
+        d = self.c("[INFO] surefire-junit3 provider\n[INFO] BUILD SUCCESS\n", kind="jaguar2", rc=0,
+                   outputs={"surefire": reports})
+        self.assertEqual(d.status, "jaguar_sem_saida")
+        self.assertEqual(d.cause, "testes rodaram mas o Jaguar 2 não foi acionado (provedor JUnit 3)")
+        self.assertEqual(d.suggestions[0].fix, "junit4")
+
+    def test_no_csv_with_reports_suggests_junit4_generically(self):
+        reports = Path(self.tmp) / "surefire-reports"
+        reports.mkdir()
+        d = self.c("[INFO] BUILD SUCCESS\n", kind="jaguar2", rc=0, outputs={"surefire": reports})
+        self.assertEqual(d.status, "jaguar_sem_saida")
+        self.assertEqual(d.suggestions[0].fix, "junit4")
+
     def test_http_blocked_suggests_unblock_first(self):
         d = self.c("[ERROR] Blocked mirror for repositories: [apache.snapshots (http://x, default)]")
         self.assertEqual(d.status, "dependencia_nao_resolvida")

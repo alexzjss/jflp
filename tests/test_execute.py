@@ -48,6 +48,9 @@ class Base(unittest.TestCase):
                 raise MissingTool("jdk", str(cfg.jdk), f"JDK {cfg.jdk} não encontrado")
             log.parent.mkdir(parents=True, exist_ok=True)
             text = SNIFFER if what in ("sniffer", "reactor") else "[INFO] BUILD SUCCESS\n"
+            if what == "nocsv":
+                return AttemptResult(0, False, 1.0, log, {"surefire": workdir}, {}, ["mvn"],
+                                     {"jdk": {"major": 8}}, {"pom_plan": {"detected": [], "diff": ""}})
             log.write_text(text, encoding="utf-8")
             if on_line:
                 for ln in text.splitlines():
@@ -206,6 +209,20 @@ class ExecuteTest(Base):
         rel, run = self.go(behave)
         self.assertTrue(any(w.startswith("tentativa ") and "ignorada: JDK 8 não encontrado" in w
                             for w in run["warnings"]), run["warnings"])
+
+    def test_jdk_that_reached_tests_is_carried_to_later_candidates(self):
+        self.settings.set("run", "max_attempts", 20)
+
+        def behave(n, c):
+            if n == 1:
+                return "sniffer"
+            return "nocsv" if c.jdk == 8 else "sniffer"
+        self.go(behave)
+        i = next(k for k, c in enumerate(self.cfgs) if c.jdk == 8)
+        self.assertTrue(all(c.jdk is None for c in self.cfgs[:i]))
+        later = [c for c in self.cfgs[i + 1:] if c.jdk != 17]
+        self.assertTrue(later)
+        self.assertTrue(all(c.jdk == 8 for c in later), [c.jdk for c in later])
 
     def test_missing_tool_on_every_candidate_keeps_last_real(self):
         self.settings.set("run", "max_attempts", 20)

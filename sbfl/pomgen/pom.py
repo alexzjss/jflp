@@ -282,3 +282,45 @@ def build_context(module_dir: Path, settings, jdk: int) -> PomContext:
     versions = {k: settings.get("jaguar2", k) for k in ("version", "jacoco", "surefire", "compiler", "junit")}
     return PomContext(module_dir, texts, jdk, versions, test_dir, main_dir, has4,
                       bool(_JUNIT5.search(joined)) and not has4, _surefire_argline(texts))
+
+
+_PROP_REF = re.compile(r"\$\{([^}]+)\}")
+
+
+def junit_declared(texts: list[str]) -> tuple[str | None, str | None]:
+    """(versão efetiva do junit:junit, propriedade de onde ela vem) na cadeia de POMs.
+
+    `texts` vem do módulo para os pais; `${...}` é resolvido pelas `<properties>` da cadeia
+    (o filho vence). (None, None) quando nenhum POM declara versão."""
+    docs = []
+    for t in texts:
+        try:
+            docs.append(PomDoc.from_text(t))
+        except ET.ParseError:
+            pass
+    props: dict[str, str] = {}
+    for d in reversed(docs):            # do pai mais distante ao módulo: o filho sobrescreve
+        el = d.child(d.root, "properties")
+        for p in (list(el) if el is not None else []):
+            if isinstance(p.tag, str):
+                props[p.tag.rsplit("}", 1)[-1]] = _text(p)
+    for d in docs:
+        for path in (("dependencies",), ("dependencyManagement", "dependencies")):
+            deps = d.path(d.root, *path)
+            for dep in (deps.findall(d.q("dependency")) if deps is not None else []):
+                if _text(d.child(dep, "groupId")) != "junit" or _text(d.child(dep, "artifactId")) != "junit":
+                    continue
+                raw = _text(d.child(dep, "version"))
+                if not raw:
+                    continue
+                whole = _PROP_REF.fullmatch(raw)
+                value = raw
+                for _ in range(5):
+                    value = _PROP_REF.sub(lambda m: props.get(m.group(1), m.group(0)), value)
+                return value, (whole.group(1) if whole else None)
+    return None, None
+
+
+def junit_is_old(version: str | None) -> bool:
+    m = re.match(r"\d+", version or "")
+    return bool(m) and int(m.group()) < 4
