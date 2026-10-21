@@ -10,10 +10,13 @@ from .outputs import parse_surefire
 from .pomgen import generate, write
 from .pomgen.fixes import JAGUAR_ARTIFACTS, JAGUAR_GROUP
 from .prepare import Prepared
-from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
-                        reactor_failure, test_selection_args, UNBLOCK_HTTP)
+from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, phase_record,
+                        settings_args, reactor_failure, test_selection_args, UNBLOCK_HTTP)
 from .toolchain.profiles import ToolEnv, resolve
 
+# O CSV usa o locale da JVM (decimal "0,7071" em pt-BR, quebrando as colunas): força en-US na JVM do
+# Surefire via JAVA_TOOL_OPTIONS (só nesta chamada). O perfil já remove o JAVA_TOOL_OPTIONS do usuário.
+LOCALE_OPTS = "-Duser.language=en -Duser.country=US"
 FAIL_IGNORE = ["-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                "-Dsurefire.failIfNoSpecifiedTests=false"]
 
@@ -30,11 +33,14 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     total = 0.0
 
     sargs = settings_args(home, cfg)
+    phases: list[dict] = []
     r = install_reactor(te, settings, prep, workdir, log, on_line, sargs)
     if r is not None:
         total += r["seconds"]
+        phases.append(phase_record("reactor", r["command"], te.env))
         failed = reactor_failure(r, log, desc)
         if failed:
+            failed.phases = phases
             return failed
 
     log_phase(log, "pom", on_line)
@@ -48,7 +54,7 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     except ValueError:
         extra["fase"] = "pom"
         extra["erro"] = "; ".join(plan.warnings) or "não foi possível gerar o jaguar2-pom.xml"
-        return AttemptResult(None, False, total, log, {}, {}, [], desc, extra)
+        return AttemptResult(None, False, total, log, {}, {}, [], desc, extra, phases)
 
     log_phase(log, "jaguar2", on_line)
     # O Jaguar 2 só analisa as classes listadas em jaguar2.classesDirs (propriedade de sistema da JVM
@@ -56,10 +62,8 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     classes_dirs = f"-Djaguar2.classesDirs={mod / 'target' / 'classes'}"
     cmd = te.mvn(*sargs, "-f", "jaguar2-pom.xml", "clean", "test", classes_dirs, *FAIL_IGNORE, *skip,
                  *test_selection_args(prep, cfg.test_scope, workdir))
-    # O CSV usa o locale da JVM (decimal "0,7071" em pt-BR, quebrando as colunas): força en-US
-    # na JVM do Surefire via JAVA_TOOL_OPTIONS (só nesta chamada), preservando opções já existentes.
-    opts = " ".join(x for x in ("-Duser.language=en -Duser.country=US", te.env.get("JAVA_TOOL_OPTIONS")) if x)
-    env = {**te.env, "JAVA_TOOL_OPTIONS": opts}
+    env = {**te.env, "JAVA_TOOL_OPTIONS": LOCALE_OPTS}
+    phases.append(phase_record("jaguar2", cmd, env))
     r = proc.run(cmd, cwd=mod, env=env, timeout=timeout, log_path=log, on_line=on_line)
     total += r["seconds"]
 
@@ -74,7 +78,8 @@ def run_jaguar2(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     if reports.is_dir():
         outputs["surefire"] = reports
         tests = parse_surefire(reports)
-    return AttemptResult(r["rc"], r["timed_out"], round(total, 1), log, outputs, tests, cmd, desc, extra)
+    return AttemptResult(r["rc"], r["timed_out"], round(total, 1), log, outputs, tests, cmd, desc, extra,
+                         phases)
 
 
 def prefetch_jaguar2(home: Home, settings: Settings, toolenv: ToolEnv | None = None) -> bool:

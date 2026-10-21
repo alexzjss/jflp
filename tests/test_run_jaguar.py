@@ -183,15 +183,19 @@ class Jaguar2Test(Base):
         self.assertIn("# jflp falhou: org.apache.maven.surefire:surefire-junit4:3.5.3", log)
         self.assertEqual(len(self.read_calls()), 10)   # continua nas demais
 
-    def test_jaguar2_prepends_locale_to_existing_java_tool_options(self):
+    def test_jaguar2_forces_locale_and_records_phases_with_env(self):
         work = self.tmp / "w"
-        work.mkdir()
-        (work / "pom.xml").write_text(POM.format("p"))
+        (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text(POM.format("root"))
+        (work / "core" / "pom.xml").write_text(POM.format("core"))
         te = self.toolenv()
-        te.env["JAVA_TOOL_OPTIONS"] = "-Xmx512m"
-        run_jaguar2(self.home, self.settings, self._prep(work, "."), work, AttemptConfig(),
-                    self.tmp / "run.log", toolenv=te)
-        self.assertEqual(self.read_calls()[0]["jto"], "-Duser.language=en -Duser.country=US -Xmx512m")
+        te.env["JAVA_HOME"] = "C:/jdk 11"
+        r = run_jaguar2(self.home, self.settings, self._prep(work, "core"), work, AttemptConfig(),
+                        self.tmp / "run.log", toolenv=te)
+        self.assertEqual([p["name"] for p in r.phases], ["reactor", "jaguar2"])
+        self.assertEqual(r.phases[1]["env"]["JAVA_TOOL_OPTIONS"], "-Duser.language=en -Duser.country=US")
+        self.assertEqual(r.phases[1]["env"]["JAVA_HOME"], "C:/jdk 11")
+        self.assertEqual(r.phases[1]["command"], r.command)
 
     def test_jaguar2_sets_locale_without_existing_java_tool_options(self):
         work = self.tmp / "w"

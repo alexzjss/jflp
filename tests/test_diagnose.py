@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sbfl import status as st
 from sbfl.diagnose import RULES, classify
 from sbfl.run_maven import AttemptResult
 
@@ -91,22 +92,22 @@ class DiagnoseTest(unittest.TestCase):
         self.assertEqual(d.suggestions[1].maven, "3.6.3")
 
     def test_suggestion_ids(self):
-        d = self.c("[ERROR] Failed to execute goal maven-surefire-plugin:2.12.4:test")
+        d = self.c("[ERROR] Failed to execute goal maven-surefire-plugin:2.12.4:test", kind="jaguar2")
         self.assertEqual(d.suggestions[0].fix, "override-version")
         self.assertEqual(d.suggestions[0].params,
                          {"plugins": {"org.apache.maven.plugins:maven-surefire-plugin": "3.2.5"}})
-        d = self.c("[ERROR] maven-compiler-plugin:3.1 Fatal error compiling")
+        d = self.c("[ERROR] maven-compiler-plugin:3.1 Fatal error compiling", kind="jaguar2")
         self.assertEqual((d.suggestions[0].fix, d.suggestions[0].params), ("compiler-java", {"version": "3.1"}))
         d = self.c("Blocked mirror for repositories")
         self.assertEqual((d.suggestions[0].fix, d.suggestions[1].maven), ("unblock-http", "3.6.3"))
-        d = self.c("No tests were executed")
+        d = self.c("No tests were executed", kind="jaguar2")
         self.assertEqual(d.suggestions[-1].params, {"test_scope": "all"})
         self.assertIsNone(d.suggestions[-1].fix)
 
     def test_duplicates(self):
         log = ("[ERROR] /w/src/X.java:[3,8] duplicate class: a.b.X\n"
                "error: duplicate class: a.b.C\n")
-        d = self.c(log)
+        d = self.c(log, kind="jaguar2")
         self.assertEqual(d.status, "classes_duplicadas")
         self.assertEqual(d.suggestions[0].fix, "exclude-duplicates")
         files = d.suggestions[0].params["files"]
@@ -134,6 +135,49 @@ class DiagnoseTest(unittest.TestCase):
         d = self.c("", kind="jaguar2", outputs={"jaguar2_csv": csv}, tests={"A#a": "passed"})
         self.assertEqual(d.status, "ok")
         self.assertIn("nenhum teste falhou: relatório vazio (defeito não reproduzido)", d.warnings)
+
+    def test_empty_jaguar2_csv_with_failing_tests_is_jaguar_sem_saida(self):
+        csv = Path(self.tmp) / "j.csv"
+        csv.write_text("")
+        d = self.c("", kind="jaguar2", outputs={"jaguar2_csv": csv}, tests={"A#a": "failed", "A#b": "passed"})
+        self.assertEqual(d.status, "jaguar_sem_saida")
+        self.assertIn("relatório do Jaguar 2 está vazio", d.cause)
+        self.assertEqual([s.fix for s in d.suggestions], ["junit4"])
+
+    def test_empty_jaguar2_csv_with_failing_tests_not_a_success(self):
+        csv = Path(self.tmp) / "j.csv"
+        csv.write_text("")
+        d = self.c("", kind="jaguar2", outputs={"jaguar2_csv": csv}, tests={"A#a": "error"})
+        self.assertFalse(st.is_success(d.status))
+
+    def test_pom_fixes_only_suggested_for_jaguar2(self):
+        for kind in ("maven", "jaguar1"):
+            d = self.c("[ERROR] Failed to execute goal maven-surefire-plugin:2.12.4:test", kind=kind)
+            self.assertEqual([s.fix for s in d.suggestions if s.fix], [], kind)
+            d = self.c("[ERROR] Failed to execute goal animal-sniffer undefined reference", kind=kind)
+            self.assertEqual(d.suggestions, [], kind)
+        d = self.c("[ERROR] Failed to execute goal maven-surefire-plugin:2.12.4:test", kind="jaguar2")
+        self.assertEqual(d.suggestions[0].fix, "override-version")
+
+    def test_unblock_http_applies_to_every_kind_and_jaguar2_never_gets_maven_363(self):
+        log = "[ERROR] Blocked mirror for repositories: [apache.snapshots (http://x, default)]"
+        d2 = self.c(log, kind="jaguar2")
+        self.assertEqual([(s.fix, s.maven) for s in d2.suggestions], [("unblock-http", None)])
+        dm = self.c(log, kind="maven")
+        self.assertEqual([(s.fix, s.maven) for s in dm.suggestions], [("unblock-http", None), (None, "3.6.3")])
+        dj1 = self.c(log, kind="jaguar1")
+        self.assertEqual(dj1.suggestions[0].fix, "unblock-http")
+        res_ = self.c("Could not resolve dependencies for project", kind="jaguar2")
+        self.assertFalse(any(s.maven for s in res_.suggestions))
+
+    def test_applicable_filters_stored_suggestions(self):
+        from sbfl.diagnose import applicable
+        sugs = [{"fix": "junit4"}, {"fix": "unblock-http"}, {"maven": "3.6.3", "fix": None},
+                {"jdk": 8, "fix": None}]
+        self.assertEqual([s.get("fix") or s.get("maven") or s.get("jdk") for s in applicable("maven", sugs)],
+                         ["unblock-http", "3.6.3", 8])
+        self.assertEqual([s.get("fix") or s.get("maven") or s.get("jdk") for s in applicable("jaguar2", sugs)],
+                         ["junit4", "unblock-http", 8])
 
     def test_jaguar2_unreadable_csv(self):
         csv = Path(self.tmp) / "j.csv"
@@ -202,7 +246,7 @@ class DiagnoseTest(unittest.TestCase):
     def test_duplicate_paths_relative(self):
         log = ("[ERROR] /x/src/main/java/a/b/X.java:[3,8] duplicate class: a.b.X\n"
                "[ERROR] /y/src/java/a/b/X.java:[3,8] duplicate class: a.b.X\n")
-        d = self.c(log)
+        d = self.c(log, kind="jaguar2")
         self.assertEqual(d.suggestions[0].params["files"], ["a/b/X.java"])
 
     def test_jaguar2_csv_oserror(self):

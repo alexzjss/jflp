@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
-from .diagnose import Diagnosis, Suggestion
+from .diagnose import Diagnosis, Suggestion, _keep
 from .run_maven import AttemptConfig
 from .toolchain.profiles import PROFILES
 
@@ -59,7 +59,7 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
     """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir e limitado por run.max_attempts."""
     detected = set(detected or ())
     out = [_from_suggestion(first, s, kind, detected)
-           for s in diag.suggestions if s.fix != "exclude-duplicates"]
+           for s in diag.suggestions if s.fix != "exclude-duplicates" and _keep(kind, s.fix, s.maven)]
     for j in JDKS:      # JDK antes de variar plugins: sintomas de bytecode novo pedem JDK 8
         out.append(replace(first, jdk=_default_jdk(first, kind, j) or first.jdk))
     if kind == "jaguar2":

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
-from . import recipes
+from . import proc, recipes
 from . import status as st
 from .adapters.base import Bug
 from .autosearch import candidates, deep_merge
@@ -23,7 +23,7 @@ from .prepare import _rmtree, prepare, working_copy
 from .winpath import long_path
 from .run_jaguar1 import run_jaguar1
 from .run_jaguar2 import run_jaguar2
-from .run_maven import AttemptConfig, AttemptResult, run_maven
+from .run_maven import AttemptConfig, AttemptResult, format_commands, run_maven
 from .store import RunWriter
 from .toolchain.profiles import MissingTool
 
@@ -35,6 +35,8 @@ class RunOptions:
     test_scope: str | None = None
     fixes_on: frozenset | None = None
     fixes_off: frozenset = frozenset()
+    refresh: bool = False                # refaz a cópia pristine antes de rodar
+    fixes_add: frozenset = frozenset()   # acrescentadas às detectadas/da receita (não substituem)
     params: dict = field(default_factory=dict)
     jdk: int | None = None
     maven: str | None = None
@@ -134,13 +136,26 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
     max_attempts = int(settings.get("run", "max_attempts", 6))
     with RunWriter(home, bug, kind, opts.parent) as w:
         try:
-            prep = prepare(home, settings, bug, w.dir / "attempts" / "0-prepare.log")
+            prep = prepare(home, settings, bug, w.dir / "attempts" / "0-prepare.log", refresh=opts.refresh)
         except StageError as e:
             _stopped(w, e.status, e.detail)
             return w.rel
 
+        mod = prep.pristine if prep.module == "." else prep.pristine / prep.module
+        if kind == "jaguar2" and (prep.info.get("jaguar2_suportado") is False or not (mod / "pom.xml").is_file()):
+            w.write_json("env.json", _env_info(prep, None))
+            w.write_text("command.txt", "")
+            _stopped(w, st.DESCONHECIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
+                     attempts=0, test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
+                     relevant_tests=prep.relevant_tests, truth=[f.to_dict() for f in prep.truth])
+            return w.rel
+
         recipe = recipes.find(home, bug, kind)
         first = _first_config(settings, recipe, opts)
+        if opts.fixes_add:
+            # "só estas" (fixes_on) esconderia as detectadas: parte das detectadas e acrescenta
+            base_on = set(first.fixes_on) or (_detected_for(prep, settings) if kind == "jaguar2" else set())
+            first = replace(first, fixes_on=frozenset((base_on | set(opts.fixes_add)) - set(opts.fixes_off)))
         base = {"test_scope": first.test_scope, "relevant_tests": prep.relevant_tests,
                 "truth": [f.to_dict() for f in prep.truth],
                 "recipe": ({"match": recipe.match, "kind": recipe.kind, "fixes": recipe.fixes,
@@ -158,6 +173,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         missing: MissingTool | None = None
         carry_jdk: int | None = None   # JDK que levou o build até a fase de testes
         skipped: list[str] = []        # candidatas ignoradas por falta de ferramenta
+        aborted = False                # app fechando: encerra como `interrompido`
         try:
             n = 0
             while cfg is not None:
@@ -182,6 +198,10 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                         break
                     cfg = queue.pop(0) if queue and n < max_attempts else None
                     continue
+                except proc.Aborted:
+                    _rmtree(workdir)
+                    aborted = True
+                    break
                 except BaseException:
                     _rmtree(workdir)
                     raise
@@ -192,13 +212,19 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 if cfg.jdk is not None and (diag.status == st.JAGUAR_SEM_SAIDA or st.is_success(diag.status)):
                     carry_jdk = cfg.jdk
                 _write_attempt(w, n, cfg, diag, res, log)
+                if proc.aborted():
+                    aborted = True
+                    break
                 stop = (st.is_success(diag.status) or not opts.auto_search or n >= max_attempts
                         or diag.status == st.TIMEOUT)
                 if n == 1 and not stop:
                     queue = candidates(first, diag, kind, settings, _detected(prep, settings, kind, res))
                 cfg = None if stop or not queue else queue.pop(0)
 
-            if missing is not None:
+            if aborted:
+                _stopped(w, st.INTERROMPIDO, "execução interrompida: o aplicativo foi fechado",
+                         attempts=real_n, attempt_configs=[c.to_dict() for c in configs], **base)
+            elif missing is not None:
                 status = st.JDK_INCOMPATIVEL if missing.kind == "jdk" else st.DESCONHECIDO
                 w.write_json("env.json", _env_info(prep, None))
                 w.write_text("command.txt", "")
@@ -212,13 +238,13 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
     return w.rel
 
 
-def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
-    """Correções detectadas no POM; se a 1ª tentativa falhou antes de gerá-lo, calcula sem gravar nada."""
-    plan = res.extra.get("pom_plan")
-    if plan is not None:
-        return set(plan.get("detected") or [])
-    if kind != "jaguar2":
-        return set()
+def _quote(cmd) -> str:
+    return subprocess.list2cmdline([str(c) for c in cmd]) if sys.platform == "win32" else shlex.join(
+        str(c) for c in cmd)
+
+
+def _detected_for(prep, settings) -> set[str]:
+    """Correções detectadas no pom.xml do módulo (sem gravar nada)."""
     try:
         mod = prep.pristine if prep.module == "." else prep.pristine / prep.module
         return set(pom_generate(mod, settings, 11).detected)
@@ -226,11 +252,20 @@ def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
         return set()
 
 
+def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
+    """Correções detectadas no POM; se a 1ª tentativa falhou antes de gerá-lo, calcula sem gravar nada."""
+    plan = res.extra.get("pom_plan")
+    if plan is not None:
+        return set(plan.get("detected") or [])
+    return _detected_for(prep, settings) if kind == "jaguar2" else set()
+
+
 def _finalize(settings, w: RunWriter, kind, prep, opts, res: AttemptResult, diag: Diagnosis,
               workdir: Path, configs, real_n: int, base, skipped: list[str] | None = None) -> None:
     _copy_outputs(w, kind, res, real_n)
     w.write_json("env.json", _env_info(prep, res))
-    w.write_text("command.txt", shlex.join(str(c) for c in res.command) + "\n" if res.command else "")
+    w.write_text("command.txt", format_commands(res.phases) if res.phases else (
+        _quote(res.command) + "\n" if res.command else ""))
     warnings = list(diag.warnings) + list(skipped or [])
     run = {"status": diag.status, "diagnosis": diag.to_dict(), "warnings": warnings,
            "tests": _count_tests(res.tests), "attempts": len(configs),

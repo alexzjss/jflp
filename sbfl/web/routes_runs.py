@@ -19,6 +19,7 @@ from .. import compare, dataset, recipes, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..adapters.base import Bug
+from ..diagnose import applicable
 from ..diffgt import FaultLine, select_lines
 from ..outputs import outer, test_counts
 from ..run_maven import AttemptConfig
@@ -267,15 +268,39 @@ def run_open(request: Request, rel: str):
 
 # --------------------------------------------------- tentar de novo / receita
 
-def _retry_opts(run: dict, rel: str, sug: dict) -> dict:
+def _detected_fixes(d: Path | None, run: dict) -> list[str] | None:
+    """Correções detectadas do POM na última tentativa real (attempt.json → extra.pom_plan.detected)."""
+    if d is None:
+        return None
+    n = len(run.get("attempt_configs") or []) or int(run.get("attempts") or 0)
+    for k in range(n, 0, -1):
+        try:
+            data = json.loads((d / "attempts" / str(k) / "attempt.json").read_text(encoding="utf-8"))
+            plan = (data.get("extra") or {}).get("pom_plan")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(plan, dict) and isinstance(plan.get("detected"), list):
+            return [str(x) for x in plan["detected"]]
+    return None
+
+
+def _retry_opts(run: dict, rel: str, sug: dict, d: Path | None = None) -> dict:
     cfg = _last_cfg(run)
     fixes_on = list(cfg["fixes_on"])
+    add: list[str] = []
+    fix = sug.get("fix")
+    if not fixes_on and fix and run.get("kind") == "jaguar2":
+        # fixes_on vazio significa "detectadas": parte delas, ou os acrescentaria só a sugestão
+        detected = _detected_fixes(d, run)
+        if detected is None:
+            add = [fix]               # sem registro: o execute soma a sugestão às detectadas
+        else:
+            fixes_on = [f for f in detected if f not in cfg["fixes_off"]]
     params = {k: v for k, v in (cfg["params"] or {}).items()}
     jdk, maven, scope = cfg["jdk"], cfg["maven"], cfg["test_scope"]
-    fix = sug.get("fix")
     sparams = dict(sug.get("params") or {})
     if fix:
-        if fix not in fixes_on:
+        if fix not in fixes_on and not add:
             fixes_on.append(fix)
         if sparams:
             params[fix] = sparams
@@ -285,9 +310,12 @@ def _retry_opts(run: dict, rel: str, sug: dict) -> dict:
         jdk = sug["jdk"]
     if sug.get("maven"):
         maven = sug["maven"]
-    return {"test_scope": scope, "auto_search": False, "fixes_on": fixes_on,
+    opts = {"test_scope": scope, "auto_search": False, "fixes_on": fixes_on,
             "fixes_off": [f for f in cfg["fixes_off"] if f != fix], "params": params,
             "jdk": jdk, "maven": maven, "parent": rel}
+    if add:
+        opts["fixes_add"] = add
+    return opts
 
 
 @router.post("/run/{rel:path}/tentar")
@@ -296,7 +324,7 @@ def run_retry(request: Request, rel: str, idx: int = Form(...), confirmar: str =
     if got is None:
         return _no_run(request, rel)
     run = got[0]
-    sugs = (run.get("diagnosis") or {}).get("suggestions") or []
+    sugs = applicable(run.get("kind") or "", (run.get("diagnosis") or {}).get("suggestions") or [])
     if not 0 <= idx < len(sugs):
         return _msg(request, "bugs", "Sugestão inválida", "Essa sugestão não existe nesta execução.", 400)
     sug = sugs[idx]
@@ -308,7 +336,7 @@ def run_retry(request: Request, rel: str, idx: int = Form(...), confirmar: str =
         return _msg(request, "bugs", "Bug não encontrado", f"Não foi possível reconstruir o bug {run.get('bug')}.", 404)
     st = request.app.state
     bid = jobs_queue.create_batch(st.home, f"nova tentativa de {rel}", [bug], [run["kind"]],
-                                  _retry_opts(run, rel, sug))
+                                  _retry_opts(run, rel, sug, got[1]))
     job = jobs_queue.batch_jobs(st.home, bid)[0]
     return RedirectResponse(f"/job/{job['id']}/ao-vivo", status_code=303)
 
@@ -350,7 +378,9 @@ def run_page(request: Request, rel: str):
         results = {}
     counts = run.get("tests") or (test_counts(results) if results else None)
     failing = sorted(t for t, s in results.items() if s in ("failed", "error"))
-    diag = run.get("diagnosis") or {}
+    diag = dict(run.get("diagnosis") or {})
+    if diag.get("suggestions"):
+        diag["suggestions"] = applicable(run.get("kind") or "", diag["suggestions"])
     files = _files(d)
     ctx = {"page": "bugs", "rel": rel, "run": run, "diag": diag, "counts": counts,
            "failing": failing, "files": files[:MAX_FILES], "more_files": max(0, len(files) - MAX_FILES),

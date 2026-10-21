@@ -217,7 +217,29 @@ def _success(kind: str, res: AttemptResult) -> bool:
     return bool(p) and Path(p).exists()
 
 
+def _keep(kind: str, fix: str | None, maven: str | None) -> bool:
+    """Correções do POM só valem para o Jaguar 2 (unblock-http vale para todos); o Jaguar 2 exige Maven >= 3.9.9."""
+    if fix and kind != "jaguar2" and fix != "unblock-http":
+        return False
+    return not (maven and kind == "jaguar2")
+
+
+def applicable(kind: str, sugs: list[dict]) -> list[dict]:
+    """Filtra sugestões já gravadas (dicts) pelo tipo da execução; usada na tela e no "tentar de novo"."""
+    return [s for s in sugs if _keep(kind, s.get("fix"), s.get("maven"))]
+
+
 def classify(kind: str, res: AttemptResult) -> Diagnosis:
+    d = _classify(kind, res)
+    d.suggestions = [s for s in d.suggestions if _keep(kind, s.fix, s.maven)]
+    return d
+
+
+def _junit4_suggestion() -> Suggestion:
+    return Suggestion(fix="junit4", label="Forçar JUnit 4 (o Surefire pode estar usando o provedor JUnit 3)")
+
+
+def _classify(kind: str, res: AttemptResult) -> Diagnosis:
     if res.timed_out:
         return Diagnosis(st.TIMEOUT, "A tentativa excedeu o tempo limite")
     extra = res.extra or {}
@@ -237,7 +259,11 @@ def classify(kind: str, res: AttemptResult) -> Diagnosis:
                 scores = parse_jaguar2_csv(Path(res.outputs["jaguar2_csv"]))
             except (ValueError, OSError) as e:
                 return Diagnosis(st.JAGUAR_SEM_SAIDA, "relatório do Jaguar 2 ilegível", [str(e)[:MAX_LINE]])
-            if not scores and not failed:
+            if not scores and failed:   # §8.5.5: sucesso exige relatório não vazio quando há falhas
+                return Diagnosis(st.JAGUAR_SEM_SAIDA,
+                                 "testes falharam mas o relatório do Jaguar 2 está vazio "
+                                 "(cobertura/classesDirs não ligados)", suggestions=[_junit4_suggestion()])
+            if not scores:
                 warnings.append("nenhum teste falhou: relatório vazio (defeito não reproduzido)")
         return Diagnosis(st.OK_TEST_FAIL if failed else st.OK, warnings=warnings)
 
@@ -250,7 +276,7 @@ def classify(kind: str, res: AttemptResult) -> Diagnosis:
     if d and not (no_csv and not from_err):
         return d
     if no_csv:
-        junit4 = Suggestion(fix="junit4", label="Forçar JUnit 4 (o Surefire pode estar usando o provedor JUnit 3)")
+        junit4 = _junit4_suggestion()
         if res.outputs.get("surefire"):      # os testes rodaram, só o listener não foi acionado
             if "surefire-junit3" in text or _pom_has_old_junit(res):
                 return Diagnosis(st.JAGUAR_SEM_SAIDA,

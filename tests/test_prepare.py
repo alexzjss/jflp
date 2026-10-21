@@ -68,6 +68,70 @@ class PrepareTests(Base):
         self.assertEqual(before, (src.stat().st_mtime_ns, (src / "pom.xml").stat().st_mtime_ns))
         self.assertTrue((src / "target" / "x").exists())
 
+    def test_copy_keeps_test_inputs_and_drops_only_module_build_output(self):
+        src = self.root / "inputs"
+        files = {"pom.xml": "<project/>",
+                 "target/classes/X.class": "x",                          # saída do build do módulo
+                 "src/test/projects/x/target/foo.txt": "fixture",        # entrada de teste (sem pom.xml ao lado)
+                 "src/test/resources/A.class": "bytes",                  # entrada de teste
+                 "src/test/projects/y/pom.xml": "<project/>",
+                 "src/test/projects/y/target/out.txt": "build de y",     # target ao lado de um pom.xml
+                 ".idea/workspace.xml": "ide"}
+        for rel, text in files.items():
+            f = src / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(text)
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        p = prep.pristine
+        self.assertTrue((p / "src/test/projects/x/target/foo.txt").exists())
+        self.assertTrue((p / "src/test/resources/A.class").exists())
+        self.assertFalse((p / "target").exists())
+        self.assertFalse((p / "src/test/projects/y/target").exists())
+        self.assertFalse((p / ".idea").exists())
+        w = P.working_copy(prep, self.home)
+        self.assertTrue((w / "src/test/projects/x/target/foo.txt").exists())
+        self.assertTrue((w / "src/test/resources/A.class").exists())
+        self.assertFalse((w / P.MARKER).exists())
+
+    def test_local_folder_edits_are_picked_up(self):
+        src = self.root / "live"
+        src.mkdir()
+        (src / "a.txt").write_text("1")
+        bug = P.local_bug(str(src))
+        first = P.prepare(self.home, self.settings, bug, self.log)
+        (first.pristine / "extra.txt").write_text("keep")
+        same = P.prepare(self.home, self.settings, bug, self.log)            # nada mudou: reaproveita
+        self.assertTrue((same.pristine / "extra.txt").exists())
+        (src / "a.txt").write_text("2222")                                    # arquivo editado
+        edited = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertEqual((edited.pristine / "a.txt").read_text(), "2222")
+        self.assertFalse((edited.pristine / "extra.txt").exists())
+        (src / "b.txt").write_text("novo")                                    # arquivo novo
+        self.assertTrue((P.prepare(self.home, self.settings, bug, self.log).pristine / "b.txt").exists())
+        (src / "b.txt").unlink()                                              # arquivo removido
+        self.assertFalse((P.prepare(self.home, self.settings, bug, self.log).pristine / "b.txt").exists())
+
+    def test_local_folder_ignored_changes_do_not_refresh(self):
+        src = self.root / "live2"
+        (src / "target").mkdir(parents=True)
+        (src / "pom.xml").write_text("<project/>")
+        bug = P.local_bug(str(src))
+        first = P.prepare(self.home, self.settings, bug, self.log)
+        (first.pristine / "extra.txt").write_text("keep")
+        (src / "target" / "novo.class").write_text("saída do build")          # não é copiado: não conta
+        again = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertTrue((again.pristine / "extra.txt").exists())
+
+    def test_local_folder_refresh_flag_forces_recopy(self):
+        src = self.root / "live3"
+        src.mkdir()
+        (src / "a.txt").write_text("1")
+        bug = P.local_bug(str(src))
+        first = P.prepare(self.home, self.settings, bug, self.log)
+        (first.pristine / "extra.txt").write_text("keep")
+        again = P.prepare(self.home, self.settings, bug, self.log, refresh=True)
+        self.assertFalse((again.pristine / "extra.txt").exists())
+
     def test_bugsjar_checkout_with_fake_repo(self):
         fix = self.fake_bugsjar()
         bugs = P.list_bugs(self.settings, "bugsjar")

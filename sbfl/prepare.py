@@ -28,7 +28,43 @@ from .winpath import long_path
 MARKER = "prepared.json"
 _LOCKS: dict[str, threading.Lock] = {}
 _LOCKS_GUARD = threading.Lock()
-_IGNORE_COPY = shutil.ignore_patterns("target", ".idea", "*.class")
+
+
+def _ignore_names(directory, names) -> set[str]:
+    """Nomes a não copiar: `.idea` e o `target` de build de um módulo (o que está ao lado de um pom.xml).
+    Um `target/` sem pom.xml ao lado, e qualquer `*.class`, são entradas de teste e ficam."""
+    skip = {n for n in names if n == ".idea"}
+    if "pom.xml" in names and "target" in names:
+        skip.add("target")
+    return skip
+
+
+def _ignore_copy(directory, names) -> set[str]:
+    return _ignore_names(directory, names)
+
+
+def _ignore_work(directory, names) -> set[str]:
+    return _ignore_names(directory, names) | {n for n in names if n in (".git", ".bugs-dot-jar", MARKER)}
+
+
+def tree_signature(src: Path) -> str:
+    """Assinatura barata da árvore que seria copiada: nº de arquivos, mtime mais novo e tamanho total.
+    Muda quando um arquivo é criado, removido ou editado (o app não relê o conteúdo)."""
+    count, newest, size = 0, 0, 0
+    for root, dirs, files in os.walk(long_path(src)):
+        skip = _ignore_names(root, set(dirs) | set(files)) | {".git"}
+        dirs[:] = [d for d in dirs if d not in skip]
+        for f in files:
+            if f in skip:
+                continue
+            try:
+                st = os.stat(os.path.join(root, f))
+            except OSError:
+                continue
+            count += 1
+            size += st.st_size
+            newest = max(newest, st.st_mtime_ns)
+    return f"{count}:{newest}:{size}"
 _D4J_TIMEOUT = 3600
 
 
@@ -251,8 +287,9 @@ def _local_prepare(home: Home, bug: Bug, dest: Path, log: Path) -> Prepared:
         src = Path(e["path"])
         if not src.is_dir():
             raise _fail(f"Pasta não encontrada: {src}")
-        shutil.copytree(long_path(src), long_path(dest), ignore=_IGNORE_COPY)
-        return Prepared(bug, dest, ".", None, [], {})
+        sig = tree_signature(src)
+        shutil.copytree(long_path(src), long_path(dest), ignore=_ignore_copy)
+        return Prepared(bug, dest, ".", None, [], {"source_signature": sig})
     url, commit = e["repo"], e["commit"]
     is_path = Path(url).expanduser().exists()
     src = str(Path(url).expanduser().resolve()) if is_path else url
@@ -276,6 +313,18 @@ def _marker_data(prep: Prepared) -> dict:
     return {"pristine": str(prep.pristine), "module": prep.module,
             "relevant_tests": prep.relevant_tests,
             "truth": [f.to_dict() for f in prep.truth], "info": prep.info}
+
+
+def _local_changed(bug: Bug, marker: Path) -> bool:
+    """Bug local por pasta: a origem mudou desde a cópia (assinatura da árvore diferente)?"""
+    path = bug.extra.get("path") if bug.benchmark == "local" else None
+    if not path or not Path(path).is_dir():
+        return False
+    try:
+        old = json.loads(marker.read_text(encoding="utf-8")).get("info", {}).get("source_signature")
+    except (OSError, ValueError):
+        return False
+    return old != tree_signature(Path(path))
 
 
 def _remove_pristine(dest: Path, repo: str | None = None) -> None:
@@ -304,6 +353,8 @@ def _prepare_locked(home: Home, settings: Settings, bug: Bug, log: Path, refresh
     marker = dest / MARKER
     if refresh and dest.exists():
         _remove_pristine(dest)
+    if marker.exists() and _local_changed(bug, marker):
+        _remove_pristine(dest)          # a pasta de origem foi editada: copia de novo
     if marker.exists():
         try:
             d = json.loads(marker.read_text(encoding="utf-8"))
@@ -335,11 +386,10 @@ def _prepare_locked(home: Home, settings: Settings, bug: Bug, log: Path, refresh
 
 
 def working_copy(prep: Prepared, home: Home) -> Path:
-    """Cópia descartável do pristine (sem target/, .git nem o marcador)."""
+    """Cópia descartável do pristine (sem o target/ de módulos, .git nem o marcador)."""
     dest = home.work / "w" / secrets.token_hex(4)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(long_path(prep.pristine), long_path(dest),
-                    ignore=shutil.ignore_patterns("target", ".git", ".bugs-dot-jar", MARKER))
+    shutil.copytree(long_path(prep.pristine), long_path(dest), ignore=_ignore_work)
     return dest
 
 

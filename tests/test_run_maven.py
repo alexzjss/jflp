@@ -127,6 +127,84 @@ class RunMavenTest(unittest.TestCase):
         argv = json.loads((work / "argv.json").read_text())
         self.assertEqual([a for a in argv if a.startswith("-Dtest")], ["-Dtest=a.BTest,a.CTest"])
 
+    def _recording_fake(self, te, fail_on=None):
+        calls = self.tmp / "calls.jsonl"
+        (Path(te.maven.home) / "bin" / "fake.py").write_text(textwrap.dedent(f"""            import json, os, sys
+            with open(r"{calls}", "a") as f:
+                f.write(json.dumps({{"cwd": os.getcwd(), "argv": sys.argv[1:],
+                                    "java_home": os.environ.get("JAVA_HOME")}}) + "\\n")
+            if {fail_on!r} and {fail_on!r} in sys.argv:
+                sys.exit(1)
+            d = os.path.join(os.getcwd(), "target", "surefire-reports")
+            if "test" in sys.argv:
+                os.makedirs(d, exist_ok=True)
+                open(os.path.join(d, "TEST-a.BTest.xml"), "w").write(
+                    '<testsuite><testcase classname="a.BTest" name="t1"/></testsuite>')
+            """), encoding="utf-8")
+        return lambda: [json.loads(x) for x in calls.read_text().splitlines()] if calls.exists() else []
+
+    def test_multimodule_installs_reactor_before_clean_test(self):
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        te = self._fake_toolenv()
+        read = self._recording_fake(te)
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, AttemptConfig(),
+                      self.tmp / "l.log", toolenv=te)
+        calls = read()
+        self.assertEqual(len(calls), 2)
+        argv = calls[0]["argv"]
+        self.assertIn("install", argv)
+        self.assertEqual(argv[argv.index("-pl") + 1], "core")
+        self.assertIn("-am", argv)
+        self.assertEqual(Path(calls[0]["cwd"]), work)
+        self.assertIn("clean", calls[1]["argv"])
+        self.assertEqual(Path(calls[1]["cwd"]), work / "core")
+        self.assertEqual(r.rc, 0)
+        self.assertEqual(r.tests, {"a.BTest#t1": "passed"})
+        self.assertEqual([p["name"] for p in r.phases], ["reactor", "maven"])
+        self.assertIn("# jflp fase: reactor", (self.tmp / "l.log").read_text(encoding="utf-8"))
+
+    def test_multimodule_reactor_failure_stops_the_attempt(self):
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        te = self._fake_toolenv()
+        read = self._recording_fake(te, fail_on="install")
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, AttemptConfig(),
+                      self.tmp / "l.log", toolenv=te)
+        self.assertEqual(len(read()), 1)
+        self.assertEqual(r.extra["fase"], "reactor")
+        self.assertEqual(r.rc, 1)
+        self.assertEqual([p["name"] for p in r.phases], ["reactor"])
+
+    def test_single_module_has_no_reactor_phase(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        te = self._fake_toolenv()
+        read = self._recording_fake(te)
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work, AttemptConfig(),
+                      self.tmp / "l.log", toolenv=te)
+        self.assertEqual(len(read()), 1)
+        self.assertEqual([p["name"] for p in r.phases], ["maven"])
+
+    def test_phase_records_command_and_relevant_env(self):
+        from sbfl.run_maven import format_commands
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        te = self._fake_toolenv()
+        te.env.update({"JAVA_HOME": "C:/jdk 11", "MAVEN_OPTS": "-Xmx1g"})
+        self._recording_fake(te)
+        r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, AttemptConfig(),
+                      self.tmp / "l.log", toolenv=te)
+        self.assertEqual(r.phases[0]["env"], {"JAVA_HOME": "C:/jdk 11", "MAVEN_OPTS": "-Xmx1g"})
+        text = format_commands(r.phases, windows=True)
+        self.assertIn("# fase: reactor", text)
+        self.assertIn('set "JAVA_HOME=C:/jdk 11"', text)
+        self.assertIn('set "MAVEN_OPTS=-Xmx1g"', text)
+        self.assertIn("-pl core -am", text)
+        posix = format_commands(r.phases, windows=False)
+        self.assertIn("JAVA_HOME='C:/jdk 11'", posix)
+        self.assertIn("MAVEN_OPTS=-Xmx1g", posix)
+
     def test_config_key_is_deterministic(self):
         a = AttemptConfig(fixes_on=frozenset({"b", "a"}), params={"y": 1, "x": 2})
         b = AttemptConfig(fixes_on=frozenset({"a", "b"}), params={"x": 2, "y": 1})

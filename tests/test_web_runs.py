@@ -20,19 +20,23 @@ DIAG = {"status": "classes_duplicadas", "cause": "Classes duplicadas", "evidence
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
 class RunsBase(WebFixture, unittest.TestCase):
     def make_run(self, kind="jaguar2", status="ok", bug=BUG, fixes=("junit4",), attempts=2, diag=None,
-                 csv="a/B,10,3,0,1,5,0.9\na/B,11,1,2,1,5,0.2\na/C,3,0,3,0,6,0.0\n"):
+                 csv="a/B,10,3,0,1,5,0.9\na/B,11,1,2,1,5,0.2\na/C,3,0,3,0,6,0.0\n", detected=None,
+                 off=()):
         w = store.RunWriter(self.home, bug, kind)
         for n in range(1, attempts + 1):
             d = w.attempt_dir(n)
             with gzip.open(d / "log.txt.gz", "wt", encoding="utf-8") as f:
                 f.write(f"linha um {n}\nErro de compilação aqui\nlinha tres\n")
-            w.write_json(f"attempts/{n}/attempt.json", {
-                "config": {"fixes_on": list(fixes), "jdk": 11}, "status": "ok" if n == attempts else "compilacao_falhou"})
+            att = {"config": {"fixes_on": list(fixes), "jdk": 11},
+                   "status": "ok" if n == attempts else "compilacao_falhou"}
+            if detected is not None:
+                att["extra"] = {"pom_plan": {"detected": list(detected)}}
+            w.write_json(f"attempts/{n}/attempt.json", att)
         w.write_text("outputs/jaguar2.csv", csv)
         w.write_text("outputs/surefire-reports/TEST-a.BTest.xml",
                      '<testsuite><testcase classname="a.BTest" name="t1"/>'
                      '<testcase classname="a.BTest" name="t2"><failure message="x"/></testcase></testsuite>')
-        cfg = {"fixes_on": list(fixes), "fixes_off": [], "params": {}, "jdk": None, "maven": None,
+        cfg = {"fixes_on": list(fixes), "fixes_off": list(off), "params": {}, "jdk": None, "maven": None,
                "test_scope": "relevant"}
         w.finish({"status": status, "diagnosis": diag or {"status": status, "cause": "", "evidence": [],
                                                           "suggestions": [], "warnings": []},
@@ -128,6 +132,46 @@ class RunPage(RunsBase):
         opts = __import__("json").loads(self._opts(bid2))
         self.assertIn("exclude-duplicates", opts["fixes_on"])
         self.assertEqual(opts["params"]["exclude-duplicates"], {"files": ["a/B.java"]})
+
+    def _retry(self, rel, idx=0):
+        p = mock.patch("sbfl.web.routes_bugs.bug_from_key", return_value=BUG)
+        p.start()
+        self.addCleanup(p.stop)
+        r = self.authed().post(f"/run/{rel}/tentar", data={"idx": str(idx), "confirmar": "1"},
+                               follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        bid = jq.active_batch_ids(self.home)[-1]
+        return __import__("json").loads(self._opts(bid))
+
+    def test_retry_with_detected_fixes_keeps_them_and_adds_suggestion(self):
+        diag = {"status": "plugin_incompativel", "cause": "x", "evidence": [], "warnings": [],
+                "suggestions": [{"fix": "skip-rat", "params": {}, "jdk": None, "maven": None, "label": "RAT"}]}
+        rel = self.make_run(status="plugin_incompativel", diag=diag, fixes=(), detected=["junit4", "source-dirs"],
+                            off=["source-dirs"])
+        opts = self._retry(rel)
+        self.assertEqual(sorted(opts["fixes_on"]), ["junit4", "skip-rat"])     # detectadas - desligadas + sugestão
+        self.assertEqual(opts["fixes_off"], ["source-dirs"])
+
+    def test_retry_without_known_detection_asks_execute_to_add_to_detected(self):
+        diag = {"status": "plugin_incompativel", "cause": "x", "evidence": [], "warnings": [],
+                "suggestions": [{"fix": "skip-rat", "params": {}, "jdk": None, "maven": None, "label": "RAT"}]}
+        rel = self.make_run(status="plugin_incompativel", diag=diag, fixes=())
+        opts = self._retry(rel)
+        self.assertEqual(opts["fixes_on"], [])
+        self.assertEqual(opts["fixes_add"], ["skip-rat"])
+
+    def test_run_page_hides_suggestions_that_do_not_apply_to_the_kind(self):
+        diag = {"status": "plugin_incompativel", "cause": "x", "evidence": [], "warnings": [],
+                "suggestions": [{"fix": "skip-rat", "params": {}, "jdk": None, "maven": None, "label": "Pular RAT"},
+                                {"fix": "unblock-http", "params": {}, "jdk": None, "maven": None,
+                                 "label": "Liberar http"}]}
+        rel = self.make_run(kind="maven", status="plugin_incompativel", diag=diag, fixes=())
+        page = self.authed().get(f"/run/{rel}").text
+        self.assertNotIn("Pular RAT", page)
+        self.assertIn("Liberar http", page)
+        # o índice enviado é o da lista filtrada e o servidor aplica o mesmo filtro
+        opts = self._retry(rel, 0)
+        self.assertEqual(opts["fixes_on"], ["unblock-http"])
 
     def _opts(self, bid):
         import contextlib

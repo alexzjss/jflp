@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from .. import queue as jobs_queue
 from .. import recipes, store
+from .. import status as S
 from ..adapters.base import Bug
 from ..errors import StageError
 from ..pomgen import FIXES, generate
@@ -95,7 +96,7 @@ def bugs(request: Request, bench: str = "", proj: str = "", pendentes: int = 0):
                 rows = []
                 for b in list_bugs(st.settings, bench, proj):
                     last = _latest_by_kind(st.home, b)
-                    if pendentes and any(r["status"] == "ok" for r in last.values()):
+                    if pendentes and any(S.is_success(r["status"]) for r in last.values()):
                         continue
                     rows.append({"bug": b, "last": last})
                 ctx["rows"] = rows
@@ -176,6 +177,20 @@ def jaguar2_post(request: Request, key: str, fix: list[str] = Form([]), shown: l
                     {"fixes_on": on, "fixes_off": off, "params": {}})
 
 
+@router.post("/bug/{key:path}/repreparar")
+def repreparar(request: Request, key: str):
+    bug = _find_bug(request, key)
+    if bug is None:
+        return _not_found(request, f"Bug não encontrado: {key}")
+    st = request.app.state
+    try:
+        prepare(st.home, st.settings, bug, st.home.work / "web_prepare.log", refresh=True)
+    except StageError as e:
+        return _render(request, "mensagem.html", {"page": "bugs", "titulo": "Não foi possível re-preparar",
+                                                  "texto": e.detail or str(e)}, 500)
+    return RedirectResponse("/bug/" + quote(bug.key, safe="/") + "?repreparado=1", status_code=303)
+
+
 @router.post("/bug/{key:path}/rodar")
 def rodar(request: Request, key: str, kind: str = Form(...), scope: str = Form("relevant"),
           auto_search: str = Form("")):
@@ -188,20 +203,21 @@ def rodar(request: Request, key: str, kind: str = Form(...), scope: str = Form("
 
 
 @router.get("/bug/{key:path}", response_class=HTMLResponse)
-def bug_page(request: Request, key: str):
+def bug_page(request: Request, key: str, repreparado: int = 0):
     bug = _find_bug(request, key)
     if bug is None:
         return _not_found(request, f"Bug não encontrado: {key}")
     runs = store.list_runs(request.app.state.home, bug.benchmark, bug.project, bug.bug_id)
     last = {k: r["path"] for k, r in _latest_by_kind(request.app.state.home, bug).items()}
     return _render(request, "bug.html", {"page": "bugs", "bug": bug, "runs": runs,
-                                         "kind_label": KIND_LABEL, "last": last})
+                                         "kind_label": KIND_LABEL, "last": last,
+                                         "repreparado": bool(repreparado)})
 
 
 # ------------------------------------------------------------------ ao vivo
 
 def _job(home, job_id: int) -> dict | None:
-    return next((j for j in _all_jobs(home) if j["id"] == job_id), None)
+    return jobs_queue.get_job(home, job_id)
 
 
 @router.get("/job/{job_id}/ao-vivo", response_class=HTMLResponse)

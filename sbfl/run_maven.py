@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +48,31 @@ class AttemptResult:
     command: list[str] = field(default_factory=list)
     toolenv: dict = field(default_factory=dict)
     extra: dict = field(default_factory=dict)
+    phases: list[dict] = field(default_factory=list)   # [{name, command, env}] de cada mvn executado
+
+
+ENV_SHOWN = ("JAVA_HOME", "MAVEN_OPTS", "JAVA_TOOL_OPTIONS")
+
+
+def phase_record(name: str, cmd, env: dict | None) -> dict:
+    """Uma fase do `command.txt`: o comando e as variáveis de ambiente que mudam o resultado."""
+    return {"name": name, "command": [str(c) for c in cmd],
+            "env": {k: env[k] for k in ENV_SHOWN if env and env.get(k)}}
+
+
+def format_commands(phases: list[dict], windows: bool | None = None) -> str:
+    """Texto do command.txt: por fase, o ambiente e o comando já com as aspas da plataforma."""
+    windows = (os.name == "nt") if windows is None else windows
+    out: list[str] = []
+    for ph in phases:
+        out.append(f"# fase: {ph['name']}")
+        env = ph.get("env") or {}
+        if windows:
+            out += [f'set "{k}={v}"' for k, v in env.items()]
+            out.append(subprocess.list2cmdline(ph["command"]))
+        else:
+            out.append(" ".join([f"{k}={shlex.quote(v)}" for k, v in env.items()] + [shlex.join(ph["command"])]))
+    return "\n".join(out) + "\n" if out else ""
 
 
 def module_dir(prep: Prepared, workdir: Path) -> Path:
@@ -96,7 +124,19 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
               log: Path, toolenv: ToolEnv | None = None, on_line=None) -> AttemptResult:
     mod = module_dir(prep, workdir)
     te = toolenv or resolve("maven", home, settings, pom_dir=mod, jdk=cfg.jdk, maven=cfg.maven)
-    cmd = te.mvn(*settings_args(home, cfg), "clean", "test", *(settings.get("run", "skip_flags", []) or []),
+    sargs = settings_args(home, cfg)
+    phases: list[dict] = []
+    total = 0.0
+    r0 = install_reactor(te, settings, prep, workdir, log, on_line, sargs)   # multi-módulo: instala o reactor antes
+    if r0 is not None:
+        total += r0["seconds"]
+        phases.append(phase_record("reactor", r0["command"], te.env))
+        failed = reactor_failure(r0, log, te.describe())
+        if failed:
+            failed.phases = phases
+            return failed
+        log_phase(log, "maven", on_line)
+    cmd = te.mvn(*sargs, "clean", "test", *(settings.get("run", "skip_flags", []) or []),
                  "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                  "-Dsurefire.failIfNoSpecifiedTests=false",
                  *test_selection_args(prep, cfg.test_scope, workdir))
@@ -109,8 +149,9 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
     if reports.is_dir():
         outputs["surefire"] = reports
         tests = parse_surefire(reports)
-    return AttemptResult(r["rc"], r["timed_out"], r["seconds"], log, outputs, tests, cmd,
-                         te.describe(), {})
+    phases.append(phase_record("maven", cmd, te.env))
+    return AttemptResult(r["rc"], r["timed_out"], round(total + r["seconds"], 1), log, outputs, tests, cmd,
+                         te.describe(), {}, phases)
 
 
 def log_phase(log: Path, name: str, on_line=None) -> None:

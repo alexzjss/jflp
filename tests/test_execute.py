@@ -242,6 +242,60 @@ class ExecuteTest(Base):
         self.assertEqual(calls, [11])
         self.assertEqual(self.cfgs[1].fixes_on, frozenset({"junit4", "skip-animal-sniffer"}))
 
+    def test_fixes_add_keeps_detected_fixes(self):
+        with mock.patch.object(ex, "pom_generate", lambda *a, **k: mock.Mock(detected=["junit4"])):
+            self.go(lambda n, c: "ok", ex.RunOptions(fixes_add=frozenset({"skip-rat"})))
+        self.assertEqual(self.cfgs[0].fixes_on, frozenset({"junit4", "skip-rat"}))
+
+    def test_fixes_add_respects_fixes_off(self):
+        with mock.patch.object(ex, "pom_generate", lambda *a, **k: mock.Mock(detected=["junit4", "x"])):
+            self.go(lambda n, c: "ok", ex.RunOptions(fixes_add=frozenset({"skip-rat"}),
+                                                     fixes_off=frozenset({"x"})))
+        self.assertEqual(self.cfgs[0].fixes_on, frozenset({"junit4", "skip-rat"}))
+
+    def test_fixes_add_on_maven_kind_needs_no_detection(self):
+        with mock.patch.object(ex, "pom_generate", side_effect=AssertionError("não deve detectar")),                 mock.patch.object(ex, "prepare", return_value=self.prep),                 mock.patch.object(ex, "run_maven", self.fake_runner(lambda n, c: "ok")):
+            ex.execute(self.home, self.settings, BUG, "maven", ex.RunOptions(fixes_add=frozenset({"unblock-http"})))
+        self.assertEqual(self.cfgs[0].fixes_on, frozenset({"unblock-http"}))
+
+    def test_jaguar2_without_pom_short_circuits(self):
+        (self.prep.pristine / "pom.xml").unlink()
+        rel, run = self.go(lambda n, c: "ok")
+        self.assertEqual(self.cfgs, [])
+        self.assertEqual(run["status"], "desconhecido")
+        self.assertEqual(run["diagnosis"]["cause"], "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)")
+        self.assertEqual(run["attempts"], 0)
+
+    def test_jaguar2_flag_unsupported_short_circuits(self):
+        self.prep.info["jaguar2_suportado"] = False
+        rel, run = self.go(lambda n, c: "ok")
+        self.assertEqual(self.cfgs, [])
+        self.assertEqual(run["status"], "desconhecido")
+
+    def test_maven_kind_without_pom_still_runs(self):
+        (self.prep.pristine / "pom.xml").unlink()
+        with mock.patch.object(ex, "prepare", return_value=self.prep),                 mock.patch.object(ex, "run_maven", self.fake_runner(lambda n, c: "ok")):
+            ex.execute(self.home, self.settings, BUG, "maven", ex.RunOptions())
+        self.assertEqual(len(self.cfgs), 1)
+
+    def test_command_txt_lists_every_phase_with_env(self):
+        base = self.fake_runner(lambda n, c: "ok")
+
+        def with_phases(*a, **k):
+            r = base(*a, **k)
+            r.phases = [{"name": "reactor", "command": ["mvn", "install", "-pl", "a b"], "env": {"JAVA_HOME": "/jdk 11"}},
+                        {"name": "jaguar2", "command": ["mvn", "test"], "env": {"JAVA_TOOL_OPTIONS": "-Dx=1"}}]
+            return r
+        with mock.patch.object(ex, "prepare", return_value=self.prep),                 mock.patch.object(ex, "run_jaguar2", with_phases):
+            rel = ex.execute(self.home, self.settings, BUG, "jaguar2", ex.RunOptions())
+        from sbfl.store import run_dir
+        text = (run_dir(self.home, rel) / "command.txt").read_text(encoding="utf-8")
+        self.assertIn("# fase: reactor", text)
+        self.assertIn("# fase: jaguar2", text)
+        self.assertIn("JAVA_HOME", text)
+        self.assertIn("JAVA_TOOL_OPTIONS", text)
+        self.assertIn("install", text)
+
     def test_recipe_params_deep_merge_with_opts(self):
         recipes.save(self.home, BUG, "jaguar2", "bug",
                      AttemptConfig(params={"override-version": {"plugins": {"a:b": "1"}}}))
@@ -317,6 +371,13 @@ class CandidatesTest(Base):
         self.assertEqual([c.jdk for c in out if c.jdk], [8, 17])
         self.assertEqual(len(candidates(AttemptConfig(), diag, "jaguar2", load_settings(self.home),
                                         set())), 5)
+
+    def test_jaguar2_never_gets_a_maven_override_candidate(self):
+        diag = Diagnosis("dependencia_nao_resolvida", suggestions=[Suggestion(maven="3.6.3", label="m"),
+                                                                    Suggestion(fix="unblock-http", label="u")])
+        out = candidates(AttemptConfig(), diag, "jaguar2", self.settings, set())
+        self.assertFalse(any(c.maven for c in out))
+        self.assertIn("unblock-http", out[0].fixes_on)
 
     def test_maven_kind_has_no_pom_fixes(self):
         out = candidates(AttemptConfig(), Diagnosis("x", suggestions=[Suggestion(fix="junit4")]),

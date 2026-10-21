@@ -55,10 +55,52 @@ class CliTests(unittest.TestCase):
         home, settings, b, kind, opts = ex.call_args.args
         self.assertEqual((b.key, kind), (bug.key, "jaguar2"))
         self.assertEqual(opts.test_scope, "all")
-        self.assertEqual(opts.fixes_on, frozenset({"A"}))
+        self.assertEqual(opts.fixes_add, frozenset({"A"}))      # soma às detectadas, não substitui
+        self.assertIsNone(opts.fixes_on)
         self.assertEqual(opts.fixes_off, frozenset({"B"}))
         self.assertEqual((opts.jdk, opts.maven, opts.auto_search, opts.archive_checkout),
                          (11, "3.9.9", False, False))
+
+    def test_run_refuses_when_another_instance_holds_the_lock(self):
+        from sbfl.instance import WorkerLock
+        h = self.tmp / "h"
+        other = WorkerLock(Home(h).ensure())
+        self.assertTrue(other.acquire())
+        self.addCleanup(other.release)
+        with mock.patch("sbfl.cli.execute") as ex:
+            rc, out, err = _run_main(["run", "maven", "d4j/Jsoup/93"], h)
+        self.assertEqual(rc, 1)
+        ex.assert_not_called()
+        self.assertIn("outra instância", err)
+
+    def test_batch_run_refuses_when_another_instance_holds_the_lock(self):
+        from sbfl.instance import WorkerLock
+        h = self.tmp / "h"
+        other = WorkerLock(Home(h).ensure())
+        self.assertTrue(other.acquire())
+        self.addCleanup(other.release)
+        rc, out, err = _run_main(["batch", "run"], h)
+        self.assertEqual(rc, 1)
+        self.assertIn("outra instância", err)
+
+    def test_run_releases_the_lock_when_done(self):
+        from sbfl.instance import WorkerLock
+        h = self.tmp / "h"
+        with mock.patch("sbfl.cli.execute", return_value="r"),                 mock.patch("sbfl.cli.load_run", return_value={"status": "ok"}):
+            _run_main(["run", "maven", "d4j/Jsoup/93"], h)
+        probe = WorkerLock(Home(h))
+        self.assertTrue(probe.acquire())
+        probe.release()
+
+    def test_prepare_and_run_accept_refresh(self):
+        with mock.patch("sbfl.cli.prepare") as pr:
+            pr.return_value.pristine, pr.return_value.module, pr.return_value.truth = Path("p"), ".", []
+            rc, out, _ = _run_main(["prepare", "d4j/Jsoup/93", "--refresh"], self.tmp / "h")
+        self.assertEqual(rc, 0)
+        self.assertTrue(pr.call_args.kwargs["refresh"])
+        with mock.patch("sbfl.cli.execute", return_value="r") as ex,                 mock.patch("sbfl.cli.load_run", return_value={"status": "ok"}):
+            _run_main(["run", "maven", "d4j/Jsoup/93", "--refresh"], self.tmp / "h")
+        self.assertTrue(ex.call_args.args[4].refresh)
 
     def test_run_failure_status_returns_1(self):
         with mock.patch("sbfl.cli.execute", return_value="r"), \

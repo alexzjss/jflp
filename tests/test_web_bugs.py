@@ -72,6 +72,25 @@ class WebBugs(unittest.TestCase):
         self.assertIn("Revisar e rodar Jaguar 2", r.text)
         self.assertIn("Rodar Jaguar 1", r.text)
 
+    def test_repreparar_button_and_route_refresh_the_pristine(self):
+        loc = self.register(self.local_project())
+        self.assertIn("Re-preparar", self.c.get(loc).text)
+        self.assertIn(f"{loc}/repreparar", self.c.get(loc).text)
+        with mock.patch("sbfl.web.routes_bugs.prepare") as pr:
+            r = self.c.post(f"{loc}/repreparar", follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertTrue(pr.call_args.kwargs["refresh"])
+        self.assertIn("Re-preparado", self.c.get(r.headers["location"]).text)
+
+    def test_repreparar_failure_is_reported(self):
+        from sbfl.errors import StageError
+        loc = self.register(self.local_project())
+        with mock.patch("sbfl.web.routes_bugs.prepare", side_effect=StageError("checkout_falhou", "pasta sumiu")):
+            r = self.c.post(f"{loc}/repreparar", follow_redirects=False)
+        self.assertEqual(r.status_code, 500)
+        self.assertIn("pasta sumiu", r.text)
+        self.assertEqual(self.c.post("/bug/local/nada/dir-00000000/repreparar").status_code, 404)
+
     def test_unknown_bug_is_404_in_portuguese(self):
         r = self.c.get("/bug/local/nada/dir-00000000")
         self.assertEqual(r.status_code, 404)
@@ -144,6 +163,23 @@ class WebBugs(unittest.TestCase):
         r = self.c.get("/bugs?bench=bugsjar&proj=commons")   # sem Bugs.jar configurado
         self.assertEqual(r.status_code, 200)
         self.assertIn("Nenhum projeto", r.text)
+
+    def test_pendentes_filter_treats_ok_testes_falhando_as_done(self):
+        bugs = [Bug("bugsjar", "commons", "a"), Bug("bugsjar", "commons", "b")]
+        self.fake_run(bugs[0], "maven", "ok_testes_falhando", "2026-01-01T10:00:00")
+        self.fake_run(bugs[1], "maven", "timeout", "2026-01-01T11:00:00")
+        with mock.patch("sbfl.web.routes_bugs.list_bugs", return_value=bugs):
+            r = self.c.get("/bugs?bench=bugsjar&proj=commons&pendentes=1")
+        self.assertNotIn("/bug/bugsjar/commons/a", r.text)
+        self.assertIn("/bug/bugsjar/commons/b", r.text)
+
+    def test_job_lookup_queries_a_single_job(self):
+        from sbfl.web import routes_bugs
+        bid = jq.create_batch(self.home, "t", [Bug("bugsjar", "commons", "1")], ["maven"], {})
+        job = jq.batch_jobs(self.home, bid)[0]
+        with mock.patch.object(jq, "list_jobs", side_effect=AssertionError("não deve listar tudo")):
+            self.assertEqual(routes_bugs._job(self.home, job["id"])["id"], job["id"])
+            self.assertIsNone(routes_bugs._job(self.home, 999999))
 
     def test_sse_stream_yields_lines(self):
         bug = Bug("bugsjar", "commons", "1")

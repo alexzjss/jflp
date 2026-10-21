@@ -10,7 +10,7 @@ from .home import Home, Settings
 from .jaguar import JaguarOptions, run_jaguar
 from .prepare import Prepared
 from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
-                        reactor_failure)
+                        reactor_failure, phase_record)
 from .toolchain.profiles import ToolEnv, resolve
 
 
@@ -35,11 +35,14 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     total = 0.0
 
     sargs = settings_args(home, cfg)
+    phases: list[dict] = []
     r = install_reactor(te, settings, prep, workdir, log, on_line, sargs)
     if r is not None:
         total += r["seconds"]
+        phases.append(phase_record("reactor", r["command"], te.env))
         failed = reactor_failure(r, log, desc)
         if failed:
+            failed.phases = phases
             return failed
 
     cmd: list = []
@@ -48,11 +51,12 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
                                          "-DoutputDirectory=target/dependency", *skip))):
         log_phase(log, fase, on_line)
         cmd = te.mvn(*sargs, *args)
+        phases.append(phase_record(fase, cmd, te.env))
         r = proc.run(cmd, cwd=mod, env=te.env, timeout=timeout, log_path=log, on_line=on_line)
         total += r["seconds"]
         if r["rc"] != 0 or r["timed_out"]:
             return AttemptResult(r["rc"], r["timed_out"], round(total, 1), log, {}, {}, cmd, desc,
-                                 {"fase": fase})
+                                 {"fase": fase}, phases)
 
     classes_dir, tests_dir = "target/classes", "target/test-classes"
     if cfg.test_scope == "all" or not prep.relevant_tests:   # mesma regra de test_selection_args
@@ -84,4 +88,4 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
              "attempts": meta.get("attempts", 0)}
     ok = meta.get("status") == "ok"
     return AttemptResult(0 if ok else None, meta.get("status") == "jaguar_timeout", round(total, 1),
-                         log, outputs, {}, cmd, desc, extra)
+                         log, outputs, {}, cmd, desc, extra, phases)

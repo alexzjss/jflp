@@ -18,6 +18,7 @@ from .dataset import export
 from .errors import StageError
 from .execute import RunOptions, execute
 from .home import Home, Settings, load_settings
+from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
 from .queue import Worker, active_batch_ids, batch_status, create_batch
 from .store import list_runs, load_run, reindex, run_dir
@@ -161,7 +162,7 @@ def cmd_prepare(home: Home, settings: Settings, args) -> int:
     bug = parse_bug(settings, args.bug)
     log = home.work / "prepare.log"
     log.parent.mkdir(parents=True, exist_ok=True)
-    prep = prepare(home, settings, bug, log)
+    prep = prepare(home, settings, bug, log, refresh=args.refresh)
     print(f"[OK] {bug.key} preparado em {prep.pristine}")
     print(f"     módulo: {prep.module}; linhas defeituosas conhecidas: {len(prep.truth)}")
     return 0
@@ -175,9 +176,9 @@ def _print_log(line: str) -> None:
 def _opts(args) -> RunOptions:
     return RunOptions(
         test_scope="all" if args.all_tests else None,
-        fixes_on=frozenset(args.fix) or None, fixes_off=frozenset(args.no_fix),
+        fixes_add=frozenset(args.fix), fixes_off=frozenset(args.no_fix),
         jdk=args.jdk, maven=args.maven, auto_search=not args.no_search,
-        archive_checkout=False if args.no_archive else None, log_cb=_print_log)
+        archive_checkout=False if args.no_archive else None, refresh=args.refresh, log_cb=_print_log)
 
 
 def _unexpected_error(home: Home, bug: Bug, exc: Exception, before: set[str]) -> int:
@@ -203,6 +204,17 @@ def _unexpected_error(home: Home, bug: Bug, exc: Exception, before: set[str]) ->
 
 def cmd_run(home: Home, settings: Settings, args) -> int:
     bug = parse_bug(settings, args.bug)
+    lock = WorkerLock(home)      # a mesma trava do worker: nunca duas fontes de execução ao mesmo tempo
+    if not lock.acquire():
+        print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
+        return 1
+    try:
+        return _run_locked(home, settings, args, bug)
+    finally:
+        lock.release()
+
+
+def _run_locked(home: Home, settings: Settings, args, bug: Bug) -> int:
     before = {r["path"] for r in list_runs(home, bug.benchmark, bug.project, bug.bug_id)}
     try:
         rel = execute(home, settings, bug, args.kind, _opts(args))
@@ -290,7 +302,11 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
         _print_batch(batch_status(home, args.id))
         return 0
     # run: worker em primeiro plano até a fila esvaziar
-    worker = Worker(home, settings)
+    lock = WorkerLock(home)
+    if not lock.acquire():
+        print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
+        return 1
+    worker = Worker(home, settings, lock)     # a trava passa para o worker
     seen: set[int] = set()
     worker.start()
     try:
@@ -298,13 +314,15 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
         _wait_batches(home, seen)
     except KeyboardInterrupt:
         print("\nInterrompido: aguardando o job atual terminar (Ctrl+C de novo para sair já)...")
-        worker.stop()
+        worker.stop(kill=False)
         try:
             worker.join()
         except KeyboardInterrupt:
-            pass
+            print("Encerrando os processos em andamento...")
+            worker.stop()     # mata o Maven; o job volta para a fila
+            worker.join(15)
         return 130
-    worker.stop()
+    worker.stop(kill=False)
     worker.join(timeout=10)
     for i in sorted(seen):
         _print_batch(batch_status(home, i))
@@ -425,16 +443,19 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("projeto", nargs="?")
     p = add("prepare", cmd_prepare, "prepara (faz o checkout de) um bug")
     p.add_argument("bug")
+    p.add_argument("--refresh", action="store_true", help="refaz a cópia pristine do zero")
     p = add("run", cmd_run, "executa um bug")
     p.add_argument("kind", choices=KINDS)
     p.add_argument("bug")
     p.add_argument("--all-tests", action="store_true", help="roda todos os testes (padrão: relevantes)")
-    p.add_argument("--fix", action="append", default=[], metavar="ID")
+    p.add_argument("--fix", action="append", default=[], metavar="ID",
+                   help="acrescenta uma correção às detectadas (repita para várias)")
     p.add_argument("--no-fix", action="append", default=[], metavar="ID")
     p.add_argument("--jdk", type=int)
     p.add_argument("--maven")
     p.add_argument("--no-search", action="store_true", help="sem busca automática de correções")
     p.add_argument("--no-archive", action="store_true", help="não arquiva o checkout")
+    p.add_argument("--refresh", action="store_true", help="refaz a cópia pristine do zero antes de rodar")
     p = add("runs", cmd_runs, "lista execuções gravadas")
     p.add_argument("bug", nargs="?")
     p = add("compare", cmd_compare, "compara duas execuções")
