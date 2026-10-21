@@ -10,10 +10,12 @@ import time
 from collections import deque
 from datetime import datetime
 
-from . import compare, store
+from . import compare, proc, store
 from .adapters.base import Bug
 from .execute import RunOptions, execute
 from .home import Home, Settings
+from .instance import WorkerLock
+from .prepare import _rmtree
 from .power import keep_awake
 from .prepare import bug_from_key
 
@@ -89,6 +91,13 @@ def list_jobs(home: Home, state: str | None = None, limit: int = 50) -> list[dic
         return [dict(r) for r in con.execute(sql, (*args, limit))]
 
 
+def get_job(home: Home, job_id: int) -> dict | None:
+    """Um job pelo id (consulta única, sem carregar a fila inteira)."""
+    with contextlib.closing(_connect(home)) as con:
+        row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return dict(row) if row else None
+
+
 def list_batches(home: Home, limit: int = 100) -> list[dict]:
     """Lotes do mais recente ao mais antigo, com a contagem de jobs."""
     with contextlib.closing(_connect(home)) as con:
@@ -135,10 +144,13 @@ def batch_status(home: Home, batch_id: int) -> dict:
 class Worker(threading.Thread):
     """Executa os jobs pendentes, um por vez, na ordem de criação."""
 
-    def __init__(self, home: Home, settings: Settings):
+    def __init__(self, home: Home, settings: Settings, lock: WorkerLock | None = None):
         super().__init__(name="jflp-worker", daemon=True)
         self.home, self.settings = home, settings
+        self._wlock = lock or WorkerLock(home)     # entregue ao worker: ele a libera ao terminar
+        self._other = False                        # outra instância segura a trava
         self._stop_ev = threading.Event()
+        self._abort = threading.Event()            # fechamento do app: mata o Maven e devolve o job à fila
         self._lock = threading.Lock()
         self._subs: set[_q.Queue] = set()
         self._log: deque[str] = deque(maxlen=LOG_LINES)
@@ -164,8 +176,12 @@ class Worker(threading.Thread):
             con.execute("UPDATE batches SET state='cancelled' WHERE id=? AND state IN ('active','paused')",
                         (batch_id,))
 
-    def stop(self) -> None:
+    def stop(self, kill: bool = True) -> None:
+        """Para o laço. Com `kill`, também mata os processos em andamento (o job volta para `pending`)."""
         self._stop_ev.set()
+        if kill:
+            self._abort.set()
+            proc.kill_all()
 
     # -- observação --
     def current(self) -> dict | None:
@@ -222,10 +238,22 @@ class Worker(threading.Thread):
         self._last_error = repr(e)[-500:]
 
     def status(self) -> dict:
-        return {"alive": self.is_alive(), "last_error": self._last_error, "current": self.current()}
+        return {"alive": self.is_alive(), "last_error": self._last_error, "current": self.current(),
+                "other_instance": self._other}
 
     def _recover(self) -> None:
-        store.recover_partials(self.home)
+        """Só roda com a trava: recupera .partial órfãs, devolve jobs `running` e apaga cópias de trabalho."""
+        try:
+            store.recover_partials(self.home)
+        except Exception as e:   # a recuperação parcial não pode travar o worker num laço
+            self._record_error(e)
+        try:
+            work = self.home.work / "w"
+            if work.is_dir():
+                for d in work.iterdir():
+                    _rmtree(d, strict=False)
+        except Exception as e:
+            self._record_error(e)
         with contextlib.closing(_connect(self.home)) as con, con:
             con.execute("UPDATE jobs SET state = CASE WHEN batch_id IN "
                         "(SELECT id FROM batches WHERE state='cancelled') THEN 'cancelled' ELSE 'pending' END "
@@ -234,12 +262,24 @@ class Worker(threading.Thread):
                 _close_if_finished(con, bid)
 
     def run(self) -> None:
+        try:
+            self._loop()
+        finally:
+            self._wlock.release()
+
+    def _loop(self) -> None:
+        proc.set_abort(self._abort)
         recovered = False
         while not self._stop_ev.is_set():
             try:
+                if not self._wlock.acquire():     # outra instância processa a fila: só espera
+                    self._other = True
+                    self._stop_ev.wait(1.0)
+                    continue
+                self._other = False
                 if not recovered:
+                    recovered = True              # antes de tentar: uma falha não repete para sempre
                     self._recover()
-                    recovered = True
                 picked = self._next_job()
                 if picked is None:
                     self._stop_ev.wait(1.0)
@@ -273,7 +313,19 @@ class Worker(threading.Thread):
         except Exception as e:   # o worker nunca morre por erro de job
             error = repr(e)[-1500:]
             rel = self._find_run(job, since)
+        if self._abort.is_set():   # app fechando: o job é refeito na próxima abertura
+            self._requeue_job(job)
+            return
         self._finish_job(job, rel, error, time.monotonic() - t0)
+
+    def _requeue_job(self, job: dict) -> None:
+        try:
+            with contextlib.closing(_connect(self.home)) as con, con:
+                con.execute("UPDATE jobs SET state='pending' WHERE id=? AND state='running'", (job["id"],))
+        finally:
+            self._publish(None)
+            with self._lock:
+                self._current = None
 
     def _find_run(self, job: dict, since: str) -> str | None:
         """Pasta criada por um job que falhou (a mais recente do bug e tipo desde o início do job)."""

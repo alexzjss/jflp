@@ -17,6 +17,7 @@ from pathlib import Path
 
 from .adapters.base import Bug
 from .home import Home
+from .instance import pid_alive, process_start
 from .winpath import long_path, lp
 
 _INVALID = re.compile(r'[:*?"<>|/\\\x00-\x1f]')
@@ -32,6 +33,7 @@ _INSERT = "INSERT OR REPLACE INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?)"
 def _safe(part: str) -> str:
     """Componente de caminho válido no Windows (troca : * ? " < > | por _)."""
     s = _INVALID.sub("_", str(part)).rstrip(" .")
+    s = re.sub(r"^\.+", lambda m: "_" * len(m.group()), s)   # ponto inicial: nunca parece uma .partial
     if not s:
         return "_"  # vazio, "." ou ".."
     return "_" + s if _RESERVED.fullmatch(s) else s
@@ -124,6 +126,7 @@ class RunWriter:
         (self.dir / _MANIFEST).write_text(json.dumps({
             "bug": bug.key, "benchmark": bug.benchmark, "project": bug.project,
             "bug_id": bug.bug_id, "kind": kind, "parent": parent, "started": self.started,
+            "pid": os.getpid(), "pid_started": process_start(os.getpid()),
         }, ensure_ascii=False), encoding="utf-8")
 
     # -- gravação --
@@ -263,6 +266,9 @@ def recover_partials(home: Home) -> list[str]:
         if not partial.is_dir():
             continue
         base = partial.parent
+        man = _read_json(partial / _MANIFEST)
+        if pid_alive(man.get("pid"), man.get("pid_started")) and man.get("pid") != os.getpid():
+            continue    # dono ainda vivo (outra instância): não é órfã. O próprio PID é órfã: quem recupera segura a trava
         stem = partial.name[1:-len(".partial")]
         final, n = base / stem, 1
         while final.exists():
@@ -270,7 +276,6 @@ def recover_partials(home: Home) -> list[str]:
             final = base / f"{stem}-{n}"
         parts = base.relative_to(home.runs).parts
         m = re.fullmatch(r"\d{8}-\d{6}-(.+?)(?:-\d+)?", stem)
-        man = _read_json(partial / _MANIFEST)
         doc = _read_json(partial / "run.json")
         if not doc:  # sem run.json completo: monta o `interrompido` a partir do manifesto
             try:

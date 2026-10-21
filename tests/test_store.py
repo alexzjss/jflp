@@ -116,6 +116,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(store._safe("a\\b"), "a_b")
         self.assertEqual(store._safe(".."), "_")
         self.assertEqual(store._safe("."), "_")
+        self.assertEqual(store._safe(".hidden"), "_hidden")      # nunca parece uma .partial
+        self.assertEqual(store._safe("..x"), "__x")
+        self.assertEqual(store._safe("a.b"), "a.b")
         for name in ("CON", "nul", "Com1", "lpt9.txt", "aux.x.y"):
             self.assertEqual(store._safe(name), "_" + name)
         self.assertEqual(store._safe("console"), "console")
