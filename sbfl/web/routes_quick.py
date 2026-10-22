@@ -1,6 +1,7 @@
 """Tela Executar: execução rápida de um projeto (pasta local ou URL@commit) em poucos cliques."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import threading
@@ -9,7 +10,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import compare, store
@@ -303,6 +304,8 @@ def _cartoes_ctx(request: Request, bid: int) -> dict | None:
     if "maven" in done and "jaguar2" in done:
         comparar = f"/comparar?a={quote(done['maven'], safe='/')}&b={quote(done['jaguar2'], safe='/')}"
     return {"bid": bid, "cards": cards, "comparar": comparar, "poll": POLL_SECONDS,
+            "sig": hashlib.blake2s("|".join(f"{j['id']}:{j['state']}" for j in jobs).encode(),
+                                   digest_size=4).hexdigest(),
             "pendente": any(j["state"] in ("pending", "running") for j in jobs)}
 
 
@@ -312,10 +315,12 @@ def _sem_lote(request: Request, bid: int):
 
 
 @router.get("/executar/{bid}/cartoes", response_class=HTMLResponse)
-def executar_cartoes(request: Request, bid: int):
+def executar_cartoes(request: Request, bid: int, sig: str = ""):
     ctx = _cartoes_ctx(request, bid)
     if ctx is None:
         return _sem_lote(request, bid)
+    if sig and sig == ctx["sig"]:      # nada mudou: o htmx não troca, e os botões continuam os mesmos
+        return Response(status_code=204)
     return _render(request, "_executar_cartoes.html", ctx)
 
 

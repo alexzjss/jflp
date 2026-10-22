@@ -110,3 +110,74 @@ button[disabled] { opacity: .5; cursor: not-allowed; }
   .codigo-classes { flex: none; position: static; max-height: 40vh; width: 100%; }
   input[type=text] { min-width: 0; }
 }
+
+/* --- Execução ao vivo e andamento nas outras telas --- */
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--bg); font-size: .85em; white-space: nowrap; }
+.chip.ok { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.chip.erro { color: var(--err); border-color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.chip-vivo { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.chip-vivo::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: av-pulso 1.3s ease-in-out infinite; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.av-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.av-topo h1 { margin-bottom: 4px; }
+.av-sub { margin: 0 0 8px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.av-relogio { display: flex; align-items: center; gap: 14px; }
+.av-tempo { font-size: 2.2rem; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+.av-passos { list-style: none; display: flex; margin: 14px 0 6px; padding: 0; }
+.av-passo { flex: 1; position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  text-align: center; color: var(--muted); min-width: 0; }
+.av-passo::before { content: ""; position: absolute; top: 15px; left: -50%; width: 100%; height: 3px;
+  background: var(--line); z-index: 0; }
+.av-passo:first-child::before { display: none; }
+.av-passo.feito::before, .av-passo.atual::before { background: var(--ok); }
+.av-passo.falha::before { background: var(--err); }
+.av-bola { position: relative; z-index: 1; width: 32px; height: 32px; border-radius: 50%; display: grid;
+  place-items: center; background: var(--panel); border: 3px solid var(--line); font-weight: 700; font-size: .95rem; }
+.av-passo.feito .av-bola { background: var(--ok); border-color: var(--ok); color: var(--panel); }
+.av-passo.falha .av-bola { background: var(--err); border-color: var(--err); color: var(--panel); }
+.av-passo.atual { color: var(--text); font-weight: 600; }
+.av-passo.atual .av-bola { border-color: var(--line); border-top-color: var(--accent);
+  animation: av-gira 1s linear infinite; }
+.av-rotulo { font-size: .85rem; }
+.av-fase { min-height: 1.6em; margin: 4px 0 14px; text-align: center; color: var(--muted); font-size: 1.05rem; }
+.av-cartoes { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.av-cartoes .av-cartao { margin: 0; }
+.av-cartoes [hidden] { display: none; }
+.av-numeros { display: flex; gap: 20px; flex-wrap: wrap; margin: 6px 0; }
+.av-numeros div { display: flex; flex-direction: column; }
+.av-numeros b { font-size: 2.3rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.av-numeros b.tem { color: var(--err); }
+.av-numeros span { color: var(--muted); font-size: .85rem; }
+.av-peq { font-size: .85rem; margin: 6px 0 0; }
+.barra { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 8px 0; }
+.barra > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px;
+  transition: width .5s ease; }
+.av-erro { border-color: var(--err); }
+.av-erro h2 { color: var(--err); }
+.av-erro pre { margin: 0; white-space: pre-wrap; }
+.av-linha-resumo { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; font-size: 1.05rem; }
+.av-log summary { font-weight: 600; margin-bottom: 8px; }
+pre.log.sem-dl .dl { display: none; }
+a.botao.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* andamento resumido (cartões do Executar, Fila, Lote) */
+.mini { display: flex; flex-direction: column; gap: 6px; min-width: 200px; }
+.mini-txt { font-variant-numeric: tabular-nums; }
+.barra-fina { display: block; height: 3px; border-radius: 999px; overflow: hidden; position: relative; background: var(--line); }
+.barra-fina::after { content: ""; position: absolute; top: 0; bottom: 0; width: 35%; border-radius: 999px;
+  background: var(--accent); animation: av-desliza 1.4s ease-in-out infinite; }
+.exe-andamento { display: flex; flex-direction: column; gap: 10px; }
+@keyframes av-gira { to { transform: rotate(360deg); } }
+@keyframes av-pulso { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
+@keyframes av-desliza { 0% { left: -35%; } 100% { left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .av-passo.atual .av-bola, .chip-vivo::before, .barra-fina::after { animation: none; }
+  .barra-fina::after { left: 0; width: 100%; opacity: .5; }
+}
+@media (max-width: 760px) {
+  .av-tempo { font-size: 1.7rem; }
+  .av-rotulo { font-size: .72rem; }
+  .av-numeros b { font-size: 1.9rem; }
+  .mini { min-width: 0; }
+}

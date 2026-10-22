@@ -312,7 +312,8 @@ class Cartoes(RunsBase):
         self.assertIn("ao-vivo", page.text)
         frag = c.get(f"/executar/{bid}/cartoes")
         self.assertIn(f'hx-get="/executar/{bid}/cartoes"', frag.text)
-        self.assertIn("delay:2s", frag.text)
+        self.assertIn("every 2s", frag.text)
+        self.assertIn("hx-vals", frag.text)               # assinatura: o htmx só troca se algo mudou
         self.assertNotIn("<html", frag.text)
 
     def test_tudo_terminado_nao_reagenda_e_mostra_top_linhas(self):

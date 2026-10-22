@@ -1,0 +1,4 @@
+{# O painel só é refeito quando um job muda de estado (204 caso contrário): os botões não são trocados a cada ciclo. #}
+<div id="lote-painel" hx-get="/lote/{{ b.id }}/painel" hx-vals='{"sig": "{{ sig }}"}' hx-trigger="every 3s" hx-swap="outerHTML">
+{% include "_lote_progresso.html" %}
+</div>

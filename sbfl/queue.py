@@ -17,6 +17,7 @@ from .home import Home, Settings
 from .instance import WorkerLock
 from .prepare import _rmtree
 from .power import keep_awake
+from .progress import Progress
 from .prepare import bug_from_key
 
 _SCHEMA = (
@@ -184,6 +185,8 @@ class Worker(threading.Thread):
         self._subs: set[_q.Queue] = set()
         self._log: deque[str] = deque(maxlen=LOG_LINES)
         self._current: dict | None = None
+        self._progress: Progress | None = None     # progresso do job corrente (alimentado por _on_line)
+        self._last_progress: tuple[int, dict] | None = None   # (job, estado final) do último job
         self._last_error: str | None = None
 
     # -- controle --
@@ -265,7 +268,25 @@ class Worker(threading.Thread):
         with self._lock:
             if self._current is None:
                 return None
-            return {**self._current, "log": list(self._log)}
+            prog = self._progress.to_dict() if self._progress is not None else None
+            return {**self._current, "log": list(self._log), "progress": prog}
+
+    def progress_of(self, job_id: int) -> dict | None:
+        """Progresso do job corrente ou, logo depois de terminar, o estado final dele."""
+        with self._lock:
+            if self._current is not None and self._current.get("job_id") == job_id and self._progress is not None:
+                return self._progress.to_dict()
+            if self._last_progress is not None and self._last_progress[0] == job_id:
+                return self._last_progress[1]
+        return None
+
+    def _end_current(self) -> None:
+        """Fim do job corrente (com a trava): guarda o estado final do progresso e limpa o corrente."""
+        if self._progress is not None and self._current is not None:
+            self._progress.finish()
+            self._last_progress = (self._current["job_id"], self._progress.to_dict())
+        self._progress = None
+        self._current = None
 
     def subscribe(self) -> _q.Queue:
         q: _q.Queue = _q.Queue(maxsize=SUB_MAX)
@@ -288,7 +309,14 @@ class Worker(threading.Thread):
                     self._subs.discard(q)   # assinante lento: descartado, nunca bloqueia o worker
 
     def _on_line(self, line: str) -> None:
-        self._publish(str(line).rstrip("\r\n"))
+        text = str(line).rstrip("\r\n")
+        with self._lock:
+            if self._progress is not None:
+                try:
+                    self._progress.feed(text)
+                except Exception:      # o progresso é enfeite: nunca atrapalha o job
+                    pass
+        self._publish(text)
 
     # -- laço --
     def _after_select(self) -> None:
@@ -383,6 +411,7 @@ class Worker(threading.Thread):
             self._settled = False
             self._current = {"job_id": job["id"], "batch_id": job["batch_id"],
                              "bug": job["bug_key"], "kind": job["kind"], "started": time.time()}
+            self._progress = Progress(job["kind"])
             if job["id"] in self._cancel_req:     # cancelado entre a reivindicação e o início
                 self._cancel.set()
         t0 = time.monotonic()
@@ -426,7 +455,7 @@ class Worker(threading.Thread):
         finally:
             self._publish(None)
             with self._lock:
-                self._current = None
+                self._end_current()
                 self._cancel.clear()
                 self._cancel_req.discard(job["id"])
 
@@ -437,7 +466,7 @@ class Worker(threading.Thread):
         finally:
             self._publish(None)
             with self._lock:
-                self._current = None
+                self._end_current()
 
     def _find_run(self, job: dict, since: str) -> str | None:
         """Pasta criada por um job que falhou (a mais recente do bug e tipo desde o início do job)."""
@@ -458,4 +487,4 @@ class Worker(threading.Thread):
         finally:
             self._publish(None)
             with self._lock:
-                self._current = None
+                self._end_current()

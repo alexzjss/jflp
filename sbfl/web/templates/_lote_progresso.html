@@ -34,7 +34,9 @@
   <table>
     <thead><tr><th>Bug</th><th>Tipo</th><th>Estado</th><th>Execução</th><th></th></tr></thead>
     <tbody>{% for j in b.jobs %}
-      <tr><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td><td>{{ j.state }}{% if j.error %} <span class="erro">({{ j.error[:120] }})</span>{% endif %}</td>
+      <tr><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td><td>{{ j.state }}{% if j.state == 'running' %}
+          <div class="mini" hx-get="/job/{{ j.id }}/mini" hx-trigger="load, every 1s" hx-swap="innerHTML"><span class="mini-txt">iniciando…</span></div>
+          <a href="/job/{{ j.id }}/ao-vivo">ver ao vivo</a>{% endif %}{% if j.error %} <span class="erro">({{ j.error[:120] }})</span>{% endif %}</td>
         <td>{% if j.run_rel %}<a href="/run/{{ j.run_rel }}">abrir</a>{% else %}-{% endif %}</td>
         <td>{% if j.state == 'running' %}<button type="button" hx-post="/job/{{ j.id }}/cancelar" hx-swap="none"
             hx-confirm="Cancelar este job? O Maven é encerrado agora e a execução parcial é descartada.">Cancelar job</button>

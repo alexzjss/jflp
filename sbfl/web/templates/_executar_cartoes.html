@@ -1,15 +1,19 @@
-<div id="exe-cartoes"{% if pendente %} hx-get="/executar/{{ bid }}/cartoes" hx-trigger="load delay:{{ poll }}s" hx-swap="outerHTML"{% endif %}>
+{# Com jobs em andamento, o conjunto só é trocado quando algum job muda de estado (204 caso contrário); o andamento
+   de cada cartão vem de /job/N/mini, então os botões Cancelar não são recriados a cada ciclo. #}
+<div id="exe-cartoes"{% if pendente %} hx-get="/executar/{{ bid }}/cartoes" hx-vals='{"sig": "{{ sig }}"}' hx-trigger="every {{ poll }}s" hx-swap="outerHTML"{% endif %}>
 {% for c in cards %}
 <section class="exe-cartao">
   <h2>{{ c.nome }}</h2>
-  {% if c.state == 'pending' %}
-  <p class="vazio">Na fila. <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a>
-    <button type="button" hx-post="/job/{{ c.job.id }}/cancelar" hx-vals='{"proximo": "/executar/{{ bid }}"}' hx-swap="none"
-      hx-confirm="Cancelar esta execução? O que já foi feito é descartado.">Cancelar</button></p>
-  {% elif c.state == 'running' %}
-  <p>Rodando… <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a>
-    <button type="button" hx-post="/job/{{ c.job.id }}/cancelar" hx-vals='{"proximo": "/executar/{{ bid }}"}' hx-swap="none"
-      hx-confirm="Cancelar esta execução? O que já foi feito é descartado.">Cancelar</button></p>
+  {% if c.state in ('pending', 'running') %}
+  <div class="exe-andamento">
+    <div class="mini" hx-get="/job/{{ c.job.id }}/mini" hx-trigger="load, every 1s" hx-swap="innerHTML">
+      <span class="mini-txt">{{ 'Na fila' if c.state == 'pending' else 'Rodando…' }}</span><span class="barra-fina"></span></div>
+    <div class="botoes">
+      <a class="botao" href="/job/{{ c.job.id }}/ao-vivo">Ver ao vivo</a>
+      <button type="button" hx-post="/job/{{ c.job.id }}/cancelar" hx-vals='{"proximo": "/executar/{{ bid }}"}' hx-swap="none"
+        hx-confirm="Cancelar esta execução? O que já foi feito é descartado.">Cancelar</button>
+    </div>
+  </div>
   {% elif c.state == 'cancelled' %}
   <p class="vazio">Cancelado.</p>
   {% elif c.run %}
