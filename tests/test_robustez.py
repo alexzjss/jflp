@@ -167,20 +167,6 @@ class GuiaTest(Tmp):
         r = find_poms(self.tmp, limit=2)
         self.assertEqual((list(r), r.mais), (["a", "b"], 1))
 
-    def test_template_shows_mais(self):
-        from jinja2 import Environment, FileSystemLoader
-        from sbfl.web import app
-        env = Environment(loader=FileSystemLoader(str(Path(app.__file__).parent / "templates")))
-        for i in range(53):
-            (self.tmp / f"p{i:02d}").mkdir()
-            (self.tmp / f"p{i:02d}" / "pom.xml").write_text("<project/>")
-        r = find_poms(self.tmp)
-        html = env.get_template("_executar_guia.html").render(
-            guia={"titulo": "t", "texto": "", "candidatos": r, "bugsjar": False})
-        self.assertIn("e mais 3", html)
-        self.assertEqual(len(r), 50)
-
-
 class CliTest(Tmp):
     def test_parse_bug_folder_and_url(self):
         s = load_settings(Home(self.tmp / "h"))

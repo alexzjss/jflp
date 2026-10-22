@@ -56,7 +56,6 @@ class RunPage(RunsBase):
         self.assertIn("ok", r.text)
         self.assertIn("a.BTest#t2", r.text)
         self.assertIn("outputs/jaguar2.csv", r.text)
-        self.assertIn("Salvar como receita", r.text)
         frag = c.get(f"/run/{rel}/linhas?ord=susp&dir=desc")
         self.assertIn('class="defeito"', frag.text)
         self.assertLess(frag.text.index("0.9"), frag.text.index("0.2"))
@@ -125,7 +124,7 @@ class RunPage(RunsBase):
     def test_retry_enqueues_with_parent_and_fix(self):
         rel = self.make_run(kind="jaguar2", status="classes_duplicadas", diag=DIAG, fixes=("junit4",))
         c = self.authed()
-        p = mock.patch("sbfl.web.routes_bugs.bug_from_key", return_value=BUG)
+        p = mock.patch("sbfl.web.comum.bug_from_key", return_value=BUG)
         p.start()
         self.addCleanup(p.stop)
         r = c.post(f"/run/{rel}/tentar", data={"idx": "1"}, follow_redirects=False)
@@ -150,7 +149,7 @@ class RunPage(RunsBase):
         self.assertEqual(opts["params"]["exclude-duplicates"], {"files": ["a/B.java"]})
 
     def _retry(self, rel, idx=0):
-        p = mock.patch("sbfl.web.routes_bugs.bug_from_key", return_value=BUG)
+        p = mock.patch("sbfl.web.comum.bug_from_key", return_value=BUG)
         p.start()
         self.addCleanup(p.stop)
         r = self.authed().post(f"/run/{rel}/tentar", data={"idx": str(idx), "confirmar": "1"},
@@ -194,20 +193,6 @@ class RunPage(RunsBase):
         with contextlib.closing(jq._connect(self.home)) as con:
             return con.execute("SELECT options FROM batches WHERE id=?", (bid,)).fetchone()[0]
 
-    def test_save_recipe_writes_toml(self):
-        rel = self.make_run()
-        c = self.authed()
-        r = c.post(f"/run/{rel}/receita", data={"scope": "bug", "note": "ok"}, follow_redirects=False)
-        self.assertEqual(r.status_code, 303)
-        txt = (self.home.recipes / "bugsjar" / "commons-lang.toml").read_text(encoding="utf-8")
-        self.assertIn('match = "7"', txt)
-        self.assertIn('fixes = ["junit4"]', txt)
-        bad = c.post(f"/run/{rel}/receita", data={"scope": "glob", "glob": ""})
-        self.assertEqual(bad.status_code, 400)
-        plain = self.make_run(fixes=(), attempts=1)
-        self.assertNotIn("Salvar como receita", c.get(f"/run/{plain}").text)
-        self.assertEqual(c.post(f"/run/{plain}/receita", data={"scope": "bug"}).status_code, 400)
-
     def test_open_folder_and_zip(self):
         rel = self.make_run()
         c = self.authed()
@@ -222,82 +207,6 @@ class RunPage(RunsBase):
         import io
         import zipfile
         self.assertIn("run.json", zipfile.ZipFile(io.BytesIO(z.content)).namelist())
-
-
-class Compare(RunsBase):
-    def test_compare_page(self):
-        a = self.make_run(kind="jaguar2")
-        b = self.make_run(kind="jaguar2", csv="a/B,10,3,0,1,5,0.5\na/D,1,1,0,0,2,0.1\n")
-        c = self.authed()
-        r = c.get("/comparar", params={"a": a, "b": b})
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("Posição das linhas do defeito", r.text)
-        self.assertIn("a.D", r.text)
-        self.assertEqual(c.get("/comparar").status_code, 200)
-        self.assertEqual(c.get("/comparar", params={"a": "x/y/z/w", "b": b}).status_code, 404)
-
-    def test_bug_page_links(self):
-        j2 = self.make_run(kind="jaguar2")
-        mv = self.make_run(kind="maven")
-        with mock.patch("sbfl.web.routes_bugs.bug_from_key", return_value=BUG):
-            r = self.authed().get(f"/bug/{BUG.key}")
-        self.assertEqual(r.status_code, 200)
-        self.assertIn(f"/comparar?a={mv}&amp;b={j2}", r.text)
-        self.assertNotIn("Jaguar 1 × Jaguar 2", r.text)
-
-
-class Batches(RunsBase):
-    def test_batch_create_progress_csv(self):
-        c = self.authed()
-        pre = c.get("/lotes", params={"bugs": "bugsjar/commons-lang/7,bugsjar/commons-lang/8"})
-        self.assertIn("bugsjar/commons-lang/8", pre.text)
-        with mock.patch("sbfl.web.routes_bugs.bug_from_key", side_effect=lambda s, k: Bug(*k.split("/", 2))):
-            r = c.post("/lotes", data={"bugs": "bugsjar/commons-lang/7\nbugsjar/commons-lang/8",
-                                       "kinds": ["maven", "jaguar2"], "scope": "all", "auto_search": "1"},
-                       follow_redirects=False)
-        self.assertEqual(r.status_code, 303)
-        bid = int(r.headers["location"].rsplit("/", 1)[1])
-        self.assertEqual(len(jq.batch_jobs(self.home, bid)), 4)
-        rel = self.make_run()
-        con_job = jq.batch_jobs(self.home, bid)[0]
-        import contextlib
-        with contextlib.closing(jq._connect(self.home)) as con, con:
-            con.execute("UPDATE jobs SET state='done', run_rel=?, seconds=5 WHERE id=?", (rel, con_job["id"]))
-        page = c.get(f"/lote/{bid}")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn('id="lote-vista"', page.text)
-        frag = c.get(f"/lote/{bid}/progresso")
-        self.assertNotIn("<html", frag.text)
-        self.assertIn("Pausar", frag.text)
-        csvr = c.get(f"/lote/{bid}/csv")
-        self.assertEqual(csvr.status_code, 200)
-        self.assertTrue(csvr.text.startswith("benchmark,project,kind"))
-        self.assertIn("bugsjar,commons-lang,jaguar2,1", csvr.text)
-        self.assertEqual(c.post(f"/lote/{bid}/pausar", follow_redirects=False).status_code, 303)
-        self.worker.pause.assert_called_once_with(bid)
-        self.assertIn("lote", c.get("/lotes").text.lower())
-        self.assertEqual(c.get("/lote/999").status_code, 404)
-        bad = c.post("/lotes", data={"bugs": "", "kinds": ["maven"]})
-        self.assertEqual(bad.status_code, 400)
-
-
-class Recipes(RunsBase):
-    def test_invalid_recipe_toml_rejected_pt(self):
-        f = self.home.recipes / "bugsjar" / "commons-lang.toml"
-        f.parent.mkdir(parents=True)
-        f.write_text('[[recipe]]\nmatch = "7"\n', encoding="utf-8")
-        c = self.authed()
-        self.assertIn("bugsjar/commons-lang.toml", c.get("/receitas").text)
-        r = c.post("/receitas", data={"f": "bugsjar/commons-lang.toml", "texto": "[[recipe\nmatch ="})
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("TOML inválido", r.text)
-        self.assertEqual(f.read_text(encoding="utf-8"), '[[recipe]]\nmatch = "7"\n')
-        ok = c.post("/receitas", data={"f": "bugsjar/commons-lang.toml",
-                                       "texto": '[[recipe]]\r\nmatch = "9"\r\nkind = "*"\r\n'})
-        self.assertEqual(ok.status_code, 200)
-        self.assertEqual(f.read_text(encoding="utf-8"), '[[recipe]]\nmatch = "9"\nkind = "*"\n')
-        esc = c.post("/receitas", data={"f": "../config.toml", "texto": "a = 1"})
-        self.assertEqual(esc.status_code, 400)
 
 
 class ResultadoNaPagina(RunsBase):
@@ -451,28 +360,6 @@ class ResultadoNaPagina(RunsBase):
     def test_sem_verdade_nao_mostra_secao_de_linhas_do_defeito(self):
         rel = self.run_with(truth=[])
         self.assertNotIn("Linhas do defeito (pelo patch)", self.authed().get(f"/run/{rel}").text)
-
-
-class Export(RunsBase):
-    def test_export_dataset(self):
-        self.make_run()
-        c = self.authed()
-        self.assertEqual(c.get("/exportar").status_code, 200)
-        r = c.post("/exportar", data={"nome": "meu_ds"})
-        self.assertEqual(r.status_code, 200)
-        self.assertTrue((self.home.datasets / "meu_ds" / "manifest.csv").exists())
-        with mock.patch("sbfl.web.routes_runs._open_path", side_effect=OSError("sem gerenciador")):
-            fail = c.post("/exportar/abrir", data={"nome": "meu_ds"})
-        self.assertEqual(fail.status_code, 500)
-        self.assertIn("sem gerenciador", fail.text)
-        with mock.patch("sbfl.web.routes_runs._open_path", side_effect=OSError("sem gerenciador")):
-            hx = c.post("/exportar/abrir", data={"nome": "meu_ds"}, headers={"HX-Request": "true"})
-        self.assertEqual(hx.status_code, 500)
-        self.assertNotIn("<html", hx.text)
-        self.assertIn("Não foi possível abrir a pasta", hx.text)
-        dup = c.post("/exportar", data={"nome": "meu_ds"})
-        self.assertEqual(dup.status_code, 400)
-        self.assertIn("Já existe", dup.text)
 
 
 if __name__ == "__main__":

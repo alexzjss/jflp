@@ -90,11 +90,6 @@ a:hover { text-decoration: underline; }
 .bv-failed { color: var(--err); }
 
 /* Executar (execução rápida) */
-.exe-campo { margin: 14px 0 6px; }
-.exe-cartao h2 { margin-bottom: 6px; }
-.exe-linhas { margin: 8px 0 12px; }
-.exe-linhas td:last-child, .exe-linhas th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
-.exe-sug { margin: 4px 0; padding-left: 20px; }
 button[disabled] { opacity: .5; cursor: not-allowed; }
 
 /* Janela estreita: barra lateral vira faixa no topo e nada força rolagem horizontal da página */
@@ -173,7 +168,6 @@ a.botao.primario { background: var(--accent); border-color: var(--accent); color
 .barra-fina { display: block; height: 3px; border-radius: 999px; overflow: hidden; position: relative; background: var(--line); }
 .barra-fina::after { content: ""; position: absolute; top: 0; bottom: 0; width: 35%; border-radius: 999px;
   background: var(--accent); animation: av-desliza 1.4s ease-in-out infinite; }
-.exe-andamento { display: flex; flex-direction: column; gap: 10px; }
 @keyframes av-gira { to { transform: rotate(360deg); } }
 @keyframes av-pulso { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.7); } }
 @keyframes av-desliza { 0% { left: -35%; } 100% { left: 100%; } }
@@ -189,19 +183,10 @@ a.botao.primario { background: var(--accent); border-color: var(--accent); color
 }
 
 /* Executar: seletor de defeitos do Bugs.jar */
-.bj-lista { margin: 10px 0; }
-.bj-itens { list-style: none; padding: 0; margin: 0 0 10px; max-height: 320px; overflow: auto; }
-.bj-linha { padding: 3px 0; border-bottom: 1px solid rgba(128, 128, 128, .2); }
-.bj-linha[hidden] { display: none; }
-.bj-resumo { display: block; margin-left: 24px; font-size: .9em; }
 button.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
 
 /* resultados e navegação */
 .lateral a { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 20px; }
-.lateral details.mais { margin-top: 8px; border-top: 1px solid rgba(255,255,255,.12); }
-.lateral details.mais summary { cursor: pointer; padding: 8px 20px; color: var(--side-text); opacity: .7; font-size: .9em; }
-.lateral details.mais summary:hover, .lateral details.mais[open] summary { opacity: 1; }
-.lateral details.mais a { padding-left: 32px; font-size: .92em; }
 .selo { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent);
   color: #fff; font-size: .75rem; font-weight: 700; text-align: center; line-height: 20px; }
 .selo-vaga:empty { display: none; }
@@ -215,7 +200,6 @@ td.chips { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 0; }
 .chip { font-size: .82rem; white-space: nowrap; }
 form.filtros { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
 form.filtros input[type=search] { flex: 1 1 220px; min-width: 160px; }
-@media (max-width: 760px) { .lateral details.mais a { padding-left: 24px; } }
 
 /* rodar */
 .rd { max-width: 900px; }

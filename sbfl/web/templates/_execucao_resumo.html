@@ -2,7 +2,7 @@
 {% if job.state == 'cancelled' %}
   <h2>Cancelado</h2>
   <p class="vazio">A execução foi cancelada e nada ficou gravado.</p>
-  <div class="botoes"><a class="botao" href="/executar">Nova execução</a> <a class="botao" href="/fila">Fila</a></div>
+  <div class="botoes"><a class="botao" href="/rodar">Nova execução</a> <a class="botao" href="/resultados">Resultados</a></div>
 {% elif run %}
   <h2>Resultado</h2>
   <p class="av-linha-resumo">
@@ -20,6 +20,6 @@
 {% else %}
   <h2>Terminou sem resultado</h2>
   <p class="erro">{{ job.error or 'A execução terminou sem gravar uma pasta de execução.' }}</p>
-  <div class="botoes"><a class="botao" href="/executar">Nova execução</a> <a class="botao" href="/fila">Fila</a></div>
+  <div class="botoes"><a class="botao" href="/rodar">Nova execução</a> <a class="botao" href="/resultados">Resultados</a></div>
 {% endif %}
 </div>

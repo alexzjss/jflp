@@ -17,9 +17,9 @@ from .. import store
 from ..adapters.base import Bug
 from ..prepare import (bugsjar_label, bugsjar_repo_bugs, bugsjar_summary, find_bugsjar_repo, find_poms,
                        is_bugsjar_collection, is_bugsjar_repo, local_bug)
-from .routes_bugs import KIND_LABEL, KINDS, kinds_validos
+from .comum import (KIND_LABEL, KINDS, _pick_folder, _ramo, _tk_available, add_recente, is_bugsjar_repo_ou_ramo,
+                    kinds_validos, load_recentes)
 from .routes_lote import vista_ctx
-from .routes_quick import (_pick_folder, _ramo, _tk_available, add_recente, is_bugsjar_repo_ou_ramo, load_recentes)
 
 router = APIRouter()
 

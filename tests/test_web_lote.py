@@ -8,7 +8,6 @@ from pathlib import Path
 
 from sbfl import bugview as bv
 from sbfl import queue as jq
-from sbfl import store
 from tests.bugsjar_fixture import make_bugsjar_git, ramo_de
 from tests.test_bugview import FOO, Base, _git, _rm, linhas
 from tests.web_helpers import HAVE_WEB, WebFixture

@@ -97,23 +97,6 @@
 </section>
 {% endif %}
 
-{% if can_recipe %}
-<section>
-  <h2>Salvar como receita</h2>
-  <p class="vazio">Guarda as correções da última tentativa (fixes: {{ cfg.fixes_on|join(', ') or 'nenhuma' }}) para execuções futuras.</p>
-  <form method="post" action="/run/{{ rel|q }}/receita" class="linha">
-    <select name="scope">
-      <option value="bug">Só este bug ({{ run.bug_id }})</option>
-      <option value="glob">Padrão de bugs</option>
-      <option value="projeto">Projeto inteiro</option>
-    </select>
-    <input type="text" name="glob" placeholder="Padrão (ex.: 1*), só para o escopo padrão" style="min-width:200px">
-    <input type="text" name="note" placeholder="Nota (opcional)" style="min-width:200px">
-    <button type="submit">Salvar como receita</button>
-  </form>
-</section>
-{% endif %}
-
 <section>
   <h2>Testes</h2>
   {% if counts %}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import time
@@ -13,11 +14,8 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from sbfl import queue as jq
-from sbfl.adapters.base import Bug
 from sbfl.home import Home, load_settings
 from tests.web_helpers import BASE, TOKEN, WebFixture
-
 
 
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
@@ -50,15 +48,6 @@ class WebBase(WebFixture, unittest.TestCase):
         r = c.post("/ambiente/apontar", data={"kind": "jdk", "path": str(self.tmp)},
                    headers={"origin": "http://evil.example.com"})
         self.assertEqual(r.status_code, 403)
-
-    def test_painel_shows_queue_and_error(self):
-        self.worker.status.return_value = {"alive": True, "last_error": "RuntimeError('boom')",
-                                           "current": None}
-        jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "7")], ["maven"], {})
-        r = self.authed().get("/painel")
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("bugsjar/commons-lang/7", r.text)
-        self.assertIn("boom", r.text)
 
     def test_ambiente_renders_without_tools(self):
         patches = self.no_tools()
@@ -135,7 +124,7 @@ class WebBase(WebFixture, unittest.TestCase):
 
     def test_unauthenticated_requests_denied(self):
         for method, path in [("get", "/static/htmx.min.js"), ("get", "/ambiente/progresso/x"),
-                             ("get", "/painel/estado"), ("post", "/ambiente/baixar"),
+                             ("post", "/ambiente/baixar"),
                              ("post", "/ambiente/prefetch"), ("post", "/ambiente/apontar")]:
             with self.subTest(method=method, path=path):
                 self.assertEqual(getattr(self.client, method)(path).status_code, 403)
@@ -213,16 +202,6 @@ class WebBase(WebFixture, unittest.TestCase):
                 time.sleep(0.05)
         self.assertEqual(pf.call_count, 1)
 
-    def test_painel_auto_refresh_fragment(self):
-        c = self.authed()
-        self.assertIn('hx-trigger="every 3s"', c.get("/painel").text)
-        jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "9")], ["maven"], {})
-        frag = c.get("/painel/estado")
-        self.assertEqual(frag.status_code, 200)
-        self.assertIn("bugsjar/commons-lang/9", frag.text)
-        self.assertNotIn("<html", frag.text)
-
-
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
 class ServeBind(unittest.TestCase):
     def test_serve_occupied_port_returns_error(self):
@@ -262,3 +241,23 @@ class ServeBind(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class TelasRemovidas(WebFixture, unittest.TestCase):
+    """Painel, Executar, Bugs, Lotes, Fila, Comparar, Receitas e Exportar saíram da interface."""
+    REMOVIDAS = ("/painel", "/painel/estado", "/executar", "/executar/1", "/bugs", "/bug/bugsjar/maven/MNG-1",
+                 "/lotes", "/fila", "/lote/1/progresso", "/comparar", "/receitas", "/exportar")
+
+    def test_urls_antigas_dao_404(self):
+        c = self.authed()
+        for path in self.REMOVIDAS:
+            with self.subTest(path=path):
+                self.assertEqual(c.get(path).status_code, 404)
+
+    def test_barra_lateral_so_tem_rodar_resultados_e_ambiente(self):
+        html = self.authed().get("/rodar").text
+        nav = html[html.index('<nav class="lateral">'):html.index("</nav>")]
+        self.assertEqual(re.findall(r'<a href="(/[^"]*)"', nav), ["/rodar", "/resultados", "/ambiente"])
+        self.assertNotIn("<details", nav)
+        self.assertNotIn("Mais", nav)

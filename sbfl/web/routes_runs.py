@@ -1,4 +1,4 @@
-"""Telas de execução, comparação, lotes, receitas e exportação de dataset."""
+"""Detalhes de uma execução: página, linhas do ranking, código, arquivos, log, tentar de novo e ranking/espectro."""
 from __future__ import annotations
 
 import gzip
@@ -8,7 +8,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import tomllib
 import xml.etree.ElementTree as ET
 import zipfile
 from html import escape
@@ -17,18 +16,16 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 
-from .. import bugview, compare, dataset, recipes, source, store
+from .. import bugview, compare, source, store
 from .. import queue as jobs_queue
 from .. import status as S
-from ..adapters.base import Bug
 from ..autosearch import effective_jdk_maven
 from ..diagnose import SEM_INSTRUMENTACAO, applicable
 from ..diffgt import FaultLine, select_lines
 from ..outputs import (AVISO_LOG_INTERROMPIDO, jaguar1_counts, outer, parse_jaguar1_log,
                        ranking_csv, ranking_rows, reconcile_jaguar1, test_counts)
 from ..winpath import inside
-from ..run_maven import AttemptConfig
-from .routes_bugs import KIND_LABEL, KINDS, _find_bug
+from .comum import KIND_LABEL, _find_bug, _msg, _render
 
 router = APIRouter()
 
@@ -36,17 +33,7 @@ PAGE_SIZE = 200
 MAX_MATCHES = 500
 LOG_CONTEXT = 2
 ORDER_COLS = ("cls", "line", "cef", "cep", "cnf", "cnp", "susp")
-LIST_CAP = 200
 MAX_FILES = 500
-MAX_SELECT = 200
-
-
-def _render(request: Request, name: str, ctx: dict, status: int = 200):
-    return request.app.state.templates.TemplateResponse(request, name, ctx, status_code=status)
-
-
-def _msg(request: Request, page: str, title: str, text: str, status: int):
-    return _render(request, "mensagem.html", {"page": page, "titulo": title, "texto": text}, status)
 
 
 def _open_reply(request: Request, page: str, title: str, text: str, status: int):
@@ -101,11 +88,6 @@ def _last_cfg(run: dict) -> dict:
     cfg.setdefault("maven", None)
     cfg.setdefault("test_scope", run.get("test_scope") or "relevant")
     return cfg
-
-
-def _can_save_recipe(run: dict) -> bool:
-    cfg = _last_cfg(run)
-    return S.is_success(run.get("status") or "") and ((run.get("attempts") or 0) > 1 or bool(cfg["fixes_on"]))
 
 
 def _open_path(path: Path) -> None:
@@ -517,7 +499,7 @@ def run_spectrum(request: Request, rel: str):
     return FileResponse(raw, filename=raw.name)
 
 
-# --------------------------------------------------- tentar de novo / receita
+# ------------------------------------------------------------- tentar de novo
 
 def _detected_fixes(d: Path | None, run: dict) -> list[str] | None:
     """Correções detectadas do POM na última tentativa real (attempt.json → extra.pom_plan.detected)."""
@@ -592,28 +574,6 @@ def run_retry(request: Request, rel: str, idx: int = Form(...), confirmar: str =
     return RedirectResponse(f"/job/{job['id']}/ao-vivo", status_code=303)
 
 
-@router.post("/run/{rel:path}/receita")
-def run_recipe(request: Request, rel: str, scope: str = Form("bug"), glob: str = Form(""),
-               note: str = Form("")):
-    got = _load(request, rel)
-    if got is None:
-        return _no_run(request, rel)
-    run = got[0]
-    if not _can_save_recipe(run):
-        return _msg(request, "bugs", "Receita indisponível",
-                    "Só dá para salvar uma receita de uma execução bem-sucedida que precisou de correções.", 400)
-    cfg = _last_cfg(run)
-    acfg = AttemptConfig(frozenset(cfg["fixes_on"]), frozenset(cfg["fixes_off"]), cfg["params"],
-                         cfg["jdk"], cfg["maven"], cfg["test_scope"])
-    bug = Bug(run["benchmark"], run["project"], run["bug_id"])
-    try:
-        recipes.save(request.app.state.home, bug, run["kind"], "project" if scope == "projeto" else scope,
-                     acfg, glob.strip() or None, note.strip())
-    except ValueError as e:
-        return _msg(request, "bugs", "Não foi possível salvar a receita", str(e), 400)
-    return RedirectResponse("/receitas", status_code=303)
-
-
 # --------------------------------------------------------------- página da run
 
 @router.get("/run/{rel:path}", response_class=HTMLResponse)
@@ -642,227 +602,8 @@ def run_page(request: Request, rel: str):
     ctx = {"page": "bugs", "rel": rel, "run": run, "diag": diag, "counts": counts,
            "failing": failing, "files": files[:MAX_FILES], "more_files": max(0, len(files) - MAX_FILES),
            "attempts": _attempts(d), "kind_label": KIND_LABEL,
-           "can_recipe": _can_save_recipe(run), "cfg": _last_cfg(run),
+           "cfg": _last_cfg(run),
            "has_scores": run.get("kind") in ("jaguar1", "jaguar2"),
            **result,
            **_lines_ctx(request, rel, run, "susp", "desc", "", 1)}
     return _render(request, "execucao.html", ctx)
-
-
-# ----------------------------------------------------------------- comparar
-
-def _cap(items: list, n: int = LIST_CAP) -> tuple[list, int]:
-    return items[:n], max(0, len(items) - n)
-
-
-@router.get("/comparar", response_class=HTMLResponse)
-def comparar(request: Request, a: str = "", b: str = ""):
-    home = request.app.state.home
-    ctx: dict = {"page": "comparar", "runs": store.list_runs(home)[:MAX_SELECT], "a": a, "b": b, "res": None,
-                 "erro": None}
-    status = 200
-    if a and b:
-        ra, rb = _load(request, a), _load(request, b)
-        if ra is None or rb is None:
-            ctx["erro"] = "Uma das execuções escolhidas não existe."
-            status = 404
-        else:
-            try:
-                res = compare.compare_runs(home, a, b)
-                t = res["tests"]
-                ctx["res"] = res
-                ctx["limit"] = LIST_CAP
-                ctx["kinds"] = (ra[0]["kind"], rb[0]["kind"])
-                ctx["t_only_a"] = _cap(t["only_a"])
-                ctx["t_only_b"] = _cap(t["only_b"])
-                ctx["t_diff"] = _cap(t["outcome_differs"])
-                if res["spectra"]:
-                    s = res["spectra"]
-                    ctx["s_only_a"] = _cap(s["only_a"])
-                    ctx["s_only_b"] = _cap(s["only_b"])
-                    ctx["s_diffs"] = _cap(s["diffs"])
-            except (OSError, ValueError) as e:
-                ctx["erro"] = f"Não foi possível comparar: {e}"
-                status = 400
-    return _render(request, "comparar.html", ctx, status)
-
-
-# -------------------------------------------------------------------- lotes
-
-def _parse_keys(text: str) -> list[str]:
-    return [k.strip() for k in text.replace("\r", "\n").replace(",", "\n").split("\n") if k.strip()]
-
-
-def _lotes_ctx(request: Request, **kw) -> dict:
-    ctx = {"page": "lotes", "bugs": "", "kinds": KINDS, "erro": None,
-           "lotes": jobs_queue.list_batches(request.app.state.home)}
-    ctx.update(kw)
-    return ctx
-
-
-@router.get("/lotes", response_class=HTMLResponse)
-def lotes(request: Request, bugs: str = ""):
-    return _render(request, "lotes.html", _lotes_ctx(request, bugs="\n".join(_parse_keys(bugs))))
-
-
-@router.post("/lotes")
-def lotes_criar(request: Request, bugs: str = Form(""), kinds: list[str] = Form([]), scope: str = Form("relevant"),
-                auto_search: str = Form(""), archive_checkout: str = Form(""), name: str = Form("")):
-    keys = _parse_keys(bugs)
-    ks = [k for k in kinds if k in KIND_LABEL]
-    err = None
-    if not keys:
-        err = "Informe pelo menos um bug."
-    elif not ks:
-        err = "Escolha pelo menos um tipo de execução."
-    found: list[Bug] = []
-    if not err:
-        for k in keys:
-            bug = _find_bug(request, k)
-            if bug is None:
-                err = f"Bug não encontrado: {k}"
-                break
-            found.append(bug)
-    if err:
-        return _render(request, "lotes.html", _lotes_ctx(request, bugs=bugs, erro=err), 400)
-    opts = {"test_scope": scope if scope in ("relevant", "all") else "relevant",
-            "auto_search": bool(auto_search), "archive_checkout": bool(archive_checkout)}
-    bid = jobs_queue.create_batch(request.app.state.home, name.strip() or f"{len(found)} bugs", found, ks, opts)
-    return RedirectResponse(f"/lote/{bid}", status_code=303)
-
-
-def _batch_ctx(request: Request, bid: int) -> dict | None:
-    try:
-        st = jobs_queue.batch_status(request.app.state.home, bid)
-    except ValueError:
-        return None
-    return {"b": st, "kind_label": KIND_LABEL}
-
-
-@router.get("/lote/{bid}/progresso", response_class=HTMLResponse)
-def lote_progresso(request: Request, bid: int):
-    ctx = _batch_ctx(request, bid)
-    if ctx is None:
-        return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
-    return _render(request, "_lote_progresso.html", ctx)
-
-
-@router.get("/lote/{bid}/csv")
-def lote_csv(request: Request, bid: int):
-    ctx = _batch_ctx(request, bid)
-    if ctx is None:
-        return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
-    home = request.app.state.home
-    paths = {j["run_rel"] for j in ctx["b"]["jobs"] if j["run_rel"]}
-    runs = [r for r in store.list_runs(home) if r["path"] in paths]
-    text = compare.summary_csv(compare.batch_summary(home, runs))
-    return Response(text, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="lote-{bid}.csv"'})
-
-
-@router.post("/lote/{bid}/{acao}")
-def lote_acao(request: Request, bid: int, acao: str):
-    if _batch_ctx(request, bid) is None:
-        return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
-    worker = request.app.state.worker
-    fn = {"pausar": worker.pause, "retomar": worker.resume, "cancelar": worker.cancel}.get(acao)
-    if fn is None:
-        return _msg(request, "lotes", "Ação desconhecida", acao, 400)
-    fn(bid)
-    return RedirectResponse(f"/lote/{bid}", status_code=303)
-
-
-# ----------------------------------------------------------------- receitas
-
-def _recipe_files(home) -> list[str]:
-    if not home.recipes.is_dir():
-        return []
-    return sorted(f.relative_to(home.recipes).as_posix() for f in home.recipes.rglob("*.toml"))
-
-
-def _recipe_ctx(request: Request, f: str = "", texto: str | None = None, erro: str | None = None,
-                ok: bool = False) -> dict:
-    home = request.app.state.home
-    files = _recipe_files(home)
-    if texto is None and f in files:
-        texto = (home.recipes / f).read_text(encoding="utf-8")
-    return {"page": "receitas", "files": files, "f": f, "texto": texto or "", "erro": erro, "ok": ok}
-
-
-@router.get("/receitas", response_class=HTMLResponse)
-def receitas(request: Request, f: str = ""):
-    return _render(request, "receitas.html", _recipe_ctx(request, f))
-
-
-@router.post("/receitas", response_class=HTMLResponse)
-def receitas_salvar(request: Request, f: str = Form(""), texto: str = Form("")):
-    home = request.app.state.home
-    if f not in _recipe_files(home) or _inside(home.recipes, f) is None:
-        return _render(request, "receitas.html",
-                       _recipe_ctx(request, "", texto, "Arquivo de receitas inválido."), 400)
-    texto = texto.replace("\r\n", "\n").replace("\r", "\n")
-    try:
-        tomllib.loads(texto)
-    except tomllib.TOMLDecodeError as e:
-        return _render(request, "receitas.html", _recipe_ctx(request, f, texto, f"TOML inválido: {e}"), 400)
-    target = home.recipes / f
-    tmp = target.with_name(target.name + ".tmp")
-    tmp.write_text(texto, encoding="utf-8", newline="\n")
-    os.replace(tmp, target)
-    return _render(request, "receitas.html", _recipe_ctx(request, f, texto, None, True))
-
-
-# ----------------------------------------------------------------- exportar
-
-def _export_ctx(request: Request, **kw) -> dict:
-    ctx = {"page": "exportar", "lotes": jobs_queue.list_batches(request.app.state.home), "erro": None,
-           "feito": None, "nome": "", "bugs": "", "lote": ""}
-    ctx.update(kw)
-    return ctx
-
-
-@router.get("/exportar", response_class=HTMLResponse)
-def exportar(request: Request):
-    return _render(request, "exportar.html", _export_ctx(request))
-
-
-@router.post("/exportar", response_class=HTMLResponse)
-def exportar_post(request: Request, nome: str = Form(""), lote: str = Form(""), bugs: str = Form("")):
-    home = request.app.state.home
-    sel, batch_id, err = None, None, None
-    if bugs.strip():
-        sel = []
-        for k in _parse_keys(bugs):
-            bug = _find_bug(request, k)
-            if bug is None:
-                err = f"Bug não encontrado: {k}"
-                break
-            sel.append(bug)
-    elif lote.strip():
-        try:
-            batch_id = int(lote)
-            jobs_queue.batch_status(home, batch_id)
-        except ValueError:
-            err = f"Lote inválido: {lote}"
-    if not err:
-        try:
-            dest = dataset.export(home, nome, sel, batch_id)
-            return _render(request, "exportar.html", _export_ctx(request, feito=dest.name, caminho=str(dest)))
-        except ValueError as e:
-            err = str(e)
-    return _render(request, "exportar.html",
-                   _export_ctx(request, erro=err, nome=nome, bugs=bugs, lote=lote), 400)
-
-
-@router.post("/exportar/abrir", response_class=HTMLResponse)
-def exportar_abrir(request: Request, nome: str = Form("")):
-    home = request.app.state.home
-    d = _inside(home.datasets, nome) if nome else None
-    if d is None or not d.is_dir():
-        return _open_reply(request, "exportar", "Dataset não encontrado", f"Dataset não encontrado: {nome}", 404)
-    try:
-        _open_path(d)
-    except OSError as e:
-        return _open_reply(request, "exportar", "Não foi possível abrir a pasta",
-                           f"Não foi possível abrir a pasta: {e}", 500)
-    return _open_reply(request, "exportar", "Pasta aberta", "Pasta aberta no explorador de arquivos.", 200)

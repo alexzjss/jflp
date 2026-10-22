@@ -16,8 +16,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .. import queue as jobs_queue
-from .. import store
 from ..home import Home, Settings, load_settings
 from ..queue import Worker
 
@@ -78,42 +76,26 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
             return _deny("Acesso negado: abra o endereço impresso por 'jflp ui'.")
         return await call_next(request)
 
-    def estado() -> dict:
-        st = worker.status()
-        return {"status": st, "current": st["current"], "redirecionado": home.virtualized_root(),
-                "pending": jobs_queue.list_jobs(home, state="pending", limit=50),
-                "runs": store.list_runs(home)[:10]}
-
     @app.get("/", response_class=HTMLResponse)
-    def painel(request: Request):
+    def inicio(request: Request):
         from .routes_assistente import deve_abrir_assistente
         if deve_abrir_assistente(home, app.state.settings):
             return RedirectResponse("/bem-vindo", status_code=303)
-        from .routes_rodar import rodar_pagina       # a página inicial é a Rodar; o Painel segue em /painel
+        from .routes_rodar import rodar_pagina
         return rodar_pagina(request)
-
-    @app.get("/painel", response_class=HTMLResponse)
-    def painel_antigo(request: Request):
-        return app.state.templates.TemplateResponse(request, "painel.html", {"page": "painel", **estado()})
-
-    @app.get("/painel/estado", response_class=HTMLResponse)
-    def painel_estado(request: Request):
-        return app.state.templates.TemplateResponse(request, "_painel_estado.html", estado())
 
     from .routes_env import router as env_router
     app.include_router(env_router)
     from .routes_assistente import router as assistente_router
     app.include_router(assistente_router)
-    from .routes_bugs import router as bugs_router
-    app.include_router(bugs_router)
-    from .routes_fila import router as fila_router     # antes de runs: /lote/{bid}/excluir vence /lote/{bid}/{acao}
+    from .routes_job import router as job_router
+    app.include_router(job_router)
+    from .routes_fila import router as fila_router
     app.include_router(fila_router)
-    from .routes_lote import router as lote_router     # antes de runs: /lote/{bid}/parar vence /lote/{bid}/{acao}
+    from .routes_lote import router as lote_router
     app.include_router(lote_router)
     from .routes_runs import router as runs_router
     app.include_router(runs_router)
-    from .routes_quick import router as quick_router
-    app.include_router(quick_router)
     from .routes_rodar import router as rodar_router
     app.include_router(rodar_router)
     return app

@@ -3,7 +3,6 @@ from __future__ import annotations
 import contextlib
 import json
 import queue as _q
-import re
 import unittest
 from unittest import mock
 
@@ -120,7 +119,7 @@ class ProgressoWeb(WebFixture, unittest.TestCase):
     def test_stream_estado_usa_estimativa_da_ultima_execucao(self):
         self.batch()
         self.start(1)
-        with mock.patch("sbfl.web.routes_bugs.store.list_runs",
+        with mock.patch("sbfl.web.routes_job.store.list_runs",
                         return_value=[{"n_tests": 41, "seconds": 90.0}]):
             self.sql("UPDATE jobs SET state='done', run_rel='r' WHERE id=1")   # termina já: só o estado final
             sub = _q.Queue()
@@ -159,7 +158,7 @@ class ProgressoWeb(WebFixture, unittest.TestCase):
         run = {"status": "ok_testes_falhando", "seconds": 93.4, "attempts": 2, "kind": "jaguar2",
                "tests": {"total": 41, "failed": 0, "error": 1}}
         self.sql("UPDATE jobs SET state='done', run_rel='local/p/0/x' WHERE id=1")
-        with mock.patch("sbfl.web.routes_bugs.store.load_run", return_value=run):
+        with mock.patch("sbfl.web.routes_job.store.load_run", return_value=run):
             t = self.c.get("/job/1/resumo").text
         self.assertIn("ok_testes_falhando", t)
         self.assertIn('data-ok="1"', t)
@@ -189,43 +188,5 @@ class ProgressoWeb(WebFixture, unittest.TestCase):
         self.assertIn("Em andamento", self.c.get("/job/1/mini").text)
 
     # ---- achado 9: a troca periódica não recria os botões
-    def test_cartoes_204_quando_nada_mudou_e_miolo_sem_botoes(self):
-        bid = self.batch(("maven", "jaguar2"))
-        self.start(1, "maven")
-        page = self.c.get(f"/executar/{bid}/cartoes")
-        sig = re.search(r'"sig": "([0-9a-f]+)"', page.text).group(1)
-        self.assertIn(f'/job/1/mini', page.text)
-        r = self.c.get(f"/executar/{bid}/cartoes", params={"sig": sig})
-        self.assertEqual(r.status_code, 204)
-        self.sql("UPDATE jobs SET state='done', run_rel=NULL WHERE id=1")
-        r = self.c.get(f"/executar/{bid}/cartoes", params={"sig": sig})      # mudou: troca tudo
-        self.assertEqual(r.status_code, 200)
-        self.assertNotIn("<button", self.c.get("/job/1/mini").text)
-
-    def test_fila_estado_204_com_mesma_assinatura(self):
-        bid = self.batch(("maven",), n=2)
-        self.start(1, "maven")
-        page = self.c.get("/fila")
-        sig = re.search(r'"sig": "([0-9a-f]+)"', page.text).group(1)
-        self.assertIn("/job/1/mini", page.text)
-        self.assertEqual(self.c.get("/fila/estado", params={"sig": sig}).status_code, 204)
-        self.assertEqual(self.c.get("/fila/estado").status_code, 200)
-        self.sql("UPDATE jobs SET state='cancelled' WHERE id=2")
-        self.assertEqual(self.c.get("/fila/estado", params={"sig": sig}).status_code, 200)
-
-    def test_lote_painel_204_com_mesma_assinatura(self):
-        bid = self.batch(("maven",), n=2)
-        self.start(1, "maven")
-        full = self.c.get(f"/lote/{bid}/painel")
-        self.assertEqual(full.status_code, 200)
-        self.assertIn("Cancelar job", full.text)
-        sig = re.search(r'"sig": "([0-9a-f]+)"', full.text).group(1)
-        self.assertEqual(self.c.get(f"/lote/{bid}/painel", params={"sig": sig}).status_code, 204)
-        self.sql("UPDATE jobs SET state='done' WHERE id=1")
-        self.assertEqual(self.c.get(f"/lote/{bid}/painel", params={"sig": sig}).status_code, 200)
-        self.assertEqual(self.c.get("/lote/99/painel").status_code, 404)
-        self.assertIn("lote-vista", self.c.get(f"/lote/{bid}").text)
-
-
 if __name__ == "__main__":
     unittest.main()

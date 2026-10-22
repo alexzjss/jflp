@@ -5,7 +5,6 @@ import sqlite3
 import unittest
 
 from sbfl import queue as jq
-from sbfl import store
 from sbfl.adapters.base import Bug
 from tests.web_helpers import HAVE_WEB, WebFixture
 
@@ -61,27 +60,3 @@ class ResultadosWeb(WebFixture, unittest.TestCase):
                               ["jaguar2"], {})
         self.sql("UPDATE jobs SET state='running' WHERE idx=0 AND batch_id=%d" % bid)
         self.assertIn(">3<", self.c.get("/fila/contagem").text)
-
-    def test_nav_items_and_active_states(self):
-        r = self.c.get("/resultados").text
-        self.assertIn('href="/rodar"', r)
-        self.assertIn('href="/ambiente"', r)
-        self.assertIn("<details", r)
-        for href in ("/comparar", "/receitas", "/exportar", "/executar", "/bugs", "/lotes", "/fila"):
-            self.assertIn('href="%s"' % href, r)
-        self.assertIn('<a href="/resultados" class="ativo">', r)
-        self.assertNotIn('<details class="mais" open', r)
-
-    def test_nav_highlight_mapping_and_mais_open(self):
-        fila = self.c.get("/fila").text
-        self.assertIn('<a href="/resultados" class="ativo">', fila)
-        self.assertIn('<details class="mais" open', fila)
-        self.assertIn('<a href="/fila" class="ativo">', fila)
-        lotes = self.c.get("/lotes").text
-        self.assertIn('<a href="/resultados" class="ativo">', lotes)
-        exe = self.c.get("/executar").text
-        self.assertIn('<a href="/rodar" class="ativo">', exe)
-        self.assertNotIn('<a href="/resultados" class="ativo">', exe)
-        amb = self.c.get("/ambiente").text
-        self.assertIn('<a href="/ambiente" class="ativo">', amb)
-        self.assertNotIn('<details class="mais" open', amb)
