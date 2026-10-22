@@ -16,7 +16,7 @@ from .. import compare, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..diagnose import applicable
-from ..prepare import local_bug
+from ..prepare import find_poms, is_bugsjar_collection, is_bugsjar_repo, local_bug
 from .routes_bugs import KIND_LABEL, KINDS
 
 router = APIRouter()
@@ -116,9 +116,42 @@ def _pick_folder() -> str:
     return out[0]
 
 
+def _guia(request: Request, spec: str, module: str, forcar: bool) -> dict | None:
+    """Orientação antes de iniciar: pasta sem pom.xml (lista as subpastas com pom.xml) e pastas do Bugs.jar
+    (recomenda a tela Bugs). None = pode executar. URL@commit e entradas inválidas seguem para `local_bug`."""
+    spec = spec.strip().strip('"')
+    p = Path(spec).expanduser()
+    mod = (module or "").strip().strip('"').replace("\\", "/").strip("/")
+    if not p.is_dir() or ".." in mod.split("/") or mod.startswith("/"):
+        return None
+    p = p.resolve()
+    colecao = is_bugsjar_collection(p)
+    raiz_atual = str(request.app.state.settings.get("bugsjar", "root") or "")
+    g: dict = {"pasta": str(p), "candidatos": [], "bugsjar": False, "colecao": colecao, "titulo": "",
+               "texto": "", "pode_forcar": False, "raiz_atual": raiz_atual,
+               "pode_definir_raiz": colecao and Path(raiz_atual or "-") != p}
+    if not mod and not (p / "pom.xml").is_file():
+        g["candidatos"] = find_poms(p)
+        g["bugsjar"] = colecao
+        if g["candidatos"]:
+            g["titulo"] = f"A pasta {p} não tem pom.xml"
+            g["texto"] = ("Escolha uma das subpastas abaixo para rodar como projeto (ela é copiada e executada "
+                          "sozinha, sem o resto da pasta).")
+        else:
+            g["titulo"] = f"Nenhum pom.xml encontrado em {p} nem nas subpastas"
+            g["texto"] = "O Jaguar 1/Maven precisa de um projeto Maven (uma pasta com pom.xml)."
+        return g
+    alvo = p / mod if mod and (p / mod).is_dir() else p
+    if is_bugsjar_repo(alvo) and not forcar:
+        g.update(bugsjar=True, pode_forcar=True, titulo=f"{alvo.name} parece um repositório do Bugs.jar",
+                 texto="")
+        return g
+    return None
+
+
 def _form_ctx(request: Request, **kw) -> dict:
     ctx = {"page": "executar", "kinds": KINDS, "projeto": "", "sel": ["jaguar2"], "tests_mode": "all",
-           "tests": "", "auto_search": True, "erro": None, "module": "", "tk": _tk_available(),
+           "tests": "", "auto_search": True, "erro": None, "guia": None, "module": "", "tk": _tk_available(),
            "recentes": [dict(r, faltando=_folder_missing(r["spec"]),
                              nomes=[KIND_LABEL[k] for k in r["kinds"]])
                         for r in load_recentes(request.app.state.home)]}
@@ -156,7 +189,7 @@ def executar(request: Request, usar: int = -1):
 @router.post("/executar")
 def executar_post(request: Request, projeto: str = Form(""), kinds: list[str] = Form([]),
                   tests_mode: str = Form("all"), tests: str = Form(""), auto_search: str = Form(""),
-                  module: str = Form("")):
+                  module: str = Form(""), forcar: str = Form("")):
     ks = [k for k, _ in KINDS if k in kinds]
     lista = parse_tests(tests) if tests_mode == "only" else []
     err = None
@@ -166,14 +199,30 @@ def executar_post(request: Request, projeto: str = Form(""), kinds: list[str] = 
         err = "Escolha pelo menos um tipo de execução."
     elif tests_mode == "only" and not lista:
         err = "Informe pelo menos um teste (Classe ou Classe#metodo) ou escolha rodar todos."
-    bid = None
+    bid, guia = None, None
     if not err:
+        guia = _guia(request, projeto, module, bool(forcar))
+    if not err and not guia:
         bid, err = _start(request, projeto, ks, lista, bool(auto_search), module)
-    if err:
+    if err or guia:
         return _render(request, "executar.html", _form_ctx(
             request, projeto=projeto, sel=ks, tests_mode=tests_mode, tests=tests,
-            auto_search=bool(auto_search), module=module, erro=err), 400)
+            auto_search=bool(auto_search), module=module, erro=err, guia=guia), 400)
     return RedirectResponse(f"/executar/{bid}", status_code=303)
+
+
+@router.post("/executar/bugsjar-root")
+def executar_bugsjar_root(request: Request, projeto: str = Form("")):
+    """Um clique: usa a pasta escolhida como `bugsjar.root` (raiz do Bugs.jar) e abre a tela Bugs."""
+    p = Path(projeto.strip().strip('"')).expanduser()
+    if not p.is_dir() or not is_bugsjar_collection(p):
+        return _render(request, "executar.html", _form_ctx(
+            request, projeto=projeto, erro="Essa pasta não parece a raiz do Bugs.jar "
+            "(subpastas com .git e .bugs-dot-jar)."), 400)
+    settings = request.app.state.settings
+    settings.set("bugsjar", "root", str(p.resolve()))
+    settings.save()
+    return RedirectResponse("/bugs", status_code=303)
 
 
 @router.post("/executar/escolher", response_class=HTMLResponse)
@@ -197,10 +246,15 @@ def executar_recente(request: Request, i: int):
     if _folder_missing(r["spec"]):
         return _render(request, "executar.html", _form_ctx(
             request, projeto=r["spec"], module=r["module"], erro=f"Pasta não encontrada: {r['spec']}"), 400)
+    campos = {"projeto": r["spec"], "module": r["module"], "sel": r["kinds"] or ["jaguar2"],
+              "tests": "\n".join(r["tests"]), "tests_mode": "only" if r["tests"] else "all",
+              "auto_search": r["auto_search"]}
+    guia = _guia(request, r["spec"], r["module"], False)
+    if guia:
+        return _render(request, "executar.html", _form_ctx(request, guia=guia, **campos), 400)
     bid, err = _start(request, r["spec"], r["kinds"] or ["jaguar2"], r["tests"], r["auto_search"], r["module"])
     if err:
-        return _render(request, "executar.html", _form_ctx(request, projeto=r["spec"], module=r["module"],
-                                                           erro=err), 400)
+        return _render(request, "executar.html", _form_ctx(request, erro=err, **campos), 400)
     return RedirectResponse(f"/executar/{bid}", status_code=303)
 
 

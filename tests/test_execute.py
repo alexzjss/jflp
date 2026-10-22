@@ -341,6 +341,27 @@ class ExecuteTest(Base):
         self.assertEqual(list((self.home.work / "w").iterdir()), [])
 
 
+class ProjetoInvalidoTest(Base):
+    def test_projeto_sem_pom_nao_tenta_de_novo(self):
+        log_text = ("[ERROR] The goal you specified requires a project to execute but there is no POM in "
+                    "this directory (C:\\w). MissingProjectException\n")
+        calls = []
+
+        def runner(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            calls.append(cfg)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(log_text, encoding="utf-8")
+            return AttemptResult(1, False, 1.0, log, {}, {}, ["mvn"], {}, {})
+
+        with mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch.object(ex, "run_maven", runner):
+            rel = ex.execute(self.home, self.settings, BUG, "maven", ex.RunOptions())
+        run = load_run(self.home, rel)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(run["status"], "projeto_invalido")
+        self.assertEqual(run["attempts"], 1)
+
+
 class ProcOnLineTest(Base):
     def test_failing_callback_does_not_abort(self):
         import sys

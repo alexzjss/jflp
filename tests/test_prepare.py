@@ -215,10 +215,86 @@ class PrepareTests(Base):
     def test_local_prepare_returns_module(self):
         src = self.root / "multi2"
         (src / "m").mkdir(parents=True)
+        (src / "pom.xml").write_text("<project/>")
         (src / "m" / "pom.xml").write_text("<project/>")
         prep = P.prepare(self.home, self.settings, P.local_bug(str(src), "m"), self.log)
         self.assertEqual(prep.module, "m")
         self.assertTrue((prep.pristine / "m" / "pom.xml").exists())
+
+    def test_raiz_sem_pom_com_modulo_vira_o_proprio_projeto(self):
+        src = self.root / "colecao"
+        (src / "maven").mkdir(parents=True)
+        (src / "maven" / "pom.xml").write_text("<project/>")
+        (src / "maven" / "A.java").write_text("class A {}")
+        (src / "maven" / ".git").mkdir()
+        (src / "maven" / ".git" / "HEAD").write_text("x")
+        (src / "outro").mkdir()
+        (src / "outro" / "grande.bin").write_text("x" * 100)
+        (src / ".git").mkdir()
+        (src / ".git" / "HEAD").write_text("x")
+        bug = P.local_bug(str(src), "maven")
+        self.assertEqual(Path(bug.extra["path"]), (src / "maven").resolve())
+        self.assertNotIn("module", bug.extra)
+        self.assertEqual(bug.project, "maven")
+        self.assertNotEqual(bug.key, P.local_bug(str(src)).key)
+        self.assertEqual(bug.key, P.local_bug(str(src / "maven")).key)
+        prep = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertEqual(prep.module, ".")
+        self.assertTrue((prep.pristine / "pom.xml").exists())
+        self.assertFalse((prep.pristine / "outro").exists())
+        self.assertFalse((prep.pristine / ".git").exists())      # .git (de sub-repos) nunca vai para o pristine
+
+    def test_modulo_continua_valendo_com_pom_na_raiz(self):
+        src = self.root / "multi3"
+        (src / "m").mkdir(parents=True)
+        (src / "pom.xml").write_text("<project/>")
+        (src / "m" / "pom.xml").write_text("<project/>")
+        (src / "pom.xml").write_text("<project/>")
+        self.assertEqual(P.local_bug(str(src), "m").extra["module"], "m")
+
+    def test_pristine_local_nao_copia_nenhum_git(self):
+        src = self.root / "comgit"
+        (src / "sub" / ".git").mkdir(parents=True)
+        (src / "sub" / ".git" / "obj").write_text("x")
+        (src / ".git").mkdir()
+        (src / ".git" / "HEAD").write_text("x")
+        (src / "pom.xml").write_text("<project/>")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        self.assertFalse((prep.pristine / ".git").exists())
+        self.assertFalse((prep.pristine / "sub" / ".git").exists())
+        self.assertTrue((prep.pristine / "pom.xml").exists())
+
+    def test_pasta_grande_demais_e_recusada(self):
+        src = self.root / "enorme"
+        src.mkdir()
+        (src / "pom.xml").write_text("<project/>")
+        for i in range(5):
+            (src / f"f{i}.txt").write_text("x")
+        self.settings.set("run", "max_copy_files", 3)
+        with self.assertRaises(StageError) as cm:
+            P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        self.assertIn("muito grande", cm.exception.detail)
+        self.assertIn("subpasta", cm.exception.detail)
+        self.settings.set("run", "max_copy_files", 100)
+        self.settings.set("run", "max_copy_mb", 0.000001)
+        with self.assertRaises(StageError):
+            P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+
+    def test_find_poms_e_bugsjar(self):
+        src = self.root / "col"
+        for n in ("a", "b/c"):
+            (src / n).mkdir(parents=True)
+            (src / n / "pom.xml").write_text("<project/>")
+        (src / "vazia").mkdir()
+        (src / ".oculta").mkdir()
+        (src / ".oculta" / "pom.xml").write_text("<project/>")
+        self.assertEqual(P.find_poms(src), ["a", "b/c"])
+        self.assertFalse(P.is_bugsjar_repo(src / "a"))
+        (src / "a" / ".git").mkdir()
+        (src / "a" / ".bugs-dot-jar").mkdir()
+        self.assertTrue(P.is_bugsjar_repo(src / "a"))
+        self.assertTrue(P.is_bugsjar_collection(src))
+        self.assertFalse(P.is_bugsjar_collection(src / "a"))
 
     def test_local_key_raises(self):
         with self.assertRaises(ValueError):

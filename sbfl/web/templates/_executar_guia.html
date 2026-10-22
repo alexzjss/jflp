@@ -1,0 +1,28 @@
+{# Orientação da tela Executar: pasta sem pom.xml e repositórios/coleções do Bugs.jar. Vai dentro do formulário. #}
+{% if guia %}
+<div class="aviso {{ 'erro' if guia.candidatos|length == 0 and not guia.bugsjar else '' }} guia">
+  <p><strong>{{ guia.titulo }}</strong></p>
+  {% if guia.texto %}<p>{{ guia.texto }}</p>{% endif %}
+  {% if guia.candidatos %}
+  <p class="botoes">
+    {% for c in guia.candidatos %}<button type="button" class="guia-modulo" data-modulo="{{ c }}"
+      onclick="var m=document.getElementById('module');m.value=this.dataset.modulo;m.focus()">{{ c }}</button>{% endfor %}
+  </p>
+  <p class="vazio">Clicar preenche o campo Módulo; depois é só Executar.</p>
+  {% endif %}
+  {% if guia.bugsjar %}
+  <div class="guia-bugsjar">
+    <p>Isto parece {{ 'a pasta raiz do Bugs.jar (uma coleção de repositórios)' if guia.colecao else 'um repositório do Bugs.jar' }}.
+      Recomendamos a tela <a href="/bugs">Bugs</a>: ela lista cada defeito do Bugs.jar e já traz as linhas do defeito
+      (a verdade) e os testes relevantes, o que esta tela não sabe fazer com uma pasta comum.</p>
+    <p>A raiz do Bugs.jar é configurada em <code>bugsjar.root</code> (Ambiente / config.toml).
+      {% if guia.colecao %}Hoje ela está {% if guia.raiz_atual %}em <code>{{ guia.raiz_atual }}</code>{% else %}vazia{% endif %}.{% endif %}</p>
+    <div class="botoes">
+      <a class="botao" href="/bugs">Abrir a tela Bugs</a>
+      {% if guia.pode_definir_raiz %}<button type="submit" formaction="/executar/bugsjar-root" formnovalidate>Usar esta pasta como bugsjar.root</button>{% endif %}
+      {% if guia.pode_forcar %}<button type="submit" name="forcar" value="1">Rodar mesmo assim como pasta local</button>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endif %}

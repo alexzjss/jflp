@@ -39,8 +39,9 @@ def _ignore_names(directory, names) -> set[str]:
     return skip
 
 
-def _ignore_copy(directory, names) -> set[str]:
-    return _ignore_names(directory, names)
+def _ignore_local(directory, names) -> set[str]:
+    """Pristine de pasta local: sem nenhum `.git` (de sub-repositórios também); só o código importa."""
+    return _ignore_names(directory, names) | {n for n in names if n == ".git"}
 
 
 def _ignore_work(directory, names) -> set[str]:
@@ -65,6 +66,30 @@ def tree_signature(src: Path) -> str:
             size += st.st_size
             newest = max(newest, st.st_mtime_ns)
     return f"{count}:{newest}:{size}"
+
+
+def folder_too_big(src: Path, max_bytes: int, max_files: int) -> str | None:
+    """Percorre a pasta como a cópia a faria (sem .git/target/.idea) e para assim que passa de um limite.
+    Devolve o motivo em português ou None se cabe."""
+    count, size = 0, 0
+    for root, dirs, files in os.walk(long_path(src)):
+        skip = _ignore_local(root, set(dirs) | set(files))
+        dirs[:] = [d for d in dirs if d not in skip]
+        for f in files:
+            if f in skip:
+                continue
+            count += 1
+            try:
+                size += os.stat(os.path.join(root, f)).st_size
+            except OSError:
+                pass
+            if count > max_files:
+                return f"mais de {max_files} arquivos"
+            if size > max_bytes:
+                return f"mais de {max_bytes / 1048576:.0f} MB"
+    return None
+
+
 _D4J_TIMEOUT = 3600
 
 
@@ -265,6 +290,46 @@ def _bugsjar_prepare(bug: Bug, dest: Path) -> Prepared:
 
 # --------------------------------------------------------------------- Local
 
+_NAO_PROJETO = {"target", "node_modules", "src", "build", "out"}
+
+
+def find_poms(folder: Path, depth: int = 2, limit: int = 30) -> list[str]:
+    """Subpastas (até `depth` níveis, sem ocultas) com pom.xml, como caminhos relativos com `/`."""
+    out: list[str] = []
+
+    def walk(d: Path, rel: str, level: int) -> None:
+        try:
+            subs = sorted(x for x in d.iterdir() if x.is_dir())
+        except OSError:
+            return
+        for x in subs:
+            if x.name.startswith(".") or x.name in _NAO_PROJETO or len(out) >= limit:
+                continue
+            r = f"{rel}/{x.name}" if rel else x.name
+            if (x / "pom.xml").is_file():
+                out.append(r)
+            if level < depth:
+                walk(x, r, level + 1)
+
+    walk(Path(folder), "", 1)
+    return sorted(out)[:limit]
+
+
+def is_bugsjar_repo(folder: Path) -> bool:
+    """Repositório do Bugs.jar: tem a pasta `.bugs-dot-jar/`."""
+    return (Path(folder) / ".bugs-dot-jar").is_dir()
+
+
+def is_bugsjar_collection(folder: Path) -> bool:
+    """Raiz do Bugs.jar: pasta que não é um repositório dele, mas com subpastas que são (`.git` + `.bugs-dot-jar`)."""
+    folder = Path(folder)
+    if is_bugsjar_repo(folder):
+        return False
+    try:
+        return any((x / ".git").exists() and is_bugsjar_repo(x) for x in folder.iterdir() if x.is_dir())
+    except OSError:
+        return False
+
 def _norm_module(module: str | None, base: Path | None) -> str | None:
     """Módulo opcional: relativo, sem `..`, com `/`. Numa pasta local, `<pasta>/<módulo>/pom.xml` precisa existir."""
     m = (module or "").strip().strip('"').replace("\\", "/")
@@ -284,7 +349,13 @@ def local_bug(spec: str, module: str | None = None) -> Bug:
     p = Path(spec).expanduser()
     if p.is_dir():
         p = p.resolve()
-        mod = _norm_module(module, p)
+        mod = _norm_module(module, None)
+        if mod and not (p / "pom.xml").is_file() and (p / mod / "pom.xml").is_file():
+            # raiz sem pom.xml (ex.: coleção de repositórios): o módulo é o próprio projeto,
+            # copiado e executado sozinho, sem reactor
+            p, mod = p / mod, None
+        else:
+            mod = _norm_module(module, p)
         # sem módulo a chave é a de sempre (bugs locais já registrados continuam valendo)
         h = hashlib.sha1((str(p) + (f"|{mod}" if mod else "")).encode("utf-8")).hexdigest()[:8]
         extra = {"path": str(p)}
@@ -306,15 +377,29 @@ def local_bug(spec: str, module: str | None = None) -> Bug:
     raise ValueError(f"Entrada local inválida (use uma pasta existente ou URL@commit): {spec}")
 
 
-def _local_prepare(home: Home, bug: Bug, dest: Path, log: Path) -> Prepared:
+def _local_prepare(home: Home, settings: Settings, bug: Bug, dest: Path, log: Path) -> Prepared:
     e = bug.extra
     if e.get("path"):
         src = Path(e["path"])
         if not src.is_dir():
             raise _fail(f"Pasta não encontrada: {src}")
+        motivo = folder_too_big(src, int(float(settings.get("run", "max_copy_mb", 2048)) * 1048576),
+                                int(settings.get("run", "max_copy_files", 200000)))
+        if motivo:
+            raise _fail(f"A pasta do projeto é muito grande para copiar ({motivo}): {src}. "
+                        "Escolha a subpasta do projeto ou informe um módulo; os limites ficam em "
+                        "run.max_copy_mb e run.max_copy_files no config.toml.")
         sig = tree_signature(src)
-        shutil.copytree(long_path(src), long_path(dest), ignore=_ignore_copy)
-        return Prepared(bug, dest, e.get("module") or ".", None, [], {"source_signature": sig})
+        info = {"source_signature": sig}
+        if (src / ".git").exists():     # o pristine não leva o .git: guarda o commit para o env.json
+            try:
+                commit = git(src, "rev-parse", "HEAD", check=False).strip()
+            except OSError:
+                commit = ""
+            if commit:
+                info["source_commit"] = commit
+        shutil.copytree(long_path(src), long_path(dest), ignore=_ignore_local)
+        return Prepared(bug, dest, e.get("module") or ".", None, [], info)
     url, commit = e["repo"], e["commit"]
     is_path = Path(url).expanduser().exists()
     src = str(Path(url).expanduser().resolve()) if is_path else url
@@ -400,7 +485,7 @@ def _prepare_locked(home: Home, settings: Settings, bug: Bug, log: Path, refresh
         elif bug.benchmark == "bugsjar":
             prep = _bugsjar_prepare(bug, dest)
         elif bug.benchmark == "local":
-            prep = _local_prepare(home, bug, dest, log)
+            prep = _local_prepare(home, settings, bug, dest, log)
         else:
             raise _fail(f"Benchmark desconhecido: {bug.benchmark}")
         marker.write_text(json.dumps(_marker_data(prep), ensure_ascii=False, indent=1), encoding="utf-8")

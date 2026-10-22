@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
+from . import status as st
 from .diagnose import Diagnosis, Suggestion, _keep
 from .run_maven import AttemptConfig
 from .toolchain.profiles import PROFILES
@@ -57,6 +58,8 @@ def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: s
 def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
                detected: set[str] | None = None) -> list[AttemptConfig]:
     """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir e limitado por run.max_attempts."""
+    if diag.status == st.PROJETO_INVALIDO:    # erro de escolha da pasta/módulo: nenhuma configuração resolve
+        return []
     detected = set(detected or ())
     out = [_from_suggestion(first, s, kind, detected)
            for s in diag.suggestions if s.fix != "exclude-duplicates" and _keep(kind, s.fix, s.maven)]

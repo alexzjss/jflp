@@ -112,6 +112,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_multimodule_installs_reactor_first(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core", ["a.BTest"]), work,
@@ -138,6 +139,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_unblock_http_passes_settings_to_every_mvn_call(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core", ["a.BTest"]), work,
@@ -154,6 +156,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_reactor_failure_stops(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         te = self.toolenv()
         (Path(te.maven.home) / "bin" / "fake.py").write_text("import sys; sys.exit(1)\n")
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core"), work, AttemptConfig(),
@@ -186,6 +189,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_forces_locale_and_records_phases_with_env(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         te = self.toolenv()
@@ -345,6 +349,7 @@ class Jaguar1Test(Base):
         te.env["FAKE_FAIL"] = "install"
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         prep = Prepared(Bug("local", "p", "1"), work, "core", None, [], {})
         r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(), self.tmp / "j1.log",
                         toolenv=te)
