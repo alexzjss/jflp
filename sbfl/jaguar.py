@@ -35,6 +35,23 @@ def write_test_list(path: Path, classes: list[str]) -> None:
         f.write("\n".join(classes) + "\n")
 
 
+def write_test_selection(sel_dir: Path, classes: list[str]) -> list[str]:
+    """O JaguarRunner 0.0.6 lê `-tf` mas não usa: roda toda `*Test.class` que acha em `-t`, e do arquivo só usa o
+    caminho para deduzir o nome (a classe é carregada do classpath). Recria `sel_dir` com um arquivo vazio por
+    classe escolhida, para passar em `-t`; devolve as que o Jaguar não rodaria (nome sem o sufixo Test)."""
+    shutil.rmtree(sel_dir, ignore_errors=True)
+    sel_dir.mkdir(parents=True, exist_ok=True)
+    ignored = []
+    for cls in classes:
+        if not cls.lower().endswith("test"):
+            ignored.append(cls)
+            continue
+        marker = sel_dir.joinpath(*cls.split(".")).with_suffix(".class")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    return ignored
+
+
 LOGBACK_XML = """<configuration>
   <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
     <encoder><pattern>%d{{HH:mm:ss.SSS}} [%thread] %-5level %logger{{36}} - %msg%n</pattern></encoder>
@@ -60,7 +77,8 @@ def write_logback(config: Path, test_log: Path) -> None:
 
 
 def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str,
-              logback: Path | None = None) -> list:
+              logback: Path | None = None, test_dir: Path | None = None) -> list:
+    """`test_dir`: pasta da seleção (`write_test_selection`) passada em `-t`; os testes de verdade seguem no classpath."""
     lib = Path(opts.lib)
     sep = os.pathsep
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
@@ -71,7 +89,7 @@ def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str,
         f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",
-        "-p", ".", "-c", ctx.classes_dir, "-t", ctx.tests_dir,
+        "-p", ".", "-c", ctx.classes_dir, "-t", str(test_dir) if test_dir else ctx.tests_dir,
         "-tf", str(tf), "-h", heuristic,
         "-ot", opts.output_type, "-o", out_base,
         "-l", opts.log_level,
@@ -113,10 +131,12 @@ def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = 
     logback = out_dir / "logback-jflp.xml"
     write_logback(logback, test_log)
     tf = ctx.project_dir / ".sbfl_tests.txt"
-    classes = list(ctx.test_classes)
+    sel_dir = out_dir / "testes-selecionados"
+    # na ordem em que o Jaguar acha os arquivos (por nome), para o culpado de um crash ser o certo
+    classes = sorted(dict.fromkeys(ctx.test_classes), key=lambda c: c.split("."))
     excluded: list[str] = []
     last_seen = None
-    meta = {"attempts": 0, "excluded_classes": excluded, "analysis_exceptions": 0}
+    meta = {"attempts": 0, "excluded_classes": excluded, "analysis_exceptions": 0, "ignored_classes": []}
     stale = ctx.project_dir / ".jaguar" / f"{out_base}.xml"
     for attempt in range(opts.max_retries + 1):
         meta["attempts"] = attempt + 1
@@ -127,11 +147,16 @@ def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = 
             meta["status"] = "no_tests"
             return meta
         write_test_list(tf, remaining)
+        meta["ignored_classes"] = write_test_selection(sel_dir, remaining)
+        remaining = [c for c in remaining if c not in meta["ignored_classes"]]
+        if not remaining:
+            meta["status"] = "no_tests"
+            return meta
         with open(log, "a", encoding="utf-8") as lf:
             lf.write(f"# sbfl attempt {attempt + 1}\n")
         with open(test_log, "a", encoding="utf-8", newline="\n") as tl:
             tl.write(f"# sbfl attempt {attempt + 1}\n")
-        r = run(build_cmd(opts, ctx, tf, out_base, heuristic, logback), cwd=ctx.project_dir,
+        r = run(build_cmd(opts, ctx, tf, out_base, heuristic, logback, sel_dir), cwd=ctx.project_dir,
                 env=opts.env or None, timeout=opts.timeout_s, log_path=log,
                 drop=NOISE,
                 count={"analysis_exceptions": r"Exception during analysis"},

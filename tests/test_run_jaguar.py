@@ -44,11 +44,20 @@ FAKE_MVN = textwrap.dedent("""\
         os.makedirs("target/test-classes", exist_ok=True)
     """)
 
+# Como o JaguarRunner 0.0.6 de verdade: ignora `-tf` e roda toda `*Test.class` achada em `-t` (em ordem de nome),
+# deduzindo a classe pelo caminho do arquivo.
 FAKE_JAVA = textwrap.dedent('''\
     import sys, os
     a = sys.argv
-    tf = a[a.index("-tf") + 1]; out = a[a.index("-o") + 1]
-    for cls in open(tf).read().split():
+    tdir = a[a.index("-t") + 1]; out = a[a.index("-o") + 1]
+    found = []
+    for root, dirs, files in os.walk(tdir):
+        dirs.sort()
+        for f in sorted(files):
+            if f.lower().endswith("test.class"):
+                rel = os.path.relpath(os.path.join(root, f), tdir)
+                found.append(rel[:-len(".class")].replace(os.sep, "."))
+    for cls in found:
         if cls == "x.CrashTest": sys.exit(137)
         st = "Failed" if cls == "x.FailTest" else "Passed"
         print(f"10:00:00.000 [main] DEBUG JaguarLogger - Test t({cls}) : {st}", flush=True)
@@ -272,6 +281,27 @@ class Jaguar1Test(Base):
         self.assertEqual(meta["excluded_classes"], ["x.CrashTest"])
         self.assertEqual(len(parse_xml_jaguar1(out / "jaguar_Ochiai.xml")), 1)
         self.assertEqual(meta["failed_tests"], ["x.FailTest#t"])
+
+    def test_jaguar1_roda_so_as_classes_escolhidas(self):
+        """O JaguarRunner ignora `-tf`: a seleção (e a exclusão) tem de chegar pela pasta passada em `-t`."""
+        fake = self._fake_java()
+        proj = self.tmp / "proj"
+        tests = proj / "target" / "test-classes" / "x"
+        tests.mkdir(parents=True)
+        for n in ("OkTest", "OutroTest", "FailTest"):      # a pasta real tem mais testes do que os escolhidos
+            (tests / f"{n}.class").write_bytes(b"\xca\xfe")
+        ctx = Ctx(proj, "target/classes", "target/test-classes", [], ["x.OkTest", "x.FailTest", "x.Helper"], [])
+        out = self.tmp / "out"
+        out.mkdir()
+        opts = JaguarOptions(lib=self.tmp, java=fake, env=dict(os.environ), max_retries=2)
+        meta = run_jaguar(opts, ctx, out)
+        self.assertEqual(meta["status"], "ok")
+        corrida = (out / "jaguar.log").read_text(encoding="utf-8")
+        self.assertIn("t(x.OkTest)", corrida)
+        self.assertIn("t(x.FailTest)", corrida)
+        self.assertNotIn("OutroTest", corrida)
+        self.assertEqual(meta["ignored_classes"], ["x.Helper"])     # o Jaguar só roda nomes terminados em Test
+        self.assertEqual(sorted(p.name for p in tests.iterdir()), ["FailTest.class", "OkTest.class", "OutroTest.class"])
 
     def test_run_jaguar1_end_to_end_with_fakes(self):
         lib = self.tmp / "lib"

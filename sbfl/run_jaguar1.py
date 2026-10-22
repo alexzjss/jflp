@@ -116,7 +116,8 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
             counts = None
     known = [t for t in (prep.relevant_tests or []) if "#" in t]
     tests, tcounts, truncated = reconcile_jaguar1(tests, counts, known)
-    extra = {"excluded_classes": meta.get("excluded_classes", []), "meta_status": meta.get("status"),
+    extra = {"excluded_classes": meta.get("excluded_classes", []), "ignored_classes": meta.get("ignored_classes", []),
+             "meta_status": meta.get("status"),
              "attempts": meta.get("attempts", 0), "test_counts": tcounts, "log_truncado": truncated}
     ok = meta.get("status") == "ok"
     return AttemptResult(0 if ok else None, meta.get("status") == "jaguar_timeout", round(total, 1),
