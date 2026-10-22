@@ -22,6 +22,7 @@ from ..adapters.base import Bug
 from ..diagnose import applicable
 from ..diffgt import FaultLine, select_lines
 from ..outputs import outer, test_counts
+from ..winpath import inside
 from ..run_maven import AttemptConfig
 from .routes_bugs import KIND_LABEL, KINDS, _find_bug
 
@@ -67,7 +68,7 @@ def _load(request: Request, rel: str) -> tuple[dict, Path] | None:
         return None
     d = store.run_dir(home, rel)
     try:
-        if not d.resolve().is_relative_to(home.runs.resolve()) or not (d / "run.json").is_file():
+        if not inside(d, home.runs) or not (d / "run.json").is_file():
             return None
         return store.load_run(home, rel), d
     except (OSError, ValueError):
@@ -82,8 +83,8 @@ def _inside(base: Path, p: str) -> Path | None:
     """`p` relativo resolvido dentro de `base`; None se tenta sair (.., absoluto, unidade)."""
     if not p or p.startswith(("/", "\\")) or ":" in p or ".." in p.replace("\\", "/").split("/"):
         return None
-    target = (base / p).resolve()
-    return target if target.is_relative_to(base.resolve()) else None
+    target = Path(os.path.abspath(base / p))
+    return target if inside(target, base) else None
 
 
 def _last_cfg(run: dict) -> dict:
