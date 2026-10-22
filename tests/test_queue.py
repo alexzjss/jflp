@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import queue as stdlib_queue  # a stdlib continua acessível
 import shutil
+import sqlite3
+import sys
 import tempfile
 import threading
 import time
@@ -214,6 +216,136 @@ class QueueTests(Base):
             w._on_line(f"l{i}")
         self.assertNotIn(q, w._subs)
         self.assertEqual(len(w._log), jq.LOG_LINES)
+
+
+def blocking_execute(started: threading.Event):
+    """Runner falso: grava uma execução e bloqueia num processo real até o worker matá-lo."""
+    from sbfl import proc, status as st
+    from sbfl.store import RunWriter as RW
+
+    def fake(home, settings, bug, kind, opts):
+        with RW(home, bug, kind) as w:
+            (home.work / "w" / "copia").mkdir(parents=True, exist_ok=True)
+            started.set()
+            try:
+                proc.run([sys.executable, "-c", "import time; time.sleep(60)"])
+                w.finish({"status": "ok"})
+            except proc.Aborted:
+                w.finish({"status": st.INTERROMPIDO})
+        return w.rel
+    return fake
+
+
+class CancelTests(Base):
+    def runs_on_disk(self):
+        return [p for p in self.home.runs.rglob("*") if p.is_dir() and len(p.relative_to(self.home.runs).parts) == 4]
+
+    def test_cancel_running_discards_run_and_continues(self):
+        started, calls = threading.Event(), []
+        slow = blocking_execute(started)
+
+        def fake(home, settings, bug, kind, opts):
+            calls.append(bug.bug_id)
+            if bug.bug_id == "0":
+                return slow(home, settings, bug, kind, opts)
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", fake):
+            w = self.worker()
+            w.start()
+            self.assertTrue(started.wait(10))
+            job_id = w.current()["job_id"]
+            t0 = time.monotonic()
+            self.assertEqual(w.cancel_job(job_id), "andamento")
+            self.assertTrue(self.batch_done(bid))
+            self.assertLess(time.monotonic() - t0, 10)      # o processo foi morto, não esperou 60 s
+        self.assertEqual(self.states(bid), ["cancelled", "done"])
+        j0 = jq.get_job(self.home, job_id)
+        self.assertIsNone(j0["run_rel"])
+        self.assertEqual(self.runs_on_disk(), [])
+        self.assertEqual(list_runs(self.home), [])
+        self.assertEqual(list((self.home.runs).rglob("*.partial")), [])
+        self.assertEqual(list((self.home.work / "w").iterdir()), [])
+        self.assertEqual(calls, ["0", "1"])
+
+    def test_shutdown_still_requeues(self):
+        started = threading.Event()
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", blocking_execute(started)):
+            w = self.worker()
+            w.start()
+            self.assertTrue(started.wait(10))
+            w.stop()
+            w.join(10)
+        self.assertEqual(self.states(bid), ["pending"])
+
+    def test_cancel_job_not_running_returns_empty(self):
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        w = self.worker()
+        jid = jq.batch_jobs(self.home, bid)[0]["id"]
+        self.assertEqual(w.cancel_job(jid), "pendente")
+        self.assertEqual(w.cancel_job(jid), "")
+        self.assertEqual(w.cancel_job(9999), "")
+        self.assertEqual(jq.batch_status(self.home, bid)["state"], "done")   # nada sobrou: lote fechado
+
+    def test_remove_pending_races_with_claim(self):
+        calls = []
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar2"], {})
+        jid = jq.batch_jobs(self.home, bid)[0]["id"]
+        w = self.worker()
+        w._after_select = lambda: w.remove_pending(jid)    # remove entre o SELECT e a reivindicação
+        with mock.patch.object(jq, "execute", lambda *a, **k: calls.append(1) or "rel/x"):
+            self.assertIsNone(w._next_job())
+        self.assertEqual(calls, [])
+        self.assertEqual(self.states(bid), ["cancelled", "pending"])
+        self.assertFalse(w.remove_pending(jid))
+        w._after_select = lambda: None
+        picked = w._next_job()                              # o outro job segue na fila
+        self.assertEqual(picked[0]["idx"], 1)
+        self.assertFalse(w.remove_pending(picked[0]["id"]))  # já reivindicado: não dá mais
+
+    def test_cancel_pending_and_everything(self):
+        started = threading.Event()
+        b1 = jq.create_batch(self.home, "a", self.bugs(2), ["jaguar2"], {})
+        b2 = jq.create_batch(self.home, "b", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", blocking_execute(started)):
+            w = self.worker()
+            w.start()
+            self.assertTrue(started.wait(10))
+            self.assertEqual(w.cancel_everything(), 3)      # 2 pendentes + o corrente
+            self.assertTrue(wait_for(lambda: w.current() is None and self.states(b1)[0] == "cancelled"))
+        self.assertEqual(self.states(b1), ["cancelled", "cancelled"])
+        self.assertEqual(self.states(b2), ["cancelled"])
+        self.assertEqual(self.runs_on_disk(), [])
+
+    def test_delete_batch(self):
+        done = jq.create_batch(self.home, "ok", self.bugs(1), ["jaguar2"], {})
+        busy = jq.create_batch(self.home, "ativo", self.bugs(1), ["jaguar2"], {})
+        w = self.worker()
+        with self.assertRaises(ValueError):
+            jq.delete_batch(self.home, busy)                # pendente: recusa
+        with contextlib.closing(sqlite3.connect(str(self.home.db_path))) as con, con:
+            con.execute("UPDATE jobs SET state='running' WHERE batch_id=?", (busy,))
+        w.cancel(busy)
+        with self.assertRaises(ValueError):
+            jq.delete_batch(self.home, busy)                # ainda em andamento: recusa
+        with contextlib.closing(sqlite3.connect(str(self.home.db_path))) as con, con:
+            con.execute("UPDATE jobs SET state='done', run_rel='a/b/c/d' WHERE batch_id=?", (busy,))
+        jq.delete_batch(self.home, busy)
+        self.assertEqual([b["id"] for b in jq.list_batches(self.home)], [done])
+        self.assertEqual(jq.list_jobs(self.home, limit=10)[0]["batch_id"], done)
+        with self.assertRaises(ValueError):
+            jq.delete_batch(self.home, busy)                # já não existe
+
+    def test_pending_jobs_listing(self):
+        a = jq.create_batch(self.home, "a", self.bugs(2), ["jaguar2"], {})
+        b = jq.create_batch(self.home, "b", self.bugs(1), ["jaguar2"], {})
+        w = self.worker()
+        w.pause(b)
+        w.cancel(a)
+        pj = jq.pending_jobs(self.home)
+        self.assertEqual([(j["batch_name"], j["batch_state"]) for j in pj], [("b", "paused")])
 
 
 if __name__ == "__main__":

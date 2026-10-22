@@ -99,6 +99,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.include_router(assistente_router)
     from .routes_bugs import router as bugs_router
     app.include_router(bugs_router)
+    from .routes_fila import router as fila_router     # antes de runs: /lote/{bid}/excluir vence /lote/{bid}/{acao}
+    app.include_router(fila_router)
     from .routes_runs import router as runs_router
     app.include_router(runs_router)
     from .routes_quick import router as quick_router

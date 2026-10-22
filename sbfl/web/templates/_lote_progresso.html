@@ -32,10 +32,14 @@
 <section>
   <h2>Jobs</h2>
   <table>
-    <thead><tr><th>Bug</th><th>Tipo</th><th>Estado</th><th>Execução</th></tr></thead>
+    <thead><tr><th>Bug</th><th>Tipo</th><th>Estado</th><th>Execução</th><th></th></tr></thead>
     <tbody>{% for j in b.jobs %}
       <tr><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td><td>{{ j.state }}{% if j.error %} <span class="erro">({{ j.error[:120] }})</span>{% endif %}</td>
-        <td>{% if j.run_rel %}<a href="/run/{{ j.run_rel }}">abrir</a>{% else %}-{% endif %}</td></tr>
+        <td>{% if j.run_rel %}<a href="/run/{{ j.run_rel }}">abrir</a>{% else %}-{% endif %}</td>
+        <td>{% if j.state == 'running' %}<button type="button" hx-post="/job/{{ j.id }}/cancelar" hx-swap="none"
+            hx-confirm="Cancelar este job? O Maven é encerrado agora e a execução parcial é descartada.">Cancelar job</button>
+          {% elif j.state == 'pending' %}<button type="button" hx-post="/job/{{ j.id }}/remover" hx-swap="none"
+            hx-confirm="Remover este job da fila?">Remover</button>{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table>
 </section>

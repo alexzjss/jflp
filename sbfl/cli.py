@@ -20,7 +20,7 @@ from .execute import RunOptions, execute
 from .home import Home, Settings, load_settings
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
-from .queue import Worker, active_batch_ids, batch_status, create_batch
+from .queue import Worker, active_batch_ids, batch_status, create_batch, delete_batch
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
 from .toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
@@ -301,6 +301,19 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
     if args.action == "status":
         _print_batch(batch_status(home, args.id))
         return 0
+    if args.action == "cancel":     # só tira os jobs pendentes; o job em andamento se cancela na interface
+        batch_status(home, args.id)
+        Worker(home, settings).cancel(args.id)
+        print(f"[OK] jobs pendentes do lote {args.id} cancelados")
+        return 0
+    if args.action == "delete":
+        try:
+            delete_batch(home, args.id)
+        except ValueError as e:
+            print(f"erro: {e}", file=sys.stderr)
+            return 1
+        print(f"[OK] lote {args.id} excluído do histórico (as execuções gravadas ficam)")
+        return 0
     # run: worker em primeiro plano até a fila esvaziar
     lock = WorkerLock(home)
     if not lock.acquire():
@@ -481,7 +494,7 @@ def _parser() -> argparse.ArgumentParser:
     p = add("compare", cmd_compare, "compara duas execuções")
     p.add_argument("rel_a")
     p.add_argument("rel_b")
-    p = add("batch", cmd_batch, "lotes: create, run, status")
+    p = add("batch", cmd_batch, "lotes: create, run, status, cancel, delete")
     bs = p.add_subparsers(dest="action", required=True, metavar="ação")
     c = bs.add_parser("create", help="cria um lote")
     c.add_argument("name")
@@ -489,6 +502,10 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("bugs", nargs="+")
     bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
     s = bs.add_parser("status", help="situação de um lote")
+    s.add_argument("id", type=int)
+    s = bs.add_parser("cancel", help="cancela os jobs pendentes de um lote")
+    s.add_argument("id", type=int)
+    s = bs.add_parser("delete", help="exclui um lote encerrado do histórico")
     s.add_argument("id", type=int)
     p = add("export", cmd_export, "exporta um dataset")
     p.add_argument("name")
