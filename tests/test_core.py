@@ -197,10 +197,10 @@ class T(unittest.TestCase):
     def test_status_constants(self):
         self.assertEqual((S.OK, S.OK_TEST_FAIL), ("ok", "ok_testes_falhando"))
         self.assertEqual(set(S.INFRA), {
-            "checkout_falhou", "jdk_incompativel", "dependencia_nao_resolvida", "plugin_incompativel",
+            "checkout_falhou", "projeto_invalido", "jdk_incompativel", "dependencia_nao_resolvida", "plugin_incompativel",
             "compilacao_falhou", "classes_duplicadas", "testes_nao_encontrados", "jaguar_sem_saida",
             "jaguar_crash", "timeout", "interrompido", "desconhecido"})
-        self.assertEqual(len(S.INFRA), 12)
+        self.assertEqual(len(S.INFRA), 13)
         self.assertTrue(S.is_success("ok") and S.is_success("ok_testes_falhando"))
         self.assertFalse(any(S.is_success(x) for x in S.INFRA))
         self.assertFalse(S.is_success(""))

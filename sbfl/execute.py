@@ -83,7 +83,9 @@ def _git_out(*args: str) -> str | None:
 def _env_info(prep, res: AttemptResult | None) -> dict:
     git = _git_out("--version")
     commit = None
-    if (prep.pristine / ".git").exists():
+    if prep.info.get("source_commit"):      # pasta local: o pristine não leva o .git
+        commit = prep.info["source_commit"]
+    elif (prep.pristine / ".git").exists():
         commit = _git_out("-C", str(prep.pristine), "rev-parse", "HEAD")
     try:
         version = importlib.metadata.version("jflp")
@@ -225,7 +227,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     aborted = True
                     break
                 stop = (st.is_success(diag.status) or not opts.auto_search or n >= max_attempts
-                        or diag.status == st.TIMEOUT)
+                        or diag.status in (st.TIMEOUT, st.PROJETO_INVALIDO))
                 if n == 1 and not stop:
                     queue = candidates(first, diag, kind, settings, _detected(prep, settings, kind, res))
                 cfg = None if stop or not queue else queue.pop(0)

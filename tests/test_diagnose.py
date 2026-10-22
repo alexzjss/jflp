@@ -42,6 +42,29 @@ class DiagnoseTest(unittest.TestCase):
             self.assertEqual(self.c(log).status, status, log)
         self.assertGreaterEqual(len(RULES), 8)
 
+    def test_projeto_invalido_e_terminal(self):
+        logs = [
+            "[ERROR] The goal you specified requires a project to execute but there is no POM in this "
+            "directory (C:\\w). Please verify you invoked Maven from the correct directory. -> [Help 1]\n"
+            "org.apache.maven.MissingProjectException",
+            "[ERROR] Could not find the selected project in the reactor: maven @ \n[ERROR] -> [Help 1]",
+        ]
+        for log in logs:
+            for kind in ("maven", "jaguar1", "jaguar2"):
+                d = self.c(log, kind=kind)
+                self.assertEqual(d.status, st.PROJETO_INVALIDO, log)
+                self.assertEqual(d.suggestions, [])
+                self.assertIn("pom.xml", d.cause)
+                self.assertIn("módulo", d.cause)
+
+    def test_candidatos_vazios_para_projeto_invalido(self):
+        from sbfl.autosearch import candidates
+        from sbfl.diagnose import Diagnosis
+        from sbfl.home import Home, load_settings
+        from sbfl.run_maven import AttemptConfig
+        settings = load_settings(Home(Path(self.tmp) / "h"))
+        self.assertEqual(candidates(AttemptConfig(), Diagnosis(st.PROJETO_INVALIDO, "x"), "maven", settings), [])
+
     def test_rat_unapproved_license(self):
         log = ("[ERROR] Failed to execute goal org.apache.rat:apache-rat-plugin:0.10:check (check) "
                "on project maven: Too many files with unapproved license: 4 See RAT report")

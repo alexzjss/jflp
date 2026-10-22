@@ -172,6 +172,19 @@ def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Pa
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
         return None
+    if not (workdir / "pom.xml").is_file():
+        # sem POM na raiz não há reactor a instalar: o `mvn -pl` falharia com MissingProjectException
+        msg = (f"# jflp: sem pom.xml em {workdir}; reactor não instalado "
+               f"(o módulo {prep.module} roda como projeto próprio)")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        if on_line:
+            try:
+                on_line(msg)
+            except Exception:
+                pass
+        return None
     log_phase(log, "reactor", on_line)
     # só o módulo do bug e o que ele precisa (o reactor inteiro pode ter módulos de distribuição que quebram)
     module = prep.module.replace("\\", "/").strip("/")

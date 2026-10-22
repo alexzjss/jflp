@@ -4,6 +4,7 @@ from __future__ import annotations
 OK = "ok"
 OK_TEST_FAIL = "ok_testes_falhando"
 CHECKOUT_FALHOU = "checkout_falhou"
+PROJETO_INVALIDO = "projeto_invalido"   # sem pom.xml na pasta ou módulo inexistente: nenhuma correção resolve
 JDK_INCOMPATIVEL = "jdk_incompativel"
 DEPENDENCIA_NAO_RESOLVIDA = "dependencia_nao_resolvida"
 PLUGIN_INCOMPATIVEL = "plugin_incompativel"
@@ -18,6 +19,7 @@ DESCONHECIDO = "desconhecido"
 
 INFRA = (
     CHECKOUT_FALHOU,
+    PROJETO_INVALIDO,
     JDK_INCOMPATIVEL,
     DEPENDENCIA_NAO_RESOLVIDA,
     PLUGIN_INCOMPATIVEL,

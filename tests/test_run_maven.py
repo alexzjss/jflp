@@ -13,7 +13,9 @@ from pathlib import Path
 from sbfl.adapters.base import Bug
 from sbfl.home import Home, load_settings
 from sbfl.prepare import Prepared
-from sbfl.run_maven import AttemptConfig, run_maven, test_selection_args
+from unittest import mock
+
+from sbfl.run_maven import AttemptConfig, install_reactor, run_maven, test_selection_args
 from sbfl.toolchain.detect import Jdk, Maven
 from sbfl.toolchain.profiles import ToolEnv
 
@@ -146,6 +148,7 @@ class RunMavenTest(unittest.TestCase):
     def test_multimodule_installs_reactor_before_clean_test(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         te = self._fake_toolenv()
         read = self._recording_fake(te)
         r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, AttemptConfig(),
@@ -167,6 +170,7 @@ class RunMavenTest(unittest.TestCase):
     def test_multimodule_reactor_failure_stops_the_attempt(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         te = self._fake_toolenv()
         read = self._recording_fake(te, fail_on="install")
         r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, AttemptConfig(),
@@ -190,6 +194,7 @@ class RunMavenTest(unittest.TestCase):
         from sbfl.run_maven import format_commands
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         te = self._fake_toolenv()
         te.env.update({"JAVA_HOME": "C:/jdk 11", "MAVEN_OPTS": "-Xmx1g"})
         self._recording_fake(te)
@@ -210,6 +215,18 @@ class RunMavenTest(unittest.TestCase):
         b = AttemptConfig(fixes_on=frozenset({"a", "b"}), params={"x": 2, "y": 1})
         self.assertEqual(a.key(), b.key())
         self.assertNotEqual(a.key(), AttemptConfig().key())
+
+    def test_install_reactor_pula_quando_nao_ha_pom_na_raiz(self):
+        work = self.tmp / "semPom"
+        (work / "m").mkdir(parents=True)
+        te = mock.MagicMock()
+        log = self.tmp / "r.log"
+        lines = []
+        r = install_reactor(te, self.settings, _prep(work, None, module="m"), work, log, lines.append)
+        self.assertIsNone(r)
+        te.mvn.assert_not_called()
+        self.assertIn("pom.xml", log.read_text(encoding="utf-8"))
+        self.assertTrue(any("pom.xml" in ln for ln in lines))
 
     @unittest.skipUnless(shutil.which("mvn") and shutil.which("java"), "requer mvn e java")
     def test_run_maven_real_selftest_project(self):

@@ -27,6 +27,7 @@
     </div>
     <p><textarea name="tests" rows="3" style="width:100%" placeholder="Classe ou Classe#metodo, separados por vírgula ou linha (só vale em &quot;só estes&quot;)">{{ tests }}</textarea></p>
     <p><label><input type="checkbox" name="auto_search" value="1" {{ 'checked' if auto_search else '' }}> busca automática de correções</label></p>
+    {% include "_executar_guia.html" %}
     <p><button type="submit">Executar</button></p>
   </form>
 </section>

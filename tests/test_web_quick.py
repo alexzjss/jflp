@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from sbfl import queue as jq
@@ -49,6 +50,7 @@ class Formulario(RunsBase):
         super().setUp()
         self.proj = self.tmp / "meu-projeto"
         self.proj.mkdir()
+        (self.proj / "pom.xml").write_text("<project/>")
 
     def test_renderiza_formulario_e_item_na_barra(self):
         r = self.authed().get("/executar")
@@ -163,6 +165,94 @@ class Formulario(RunsBase):
         r = c.post("/executar/recente/0")
         self.assertEqual(r.status_code, 400)
         self.assertEqual(jq.list_batches(self.home), [])
+
+
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class Guia(RunsBase):
+    """Pasta sem pom.xml e coleções do Bugs.jar: a tela orienta em vez de iniciar uma execução fadada a falhar."""
+
+    def setUp(self):
+        super().setUp()
+        self.col = self.tmp / "colecao"
+        for n in ("maven", "camel"):
+            (self.col / n / ".bugs-dot-jar").mkdir(parents=True)
+            (self.col / n / ".git").mkdir()
+            (self.col / n / "pom.xml").write_text("<project/>")
+        (self.col / "solto.txt").write_text("x")
+
+    def post(self, **kw):
+        data = {"projeto": str(self.col), "kinds": ["maven"]}
+        data.update(kw)
+        return self.authed().post("/executar", data=data, follow_redirects=False)
+
+    def test_sem_pom_lista_subpastas_com_pom(self):
+        plain = self.tmp / "plain"
+        for n in ("a", "b/c"):
+            (plain / n).mkdir(parents=True)
+            (plain / n / "pom.xml").write_text("<project/>")
+        r = self.post(projeto=str(plain))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("não tem pom.xml", r.text)
+        self.assertIn("b/c", r.text)
+        self.assertIn("data-modulo=\"a\"", r.text)
+        self.assertNotIn('guia-bugsjar', r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_sem_nenhum_pom_da_erro_claro(self):
+        vazio = self.tmp / "vazio"
+        (vazio / "x").mkdir(parents=True)
+        r = self.post(projeto=str(vazio))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Nenhum pom.xml encontrado", r.text)
+        self.assertIn("precisa de um projeto Maven", r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_colecao_bugsjar_recomenda_a_tela_bugs(self):
+        r = self.post()
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('guia-bugsjar', r.text)
+        self.assertIn("Bugs.jar", r.text)
+        self.assertIn("bugsjar.root", r.text)
+        self.assertIn("data-modulo=\"maven\"", r.text)
+        self.assertIn("/executar/bugsjar-root", r.text)         # um clique para configurar a raiz
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_repo_bugsjar_com_pom_pede_confirmacao_e_roda_com_forcar(self):
+        r = self.post(module="maven")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('guia-bugsjar', r.text)
+        self.assertIn("Rodar mesmo assim", r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+        ok = self.post(module="maven", forcar="1")
+        self.assertEqual(ok.status_code, 303)
+        job = jq.batch_jobs(self.home, int(ok.headers["location"].rsplit("/", 1)[1]))[0]
+        self.assertTrue(job["bug_key"].startswith("local/maven/dir-"))     # o módulo virou o projeto
+        self.assertNotIn("module", job["extra"])
+        self.assertEqual(Path(job["extra"]["path"]), (self.col / "maven").resolve())
+
+    def test_raiz_sem_pom_com_modulo_valido_sem_bugsjar_roda(self):
+        plain = self.tmp / "plain2"
+        (plain / "m").mkdir(parents=True)
+        (plain / "m" / "pom.xml").write_text("<project/>")
+        r = self.post(projeto=str(plain), module="m")
+        self.assertEqual(r.status_code, 303)
+
+    def test_recente_de_pasta_sem_pom_tambem_orienta(self):
+        rq.add_recente(self.home, str(self.col), "colecao", ["maven"], [], True)
+        r = self.authed().post("/executar/recente/0")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('guia-bugsjar', r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_definir_raiz_bugsjar_com_um_clique(self):
+        r = self.authed().post("/executar/bugsjar-root", data={"projeto": str(self.col)}, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(r.headers["location"], "/bugs")
+        self.assertEqual(self.settings.get("bugsjar", "root"), str(self.col))
+        from sbfl.home import load_settings
+        self.assertEqual(load_settings(self.home).get("bugsjar", "root"), str(self.col))
+        ruim = self.authed().post("/executar/bugsjar-root", data={"projeto": str(self.tmp / "plain")})
+        self.assertEqual(ruim.status_code, 400)
 
 
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")

@@ -24,6 +24,7 @@ DEFAULTS = {
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": []},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
+            "max_copy_mb": 2048, "max_copy_files": 200000,    # pasta local maior que isso não é copiada
             "skip_flags": list(SKIP_FLAGS)},
     "bugsjar": {"root": "", "projects": [],
                 "url_template": "https://github.com/bugs-dot-jar/{project}.git"},

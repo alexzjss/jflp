@@ -86,6 +86,10 @@ O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `-
 
 A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com as mesmas opções.
 
+**Pasta sem `pom.xml` e Bugs.jar.** A pasta escolhida precisa ser um projeto Maven. Se não tiver `pom.xml` na raiz, a tela não inicia a execução: lista as subpastas (até 2 níveis) que têm `pom.xml`, e clicar em uma preenche o campo **Módulo**. Quando a raiz não tem `pom.xml` mas o módulo informado tem, o módulo é executado como projeto próprio (só essa subpasta é copiada, sem reactor). Se a pasta (ou o módulo) é um repositório do Bugs.jar (`.bugs-dot-jar/`) ou a raiz de uma coleção deles, a tela recomenda a tela **Bugs** (que traz as linhas do defeito e os testes relevantes), oferece definir `bugsjar.root` com um clique e permite "Rodar mesmo assim como pasta local".
+
+**Lentidão ao copiar.** A cópia de uma pasta local nunca leva `.git` (nem o de sub-repositórios), `target/` de módulos nem `.idea`. Pastas maiores que `run.max_copy_mb` (2048) ou `run.max_copy_files` (200000) são recusadas com a sugestão de escolher a subpasta do projeto ou um módulo. Erros de "sem POM" ou "projeto não encontrado no reactor" terminam como `projeto_invalido` sem busca automática.
+
 **Resultado no código** (`Ver no código`, nas execuções Jaguar 1/2). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`.
 
 **Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal:
@@ -217,6 +221,7 @@ Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), 
 | `ok` | infraestrutura OK e todos os testes passaram | não |
 | `ok_testes_falhando` | infraestrutura OK; há testes falhando (o esperado num bug) | não |
 | `checkout_falhou` | não foi possível obter/preparar o bug | não |
+| `projeto_invalido` | sem `pom.xml` na pasta escolhida ou módulo inexistente (`MissingProjectException`); escolha a pasta com o `pom.xml` ou informe o módulo | não |
 | `jdk_incompativel` | JDK incompatível com o projeto ou com o JaCoCo, ou JDK pedido ausente | sim |
 | `dependencia_nao_resolvida` | dependência/plugin não baixado (inclui repositório `http` bloqueado) | sim |
 | `plugin_incompativel` | animal-sniffer, Surefire ou compiler incompatível; JVM de teste caiu | sim |

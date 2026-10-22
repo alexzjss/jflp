@@ -67,6 +67,11 @@ _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositó
 
 # A primeira regra que casar vence (padrões casados sem diferenciar maiúsculas).
 RULES: list[Rule] = [
+    Rule(st.PROJETO_INVALIDO,
+         r"there is no POM in this directory|MissingProjectException|"
+         r"Could not find the selected project in the reactor",
+         "O Maven não achou um pom.xml onde foi executado (ou o módulo informado não existe no reactor): "
+         "escolha a pasta que contém o pom.xml ou informe o módulo", only_errors=True),
     Rule(st.JDK_INCOMPATIVEL,
          r"Failed to extract descriptors|Failed to execute goal.*Index \d+ out of bounds for length \d+|"
          r"Unsupported class file major version|"
