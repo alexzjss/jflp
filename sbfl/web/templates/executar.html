@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Executar - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Executar</h1>
+{% if erro %}<p class="aviso erro">{{ erro }}</p>{% endif %}
+<section>
+  <h2>Novo projeto</h2>
+  <form method="post" action="/executar">
+    <p class="exe-campo"><label for="projeto">Projeto (pasta do computador ou URL@commit)</label></p>
+    <div class="linha">
+      <input type="text" id="projeto" name="projeto" value="{{ projeto }}" autocomplete="off"
+             placeholder="C:\caminho\do\projeto  ou  https://.../repo.git@commit">
+      {% if tk %}<button type="button" hx-post="/executar/escolher" hx-include="#projeto" hx-target="#projeto"
+                         hx-swap="outerHTML">Procurar…</button>{% endif %}
+    </div>
+    <p class="exe-campo"><label for="module">Módulo (subpasta com pom.xml, opcional)</label></p>
+    <p><input type="text" id="module" name="module" value="{{ module }}" autocomplete="off"
+              placeholder="ex.: maven-artifact  ou  a/b"></p>
+    <p class="exe-campo"><strong>O que rodar</strong></p>
+    <div class="linha">
+      {% for k, nome in kinds %}<label><input type="checkbox" name="kinds" value="{{ k }}" {{ 'checked' if k in sel else '' }}> {{ nome }}</label>{% endfor %}
+    </div>
+    <p class="exe-campo"><strong>Testes</strong></p>
+    <div class="linha">
+      <label><input type="radio" name="tests_mode" value="all" {{ 'checked' if tests_mode != 'only' else '' }}> todos</label>
+      <label><input type="radio" name="tests_mode" value="only" {{ 'checked' if tests_mode == 'only' else '' }}> só estes</label>
+    </div>
+    <p><textarea name="tests" rows="3" style="width:100%" placeholder="Classe ou Classe#metodo, separados por vírgula ou linha (só vale em &quot;só estes&quot;)">{{ tests }}</textarea></p>
+    <p><label><input type="checkbox" name="auto_search" value="1" {{ 'checked' if auto_search else '' }}> busca automática de correções</label></p>
+    <p><button type="submit">Executar</button></p>
+  </form>
+</section>
+<section>
+  <h2>Recentes</h2>
+  {% if recentes %}
+  <table>
+    <thead><tr><th>Projeto</th><th>Tipos</th><th>Data</th><th></th></tr></thead>
+    <tbody>{% for r in recentes %}
+      <tr>
+        <td><strong>{{ r.nome }}</strong><br><code>{{ r.spec }}</code>
+          {% if r.module %}<br><span class="vazio">módulo <code>{{ r.module }}</code></span>{% endif %}
+          {% if r.faltando %}<br><span class="erro">Pasta não encontrada neste computador.</span>{% endif %}
+          {% if r.tests %}<br><span class="vazio">só {{ r.tests|length }} teste(s)</span>{% endif %}</td>
+        <td>{{ r.nomes|join(', ') or '-' }}</td>
+        <td>{{ r.data.replace('T', ' ') }}</td>
+        <td><div class="botoes">
+          <form method="post" action="/executar/recente/{{ loop.index0 }}"><button type="submit" {{ 'disabled' if r.faltando else '' }}>Executar de novo</button></form>
+          <a class="botao" href="/executar?usar={{ loop.index0 }}">Usar</a>
+        </div></td>
+      </tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p class="vazio">Nenhum projeto executado ainda.</p>{% endif %}
+</section>
+{% endblock %}

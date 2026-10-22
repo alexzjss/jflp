@@ -59,3 +59,54 @@ a { color: var(--accent); }
 a:hover { text-decoration: underline; }
 .lateral a, a.botao, #linhas thead a { color: var(--text); }
 .lateral a { color: var(--side-text); }
+
+/* --- resultado no código --- */
+.codigo-layout { display: flex; gap: 16px; align-items: flex-start; }
+.codigo-classes { flex: 0 0 260px; max-height: 80vh; overflow: auto; position: sticky; top: 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--panel); padding: 4px 8px; }
+.codigo-classes h2 { font-size: 1em; margin: 6px 0; }
+.codigo-classes ul { list-style: none; margin: 0; padding: 0; }
+.codigo-classes li a { display: block; padding: 6px 8px; border-radius: 6px; color: var(--text); text-decoration: none; }
+.codigo-classes li a:hover { background: var(--bg); }
+.codigo-classes li.ativa a { background: var(--bg); box-shadow: inset 3px 0 0 var(--accent); }
+.codigo-nome { display: block; font-weight: 600; word-break: break-all; }
+.codigo-pacote, .codigo-meta { display: block; font-size: .8em; color: var(--muted); word-break: break-all; }
+.codigo-painel { flex: 1; min-width: 0; }
+.codigo-fonte { border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+  overflow: auto; max-height: 80vh; font-family: ui-monospace, Consolas, monospace; font-size: .85em; }
+.codigo-l { display: flex; min-width: max-content; scroll-margin-top: 40vh; }
+.codigo-l.com-score { background: color-mix(in srgb, var(--err) calc(var(--s) * 45%), transparent); }
+.codigo-l:target { outline: 2px solid var(--accent); outline-offset: -2px; }
+.codigo-n { flex: 0 0 4.5em; text-align: right; padding: 0 8px; color: var(--muted); text-decoration: none; user-select: none; }
+.codigo-m { flex: 0 0 9.5em; padding: 0 8px; color: var(--muted); white-space: nowrap; user-select: none; }
+.codigo-t { white-space: pre; padding-right: 12px; background: none; }
+
+/* Assistente de primeiro uso */
+.bv-lista th { width: 40%; font-weight: 600; }
+.bv-pular { display: inline; margin: 0; }
+.bv-pular button { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.bv-plano, .bv-passos { padding-left: 18px; }
+.bv-plano li, .bv-passos li { margin-bottom: 8px; }
+.bv-failed { color: var(--err); }
+
+/* Executar (execução rápida) */
+.exe-campo { margin: 14px 0 6px; }
+.exe-cartao h2 { margin-bottom: 6px; }
+.exe-linhas { margin: 8px 0 12px; }
+.exe-linhas td:last-child, .exe-linhas th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.exe-sug { margin: 4px 0; padding-left: 20px; }
+button[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* Janela estreita: barra lateral vira faixa no topo e nada força rolagem horizontal da página */
+@media (max-width: 760px) {
+  body { flex-direction: column; }
+  .lateral { width: auto; display: flex; flex-wrap: wrap; align-items: center; padding: 6px 8px; }
+  .lateral .marca { padding: 4px 10px; }
+  .lateral a { padding: 6px 10px; }
+  main { padding: 14px 12px; max-width: 100%; min-width: 0; }
+  section { overflow-x: auto; }
+  table { display: block; max-width: 100%; overflow-x: auto; }
+  .codigo-layout { flex-direction: column; align-items: stretch; }
+  .codigo-classes { flex: none; position: static; max-height: 40vh; width: 100%; }
+  input[type=text] { min-width: 0; }
+}

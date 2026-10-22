@@ -265,19 +265,44 @@ def _bugsjar_prepare(bug: Bug, dest: Path) -> Prepared:
 
 # --------------------------------------------------------------------- Local
 
-def local_bug(spec: str) -> Bug:
-    """`spec`: pasta existente ou `URL@commit`."""
+def _norm_module(module: str | None, base: Path | None) -> str | None:
+    """Módulo opcional: relativo, sem `..`, com `/`. Numa pasta local, `<pasta>/<módulo>/pom.xml` precisa existir."""
+    m = (module or "").strip().strip('"').replace("\\", "/")
+    parts = [x for x in m.split("/") if x and x != "."]
+    if not parts:
+        return None
+    if m.startswith("/") or re.match(r"^[A-Za-z]:", m) or ".." in parts:
+        raise ValueError(f"Módulo inválido (use uma subpasta relativa, sem '..'): {module}")
+    m = "/".join(parts)
+    if base is not None and not (base / m / "pom.xml").is_file():
+        raise ValueError(f"Módulo sem pom.xml: {base / m}")
+    return m
+
+
+def local_bug(spec: str, module: str | None = None) -> Bug:
+    """`spec`: pasta existente ou `URL@commit`; `module`: subpasta com pom.xml (opcional)."""
     p = Path(spec).expanduser()
     if p.is_dir():
         p = p.resolve()
-        h = hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:8]
-        return Bug("local", p.name, f"dir-{h}", {"path": str(p)})
+        mod = _norm_module(module, p)
+        # sem módulo a chave é a de sempre (bugs locais já registrados continuam valendo)
+        h = hashlib.sha1((str(p) + (f"|{mod}" if mod else "")).encode("utf-8")).hexdigest()[:8]
+        extra = {"path": str(p)}
+        if mod:
+            extra["module"] = mod
+        return Bug("local", p.name, f"dir-{h}", extra)
     if "@" in spec:
         url, commit = spec.rsplit("@", 1)
         if url and commit and "/" not in commit:
             name = url.rstrip("/").removesuffix(".git").replace("\\", "/").rsplit("/", 1)[-1]
             name = name.rsplit(":", 1)[-1] or "repo"
-            return Bug("local", name, commit[:12], {"repo": url, "commit": commit})
+            mod = _norm_module(module, None)
+            key = commit[:12]
+            extra = {"repo": url, "commit": commit}
+            if mod:
+                key += "-m" + hashlib.sha1(mod.encode("utf-8")).hexdigest()[:6]
+                extra["module"] = mod
+            return Bug("local", name, key, extra)
     raise ValueError(f"Entrada local inválida (use uma pasta existente ou URL@commit): {spec}")
 
 
@@ -289,7 +314,7 @@ def _local_prepare(home: Home, bug: Bug, dest: Path, log: Path) -> Prepared:
             raise _fail(f"Pasta não encontrada: {src}")
         sig = tree_signature(src)
         shutil.copytree(long_path(src), long_path(dest), ignore=_ignore_copy)
-        return Prepared(bug, dest, ".", None, [], {"source_signature": sig})
+        return Prepared(bug, dest, e.get("module") or ".", None, [], {"source_signature": sig})
     url, commit = e["repo"], e["commit"]
     is_path = Path(url).expanduser().exists()
     src = str(Path(url).expanduser().resolve()) if is_path else url
@@ -304,7 +329,10 @@ def _local_prepare(home: Home, bug: Bug, dest: Path, log: Path) -> Prepared:
         if r.returncode != 0:
             _rmtree(repo, strict=False)
             raise _fail(f"Não foi possível clonar {url}: {r.stderr.strip()[:300]}")
-    return _worktree_prepare(bug, repo, dest, commit, None)
+    prep = _worktree_prepare(bug, repo, dest, commit, None)
+    if e.get("module"):
+        prep.module = e["module"]
+    return prep
 
 
 # ------------------------------------------------------------------- Público

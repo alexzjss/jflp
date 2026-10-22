@@ -84,6 +84,9 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
 
     @app.get("/", response_class=HTMLResponse)
     def painel(request: Request):
+        from .routes_assistente import deve_abrir_assistente
+        if deve_abrir_assistente(home, app.state.settings):
+            return RedirectResponse("/bem-vindo", status_code=303)
         return app.state.templates.TemplateResponse(request, "painel.html", {"page": "painel", **estado()})
 
     @app.get("/painel/estado", response_class=HTMLResponse)
@@ -92,10 +95,14 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
 
     from .routes_env import router as env_router
     app.include_router(env_router)
+    from .routes_assistente import router as assistente_router
+    app.include_router(assistente_router)
     from .routes_bugs import router as bugs_router
     app.include_router(bugs_router)
     from .routes_runs import router as runs_router
     app.include_router(runs_router)
+    from .routes_quick import router as quick_router
+    app.include_router(quick_router)
     return app
 
 
@@ -105,10 +112,19 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = False) -> int:
+def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = False,
+          app_mode: bool = False) -> int:
     import uvicorn
 
+    from .. import desktop
+
     home.ensure()
+    existing = desktop.running_instance(home)
+    if existing:                      # já há uma interface aberta: só mostra a janela dela
+        print(f"JFLP Studio já está aberto em {existing}")
+        if open_browser and not (app_mode and desktop.open_app_window(existing, home)):
+            webbrowser.open(existing)
+        return 0
     try:
         settings = load_settings(home)
     except ValueError as e:         # config.toml inválido
@@ -129,10 +145,19 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
               "a porta pode estar em uso (tente --port 0).", file=sys.stderr)
         return 1
     worker.start()
+    desktop.write_ui_state(home, url)
     print(f"JFLP Studio em {url}")
     try:
         opened = False
-        if window:
+        if app_mode:
+            popen = desktop.open_app_window(url, home)
+            if popen:
+                desktop.wait_for_window(popen, Path(home.root) / "navegador", thread.is_alive)
+                opened = True
+            else:
+                print("Edge/Chrome/Chromium não encontrado; tentando pywebview.")
+                window = True
+        if window and not opened:
             try:
                 import webview
                 webview.create_window("JFLP Studio", url)
@@ -148,6 +173,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     except KeyboardInterrupt:
         pass
     finally:
+        desktop.remove_ui_state(home)
         server.should_exit = True
         worker.stop()                 # mata o Maven em andamento e devolve o job à fila
         if worker.is_alive():

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Código · {{ rel }} - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Resultado no código</h1>
+<p class="vazio"><a href="/run/{{ rel|q }}">{{ run.bug }}</a> · {{ rel }}{% if atual %} · <code>{{ atual }}</code>{% endif %}</p>
+
+{% if not classes %}
+<p class="aviso">{{ aviso }}</p>
+{% else %}
+<div class="codigo-layout">
+  <nav class="codigo-classes" aria-label="Classes com linhas suspeitas">
+    <h2>Classes</h2>
+    <ul>
+    {% for c in classes %}
+      <li class="{{ 'ativa' if c.cls == atual else '' }}">
+        <a href="/run/{{ rel|q }}/codigo?classe={{ c.cls|q }}" {% if c.cls == atual %}aria-current="page"{% endif %}>
+          <span class="codigo-nome">{{ c.cls.rsplit('.', 1)[-1] }}</span>
+          <span class="codigo-pacote">{{ c.cls.rsplit('.', 1)[0] if '.' in c.cls else '' }}</span>
+          <span class="codigo-meta">susp {{ '%.4f'|format(c.max) }} · {{ c.n }} {{ 'linha' if c.n == 1 else 'linhas' }}</span>
+        </a>
+      </li>
+    {% endfor %}
+    </ul>
+  </nav>
+
+  <section class="codigo-painel">
+  {% if aviso %}
+    <p class="aviso">{{ aviso }}</p>
+    {% if tabela %}
+    <table>
+      <thead><tr><th>linha</th><th>cef</th><th>cep</th><th>cnf</th><th>cnp</th><th>susp</th></tr></thead>
+      <tbody>{% for s in tabela %}
+        <tr><td>{{ s.line }}</td><td>{{ s.cef }}</td><td>{{ s.cep }}</td>
+          <td>{{ s.cnf if s.cnf is not none else '-' }}</td><td>{{ s.cnp if s.cnp is not none else '-' }}</td>
+          <td>{{ '%.4f'|format(s.susp) }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% endif %}
+  {% else %}
+    <p class="vazio">{{ membro }}{% if truncado %} · mostrando só as primeiras {{ rows|length }} linhas{% endif %}</p>
+    <div class="codigo-fonte" role="region" aria-label="Código-fonte">
+    {% for r in rows %}
+      <div class="codigo-l{% if r.s %} com-score{% endif %}" id="L{{ r.n }}"{% if r.s %} style="--s: {{ r.a }}" title="cef {{ r.s.cef }} · cnf {{ r.s.cnf if r.s.cnf is not none else '-' }} · cep {{ r.s.cep }} · cnp {{ r.s.cnp if r.s.cnp is not none else '-' }} · susp {{ '%.4f'|format(r.s.susp) }}"{% endif %}>
+        <a class="codigo-n" href="#L{{ r.n }}">{{ r.n }}</a>
+        <span class="codigo-m">{% if r.s %}{{ '%.3f'|format(r.s.susp) }} · {{ r.s.cef }}/{{ r.s.cep }}{% endif %}</span>
+        <code class="codigo-t">{{ r.text }}</code>
+      </div>
+    {% endfor %}
+    </div>
+    {% if top %}
+    <script>
+      if (!location.hash) { var e = document.getElementById("L{{ top }}"); if (e) e.scrollIntoView({block: "center"}); }
+    </script>
+    {% endif %}
+  {% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

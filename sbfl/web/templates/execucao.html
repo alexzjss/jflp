@@ -14,6 +14,7 @@
   <div class="botoes">
     <form method="post" action="/run/{{ rel|q }}/abrir" hx-post="/run/{{ rel|q }}/abrir" hx-target="#abrir-ret"><button type="submit">Abrir pasta</button></form>
     <a class="botao" href="/run/{{ rel|q }}/zip">Exportar zip</a>
+    {% if has_scores and total %}<a class="botao" href="/run/{{ rel|q }}/codigo">Ver no código</a>{% endif %}
   </div>
   <span id="abrir-ret"></span>
 </section>

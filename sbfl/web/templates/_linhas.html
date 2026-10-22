@@ -12,7 +12,7 @@
   <tbody>
   {% for r in rows %}
     <tr {% if r.defeito %}class="defeito"{% endif %}>
-      <td>{{ r.s.cls }}</td><td>{{ r.s.line }}</td><td>{{ r.s.cef }}</td><td>{{ r.s.cep }}</td>
+      <td><a href="/run/{{ rel|q }}/codigo?classe={{ r.s.cls|q }}#L{{ r.s.line }}">{{ r.s.cls }}</a></td><td><a href="/run/{{ rel|q }}/codigo?classe={{ r.s.cls|q }}#L{{ r.s.line }}">{{ r.s.line }}</a></td><td>{{ r.s.cef }}</td><td>{{ r.s.cep }}</td>
       <td>{{ r.s.cnf if r.s.cnf is not none else '-' }}</td><td>{{ r.s.cnp if r.s.cnp is not none else '-' }}</td>
       <td>{{ '%.4f'|format(r.s.susp) }}</td>
     </tr>

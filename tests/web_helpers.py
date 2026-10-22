@@ -26,6 +26,8 @@ class WebFixture:
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home = Home(self.tmp / "home").ensure()
         self.settings = load_settings(self.home)
+        # o Painel redireciona ao assistente sem ferramentas; por padrão os testes o dispensam
+        (self.home.root / "estado-ui.json").write_text('{"assistente_dispensado": true}', encoding="utf-8")
         worker = mock.Mock()
         worker.status.return_value = {"alive": True, "last_error": None, "current": None}
         self.worker = worker

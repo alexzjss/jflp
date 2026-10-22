@@ -73,7 +73,29 @@ cd jflp
 .\jflp.ps1 ui        # ou ./jflp.sh ui
 ```
 
-O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). A barra lateral tem: Painel, Ambiente, Bugs, Lotes, Comparar, Receitas e Exportar.
+O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem: Painel, Executar, Ambiente, Bugs, Lotes, Comparar, Receitas e Exportar.
+
+**Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, o Painel abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
+
+**Jeito rápido: tela Executar.** Para rodar um projeto sem passar por Bugs, revisão do POM e receitas:
+
+1. em **Projeto**, cole a pasta (ou clique em **Procurar…**) ou informe `URL@commit`. Em projeto multi-módulo, informe o **Módulo** (subpasta com `pom.xml`, ex.: `maven-artifact`): as dependências do reactor são instaladas antes (`-pl <módulo> -am`) e o Jaguar 2 instrumenta só esse módulo;
+2. marque **Maven**, **Jaguar 2** e/ou **Jaguar 1**;
+3. escolha os testes: **todos** ou **só estes** (`Classe` ou `Classe#metodo`, separados por vírgula ou linha);
+4. clique em **Executar**. Cada tipo ganha um cartão que se atualiza sozinho. Ao terminar, o cartão mostra o status, o diagnóstico, o resumo dos testes e as 10 linhas mais suspeitas, com links para os detalhes, para o código e para a comparação Maven × Jaguar 2.
+
+A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com as mesmas opções.
+
+**Resultado no código** (`Ver no código`, nas execuções Jaguar 1/2). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`.
+
+**Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal:
+
+```text
+.\jflp.ps1 atalho            # cria "JFLP Studio" na Área de Trabalho e no Menu Iniciar
+.\jflp.ps1 atalho --remover  # desfaz
+```
+
+O atalho executa `pythonw.exe -m sbfl ui --app` do `.venv` (sem console; a saída vai para `ui.log` na pasta de dados do JFLP). No Linux cria `~/.local/share/applications/jflp.desktop`. Sem Edge/Chrome/Chromium, `--app` tenta o pywebview e depois o navegador padrão.
 
 1. **Ambiente.** Mostra JDKs, Mavens, Git, WSL/Defects4J e o perfil resolvido de cada tipo de execução. Os botões baixam, com confirmação de URL e tamanho, o **JDK 11** e o **Maven 3.9.9** (perfil do Jaguar 2). Também há o *pre-fetch* do Jaguar 2 para o `m2/` próprio, para depois rodar offline. Para o Jaguar 1 são necessários JDK 8 e Maven 3.6.3, e a `lib/` do Jaguar 1 (baixada pela tela ou apontada em `jaguar1.lib`).
 2. **Bugs.** Escolha a origem:
@@ -287,7 +309,8 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 
 | Comando | O que faz |
 |---|---|
-| `jflp ui [--port N] [--no-browser] [--window]` | abre a interface web |
+| `jflp ui [--port N] [--no-browser] [--window] [--app]` | abre a interface web (`--app`: janela de app do Edge/Chrome) |
+| `jflp atalho [--remover]` | cria (ou remove) o atalho JFLP Studio na Área de Trabalho e no Menu Iniciar |
 | `jflp doctor` | JDKs, Mavens, git, WSL/Defects4J e o perfil resolvido de cada tipo; sai com 1 se faltar ferramenta |
 | `jflp tools list` | ferramentas encontradas (JDK, Maven, Jaguar 1) |
 | `jflp tools get {jdk\|maven\|jaguar1} [valor] [--yes]` | baixa uma ferramenta (`valor` = versão do JDK ou do Maven); pergunta antes, salvo `--yes` |

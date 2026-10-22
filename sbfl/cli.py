@@ -371,7 +371,23 @@ def cmd_ui(home: Home, settings: Settings, args) -> int:
         print("A interface web ainda não disponível nesta instalação.")
         return 1
     port = args.port if args.port is not None else int(settings.get("ui", "port", 0) or 0)
-    return serve(home, port, not args.no_browser, args.window)
+    return serve(home, port, not args.no_browser, args.window, args.app)
+
+
+def cmd_atalho(home: Home, settings: Settings, args) -> int:
+    from . import desktop
+    try:
+        paths = desktop.remove_shortcuts() if args.remover else desktop.create_shortcuts()
+    except OSError as e:
+        print(f"erro: não foi possível {'remover' if args.remover else 'criar'} o atalho: {e}", file=sys.stderr)
+        return 2
+    if args.remover:
+        print("Atalho removido de:" if paths else "Nenhum atalho do JFLP Studio encontrado.")
+    else:
+        print("Atalho JFLP Studio criado em:")
+    for p in paths:
+        print(f"  {p}")
+    return 0
 
 
 # ----------------------------------------------------------------- selftest
@@ -428,6 +444,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int)
     p.add_argument("--no-browser", action="store_true")
     p.add_argument("--window", action="store_true", help="abre em janela própria (pywebview)")
+    p.add_argument("--app", action="store_true",
+                   help="abre numa janela de app do Edge/Chrome/Chromium e encerra ao fechá-la")
+    p = add("atalho", cmd_atalho, "cria o atalho JFLP Studio na Área de Trabalho e no Menu Iniciar")
+    p.add_argument("--remover", action="store_true", help="remove os atalhos")
     add("doctor", cmd_doctor, "mostra JDKs, Mavens e o perfil resolvido de cada tipo")
     p = add("tools", cmd_tools, "lista ou baixa JDK, Maven e Jaguar 1")
     ts = p.add_subparsers(dest="action", required=True, metavar="ação")
@@ -492,6 +512,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "tools" and args.action == "get" and args.what != "jaguar1" and not args.value:
         ap.error("informe a versão (ex.: `tools get jdk 11`)")
     home = Home.default().ensure()
+    if args.cmd == "ui":
+        from . import desktop
+        desktop.ensure_streams(home)      # pythonw não tem console: a saída vai para <home>/ui.log
     try:
         settings = load_settings(home)
     except ValueError as e:         # config.toml inválido: mensagem com linha/coluna, sem traceback

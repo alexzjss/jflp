@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Bem-vindo - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Bem-vindo ao JFLP Studio</h1>
+<p>Este assistente confere o que o seu computador já tem e baixa o que falta para rodar o Jaguar 2.</p>
+
+<section>
+  <h2>O que já está pronto</h2>
+  <table class="bv-lista">
+    <tbody>
+    {% for i in linhas %}
+      <tr>
+        <th>{{ i.label }}</th>
+        <td class="{{ 'ok' if i.ok else 'erro' }}">{{ 'Pronto' if i.ok else 'Falta' }} &mdash; {{ i.text }}
+          {% if i.git_link %}<br>O Git não é baixado por aqui: instale em
+            <a href="{{ git_url }}" target="_blank" rel="noopener">{{ git_url }}</a>.{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>Preparar o ambiente</h2>
+  <p>Antes de baixar, você vê a lista com endereço, tamanho e destino de cada item.</p>
+  <div class="botoes">
+    <button hx-get="/bem-vindo/plano?escopo=tudo" hx-target="#dialogo">Preparar tudo</button>
+    <button hx-get="/bem-vindo/plano?escopo=essencial" hx-target="#dialogo">Só o essencial (Jaguar 2)</button>
+    <form method="post" action="/bem-vindo/dispensar" class="bv-pular">
+      <button type="submit">Pular por agora</button>
+    </form>
+  </div>
+  {% if tid %}
+  <div id="dialogo" hx-get="/bem-vindo/progresso/{{ tid }}" hx-trigger="load" hx-swap="innerHTML"></div>
+  {% else %}
+  <div id="dialogo"></div>
+  {% endif %}
+  <p class="vazio"><a href="/">Ir para o Painel</a> &middot; <a href="/ambiente">Tela Ambiente</a></p>
+</section>
+{% endblock %}

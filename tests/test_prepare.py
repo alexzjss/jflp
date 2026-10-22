@@ -187,6 +187,39 @@ class PrepareTests(Base):
         with self.assertRaises(ValueError):
             P.local_bug("nao existe")
 
+    def test_local_module_valid_invalid_and_key(self):
+        src = self.root / "multi"
+        (src / "a" / "b").mkdir(parents=True)
+        (src / "a" / "b" / "pom.xml").write_text("<project/>")
+        (src / "pom.xml").write_text("<project/>")
+        plain = P.local_bug(str(src))
+        self.assertNotIn("module", plain.extra)
+        self.assertEqual(P.local_bug(str(src), "").key, plain.key)       # sem módulo: mesma chave de antes
+        b = P.local_bug(str(src), "a\\b/")
+        self.assertEqual(b.extra["module"], "a/b")
+        self.assertNotEqual(b.key, plain.key)
+        self.assertEqual(P.local_bug(str(src), "./a/b").key, b.key)
+        for ruim in ("../x", "a/../../x", "/abs", "C:/x", "nao/existe"):
+            with self.subTest(ruim=ruim), self.assertRaises(ValueError) as cm:
+                P.local_bug(str(src), ruim)
+            self.assertTrue(str(cm.exception))
+        u = "https://github.com/x/repo.git@abcdef1234567890"
+        ub = P.local_bug(u, "mod")
+        self.assertEqual(ub.extra["module"], "mod")
+        self.assertNotEqual(ub.key, P.local_bug(u).key)
+        self.assertIn("abcdef123456-m", ub.key)
+        self.assertEqual(ub.key, P.local_bug(u, "mod").key)
+        with self.assertRaises(ValueError):
+            P.local_bug(u, "../x")
+
+    def test_local_prepare_returns_module(self):
+        src = self.root / "multi2"
+        (src / "m").mkdir(parents=True)
+        (src / "m" / "pom.xml").write_text("<project/>")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src), "m"), self.log)
+        self.assertEqual(prep.module, "m")
+        self.assertTrue((prep.pristine / "m" / "pom.xml").exists())
+
     def test_local_key_raises(self):
         with self.assertRaises(ValueError):
             P.bug_from_key(self.settings, "local/x/dir-1")

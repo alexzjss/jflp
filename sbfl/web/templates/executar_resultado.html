@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ projeto_nome ~ (' / ' ~ modulo if modulo else '') ~ ' - ' if projeto_nome else '' }}Resultado - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Executar{% if projeto_nome %}: {{ projeto_nome }}{% if modulo %} <small class="vazio">({{ modulo }})</small>{% endif %}{% endif %}</h1>
+<p><a href="/executar">&larr; Nova execução</a> · <a href="/lote/{{ bid }}">Ver como lote</a></p>
+{% include "_executar_cartoes.html" %}
+{% endblock %}

@@ -15,7 +15,7 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 
-from .. import compare, dataset, recipes, store
+from .. import compare, dataset, recipes, source, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..adapters.base import Bug
@@ -174,6 +174,57 @@ def run_lines(request: Request, rel: str, ord: str = "susp", dir: str = "desc", 
     if got is None:
         return _no_run(request, rel)
     return _render(request, "_linhas.html", _lines_ctx(request, rel, got[0], ord, dir, filtro, pag))
+
+
+# ------------------------------------------------------------ resultado no código
+
+def _code_classes(scores) -> dict[str, dict]:
+    """Por classe externa: linha -> LineScore de maior susp (internas caem na externa)."""
+    by_cls: dict[str, dict[int, object]] = {}
+    for s in scores:
+        cur = by_cls.setdefault(outer(s.cls), {})
+        if s.line not in cur or s.susp > cur[s.line].susp:
+            cur[s.line] = s
+    return {c: {"lines": ls, "max": max(x.susp for x in ls.values()), "n": len(ls)}
+            for c, ls in by_cls.items()}
+
+
+@router.get("/run/{rel:path}/codigo", response_class=HTMLResponse)
+def run_code(request: Request, rel: str, classe: str = ""):
+    got = _load(request, rel)
+    if got is None:
+        return _no_run(request, rel)
+    run, d = got
+    ctx: dict = {"page": "bugs", "rel": rel, "run": run, "aviso": None, "classes": [], "atual": None,
+                 "rows": [], "tabela": [], "truncado": False, "membro": None, "top": None}
+    scores = None
+    if run.get("kind") in ("jaguar1", "jaguar2"):
+        try:
+            scores = compare.run_scores(request.app.state.home, rel)
+        except (OSError, ValueError) as e:
+            ctx["aviso"] = f"Não foi possível ler as pontuações: {e}"
+    if not scores:
+        ctx["aviso"] = ctx["aviso"] or "Esta execução não tem pontuações por linha para mostrar no código."
+        return _render(request, "codigo.html", ctx)
+    classes = _code_classes(scores)
+    order = sorted(classes, key=lambda c: (-classes[c]["max"], c))
+    ctx["classes"] = [{"cls": c, "max": classes[c]["max"], "n": classes[c]["n"]} for c in order]
+    atual = outer(classe) if classe else order[0]
+    ctx["atual"] = atual
+    lines = classes.get(atual, {"lines": {}})["lines"]
+    ctx["tabela"] = sorted(lines.values(), key=lambda s: (-s.susp, s.line))
+    gmax = max(c["max"] for c in classes.values())
+    try:
+        membro, src, trunc = source.load_source(d, atual, run.get("module"))
+    except source.SourceError as e:
+        ctx["aviso"] = str(e)
+        return _render(request, "codigo.html", ctx)
+    top = ctx["tabela"][0].line if ctx["tabela"] else None
+    ctx["rows"] = [{"n": i, "text": t, "s": lines.get(i),
+                    "a": round(lines[i].susp / gmax, 3) if i in lines and gmax > 0 else 0}
+                   for i, t in enumerate(src, 1)]
+    ctx.update(membro=membro, truncado=trunc, top=top)
+    return _render(request, "codigo.html", ctx)
 
 
 # ------------------------------------------------------- arquivos, log, zip

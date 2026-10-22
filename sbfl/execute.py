@@ -42,6 +42,7 @@ class RunOptions:
     maven: str | None = None
     auto_search: bool = True
     archive_checkout: bool | None = None
+    tests: list[str] | None = None       # "só estes testes": substitui os relevantes e força o escopo relevante
     parent: str | None = None
     log_cb: Callable[[str], None] | None = None
 
@@ -142,6 +143,8 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         except StageError as e:
             _stopped(w, e.status, e.detail)
             return w.rel
+        if opts.tests:                  # lista explícita do usuário no lugar dos testes relevantes
+            prep = replace(prep, relevant_tests=list(opts.tests))
 
         mod = prep.pristine if prep.module == "." else prep.pristine / prep.module
         if kind == "jaguar2" and (prep.info.get("jaguar2_suportado") is False or not (mod / "pom.xml").is_file()):
@@ -154,11 +157,14 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
 
         recipe = recipes.find(home, bug, kind)
         first = _first_config(settings, recipe, opts)
+        if opts.tests:
+            first = replace(first, test_scope="relevant")
         if opts.fixes_add:
             # "só estas" (fixes_on) esconderia as detectadas: parte das detectadas e acrescenta
             base_on = set(first.fixes_on) or (_detected_for(prep, settings) if kind == "jaguar2" else set())
             first = replace(first, fixes_on=frozenset((base_on | set(opts.fixes_add)) - set(opts.fixes_off)))
         base = {"test_scope": first.test_scope, "relevant_tests": prep.relevant_tests,
+                "module": prep.module,     # a tela do código prefere fontes deste módulo
                 "truth": [f.to_dict() for f in prep.truth],
                 "recipe": ({"match": recipe.match, "kind": recipe.kind, "fixes": recipe.fixes,
                             "params": recipe.params, "jdk": recipe.jdk, "maven": recipe.maven,
