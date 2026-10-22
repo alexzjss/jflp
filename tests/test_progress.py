@@ -107,6 +107,17 @@ class MavenProgressTest(unittest.TestCase):
         self.assertTrue(p.to_dict()["ultimo_erro"].startswith("Failed to execute goal"))
         self.assertIsNone(fed(["[INFO] tudo certo"]).to_dict()["ultimo_erro"])
 
+    def test_ultimo_erro_ignores_test_failures(self):
+        # testes falhando são o bug (dado), não erro: as linhas [ERROR] do Surefire não viram "último erro"
+        p = fed(["[INFO] Running a.BTest",
+                 "[ERROR] Tests run: 41, Failures: 0, Errors: 1, Skipped: 0 <<< FAILURE! -- in a.BTest",
+                 "[ERROR] testX(a.BTest)  Time elapsed: 0.1 s  <<< ERROR!",
+                 "[ERROR] Errors: ",
+                 "[ERROR]   BTest.testX:12 NullPointer",
+                 "[ERROR] Tests run: 41, Failures: 0, Errors: 1, Skipped: 0",
+                 "[ERROR] There are test failures."])
+        self.assertIsNone(p.to_dict()["ultimo_erro"])
+
     def test_build_result(self):
         self.assertEqual(fed(["[INFO] BUILD FAILURE"]).to_dict()["build"], "FAILURE")
 

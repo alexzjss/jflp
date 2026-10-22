@@ -24,6 +24,10 @@ _UNITS = {"B": 1, "kB": 1000, "KB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3}
 _HELP = ("To see the full stack trace", "e-run Maven", "[Help ", "For more information",
          "After correcting the problems", "mvn <args> -rf", "Re-run with -X")
 
+# linhas [ERROR] do Surefire que relatam testes falhando: é o bug (dado), não erro de infraestrutura
+_TEST_REPORT = ("Tests run:", "There are test failures", "Failures:", "Errors:", "Failed tests:",
+                "Tests in error:", "Please refer to", "<<< FAILURE", "<<< ERROR")
+
 STEPS = ("preparar", "compilar", "testes", "analise", "gravar")   # ordem da linha do tempo
 _STEP_ORDER = {s: i for i, s in enumerate(STEPS)}
 SUCCESS = ("ok", "ok_testes_falhando")
@@ -262,8 +266,11 @@ class Progress:
             self._advance("analise")
 
     def _error(self, s: str) -> None:
-        if s and not any(h in s for h in _HELP):
-            self.ultimo_erro = s[:300]
+        if not s or any(h in s for h in _HELP) or any(h in s for h in _TEST_REPORT):
+            return
+        if s[:1].isspace():     # linha de detalhe recuada (ex.: "  FooTest.x:12 ..." do resumo do Surefire)
+            return
+        self.ultimo_erro = s[:300]
 
     # ---------------------------------------------------------------- saída
     def finish(self, status: str | None = None) -> None:

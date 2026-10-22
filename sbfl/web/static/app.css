@@ -151,6 +151,8 @@ button[disabled] { opacity: .5; cursor: not-allowed; }
 .av-numeros b.tem { color: var(--err); }
 .av-numeros span { color: var(--muted); font-size: .85rem; }
 .av-peq { font-size: .85rem; margin: 6px 0 0; }
+#t-classe { overflow-wrap: anywhere; }   /* FQCN longo quebra em vez de rolar o cartão */
+.av-cartao { min-width: 0; }
 .barra { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 8px 0; }
 .barra > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 999px;
   transition: width .5s ease; }
