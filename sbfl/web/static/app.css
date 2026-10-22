@@ -340,3 +340,21 @@ pre.diff .lv-arq { font-weight: 700; margin-top: 6px; }
   .lv-resumo { max-width: 200px; }
 }
 .lv-det-corpo { position: sticky; left: 0; width: min(100%, calc(100vw - 32px)); }
+
+/* --- Ambiente: um cartão por perfil --- */
+.perfis { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.perfil { background: var(--panel); border: 1px solid var(--line); border-top: 3px solid var(--line);
+  border-radius: 8px; padding: 12px 16px; min-width: 0; }
+.perfil.pronto { border-top-color: var(--ok); }
+.perfil.falta { border-top-color: var(--err); }
+.perfil h2 { margin-top: 0; }
+.perfil .estado { font-weight: 600; margin: 4px 0; }
+.perfil .estado.ok { color: var(--ok); }
+.perfil .estado.erro { color: var(--err); }
+.perfil .detalhe { color: var(--muted); font-size: .9em; margin: 2px 0 6px; }
+.perfil .botoes { margin-top: 8px; }
+.perfil .offline { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.perfil .offline button { font-size: .92em; }
+.ambiente-detalhes { margin-top: 0; }
+.ambiente-detalhes > summary { font-weight: 600; padding: 4px 0; }
+.ambiente-detalhes > summary + * { margin-top: 12px; }

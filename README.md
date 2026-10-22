@@ -5,12 +5,12 @@ Ferramenta local (Windows e Arch Linux) para rodar **Maven puro**, **Jaguar 2** 
 O que ela faz:
 
 - roda o Maven e o Jaguar 2 "limpos": o Jaguar 2 usa um POM gerado (`jaguar2-pom.xml`) ao lado do original, que nunca é alterado;
-- aplica automaticamente, e mostra para revisão, as correções conhecidas para projetos legados (animal-sniffer, compiler, Surefire antigo, testes fora de `src/test/java`, ...);
+- aplica automaticamente as correções conhecidas para projetos legados (animal-sniffer, compiler, Surefire antigo, testes fora de `src/test/java`, ...);
 - distingue **falha de teste** (é o bug, é dado) de **falha de infraestrutura** (build, JDK, plugin, Jaguar), diagnostica a segunda em português e tenta a busca automática de correções;
 - grava cada execução numa pasta imutável (logs completos, saídas puras, ambiente exato, checkout);
-- compara Maven × Jaguar e Jaguar 1 × Jaguar 2 para o mesmo bug, e resume lotes (taxa de sucesso por projeto);
+- mostra, por bug, o que o Maven, o Jaguar 1 e o Jaguar 2 acusaram, com o veredito contra o defeito catalogado no Bugs.jar e a concordância entre os dois Jaguar;
 - roda lotes em fila sequencial, retomável após fechar o programa;
-- exporta um dataset (saídas puras do Jaguar 2 + `manifest.csv/json`) pronto para publicar.
+- exporta um dataset (saídas puras do Jaguar 2 + `manifest.csv/json`) pronto para publicar, pela linha de comando.
 
 A ferramenta **não calcula** fórmulas SBFL nem EXAM: o score de cada linha é o que o próprio Jaguar grava.
 
@@ -74,24 +74,51 @@ cd jflp
 .\jflp.ps1 ui        # ou ./jflp.sh ui
 ```
 
-O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem: Painel, Executar, Ambiente, Bugs, Lotes, Comparar, Receitas e Exportar.
+O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem três telas: **Rodar** (a página inicial), **Resultados** e **Ambiente**. Receitas, exportação do dataset e lotes continuam na linha de comando (seção 10).
 
-**Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, o Painel abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
+**Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, a página inicial abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
 
-**Jeito rápido: tela Executar.** Para rodar um projeto sem passar por Bugs, revisão do POM e receitas:
+**Rodar** (página inicial). Usar a ferramenta é um fluxo só, na mesma tela:
 
-1. em **Projeto**, cole a pasta (ou clique em **Procurar…**) ou informe `URL@commit`. Em projeto multi-módulo, informe o **Módulo** (subpasta com `pom.xml`, ex.: `maven-artifact`): as dependências do reactor são instaladas antes (`-pl <módulo> -am`) e o Jaguar 2 instrumenta só esse módulo;
-2. marque **Maven**, **Jaguar 2** e/ou **Jaguar 1**;
-3. escolha os testes: **todos** ou **só estes** (`Classe` ou `Classe#metodo`, separados por vírgula ou linha);
-4. clique em **Executar**. Cada tipo ganha um cartão que se atualiza sozinho. Ao terminar, o cartão mostra o status, o diagnóstico, o resumo dos testes e as 10 linhas mais suspeitas, com links para os detalhes, para o código e para a comparação Maven × Jaguar 2.
+1. **Pasta.** Cole o caminho (ou clique em **Escolher pasta…**, onde o seletor de pastas estiver disponível) de uma destas opções: a pasta do repositório bugs-dot-jar (com vários projetos dentro), um projeto dela (um repositório só) ou um projeto Maven. As pastas usadas recentemente aparecem como botões logo abaixo. Ao abrir uma pasta de coleção do Bugs.jar, ela passa a ser a `bugsjar.root` (a tela avisa "Pasta salva como raiz do Bugs.jar").
+2. **Projetos e bugs.** Numa coleção, cada projeto é uma seção recolhível com seus bugs; "Abrir todos os projetos" abre todos de uma vez. Cada bug aparece com o ID (ex.: `LANG-7`) e o **resumo do JIRA**, que chega logo depois de abrir o projeto (o resumo é lido do git, por isso vem à parte). Você pode buscar por ID ou resumo, marcar e desmarcar os bugs visíveis e filtrar pelo último resultado (nunca rodados, com falha ou OK). A seleção vale entre projetos, e o contador mostra "N bugs em M projetos". Um único envio cria um lote com todos. Os projetos precisam estar clonados: a tela não faz `fetch`, então rode `jflp fetch` antes quando for preciso (seção 10). Em projeto Maven, esta etapa vira a escolha do **Módulo** (ver abaixo).
+3. **Ferramentas.** **Maven** e **Jaguar 2** vêm marcados; **Jaguar 1** vem desmarcado. Os testes são os **relevantes do catálogo** (padrão) ou **todos**.
+4. **Opções** (recolhidas). **Busca automática de correções**, ligada por padrão.
+5. **Rodar.** A página não muda de tela: o formulário recolhe numa linha ("12 bugs em 3 projetos · Maven, Jaguar 2") com o botão **Alterar**, e logo abaixo aparece a vista do lote. A URL vira `/rodar?lote=N`; recarregar a página mostra o mesmo lote.
 
-A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com as mesmas opções.
+**Vista do lote (resultado na mesma tela).** Uma linha por bug, com as colunas **Maven**, **Jaguar 1** (se marcado), **Jaguar 2** (se marcado) e **Gabarito**. Enquanto a execução anda, cada célula mostra o andamento ("rodando…") ou "na fila". Terminada a execução:
 
-**Pasta sem `pom.xml` e Bugs.jar.** A pasta escolhida precisa ser um projeto Maven. Se não tiver `pom.xml` na raiz, a tela não inicia a execução: lista as subpastas (até 2 níveis) que têm `pom.xml`, e clicar em uma preenche o campo **Módulo**. Quando a raiz não tem `pom.xml` mas o módulo informado tem, o módulo é executado como projeto próprio (só essa subpasta é copiada, sem reactor). Se a pasta (ou o módulo) é um repositório do Bugs.jar (`.bugs-dot-jar/`) ou a raiz de uma coleção deles, a tela recomenda a tela **Bugs** (que traz as linhas do defeito e os testes relevantes), oferece definir `bugsjar.root` com um clique e permite "Rodar mesmo assim como pasta local".
+- **Maven**: "2 falhas" ou "nenhuma falha", ou o rótulo do status de erro;
+- **Jaguar**: a posição do defeito no ranking, por exemplo "pos. 3" (a faixa de empate aparece no tooltip), ou o rótulo do erro;
+- **Gabarito**: o veredito do bug, com as posições ao lado (por exemplo "✓ achou · J2 pos. 1 · J1 pos. 3").
+
+Os vereditos por Jaguar seguem a posição esperada da melhor linha do defeito:
+
+- **✓ achou**: posição até 10;
+- **~ parcial**: posição até 50, ou uma classe do defeito entre as classes das 10 primeiras linhas;
+- **✗ não achou**: o resto, inclusive defeito fora do ranking;
+- **— sem dado**: sem gabarito, sem execução do Jaguar ou com erro.
+
+No Gabarito aparece o melhor veredito entre os Jaguar do lote. Só com Maven: ✓ se as classes com falha batem com as do catálogo, ~ se há alguma em comum, ✗ se nenhuma, — sem catálogo.
+
+O cabeçalho mostra a contagem por veredito (✓ 7 · ~ 2 · ✗ 1 · — 2), o botão **Baixar CSV** (uma linha por bug) e, enquanto houver execuções pendentes, **Cancelar lote**: as que ainda não começaram saem da fila, e a que está rodando é interrompida.
+
+**Detalhe do bug.** Clicar na linha abre o detalhe embaixo dela:
+
+- **Maven**: os testes que falharam (`Classe#método`), o tipo e a mensagem da exceção, a linha do erro (primeiro frame em código de produção, com link para o código) e "Falhou o esperado?", que compara as classes de teste com falha com as do catálogo.
+- **Cada Jaguar**: as 10 linhas mais suspeitas (classe, linha, suspeição), com "ver mais" até 50. A linha do patch do desenvolvedor leva ★, e as linhas que também estão no top 10 do outro Jaguar ficam destacadas. Cada linha tem "ver no código". Quando a execução falhou, aparecem o status e o diagnóstico, com link para os detalhes da execução.
+- **Concordância J1 × J2** (quando os dois rodaram): quantas linhas estão em comum no top 10, se a classe do topo é a mesma, a posição do defeito em cada Jaguar e qual achou antes, além de uma tabela das linhas em comum com a suspeição de cada um.
+- **Gabarito do catálogo**: resumo e link do JIRA, o método que contém o defeito, as linhas do defeito com a posição em cada Jaguar, o trecho do `developer-patch.diff` (recolhível, com as linhas removidas e adicionadas destacadas) e os testes que falham no catálogo.
+
+**Resultados.** Lista dos lotes, mais recentes primeiro, com data, ferramentas, número de bugs, contagem de vereditos e estado (rodando, terminado ou cancelado). "Abrir" reabre a mesma vista do lote. Lote encerrado pode ser excluído do histórico; as execuções gravadas ficam.
+
+**Projeto Maven (pasta sem Bugs.jar).** Escolha a pasta do projeto. Se ela tem `pom.xml` na raiz, o projeto inteiro roda (opção "Projeto inteiro (raiz)"). Se não tem, a tela lista os módulos (subpastas com `pom.xml`, até 2 níveis), e o módulo escolhido é executado como projeto próprio (só essa subpasta é copiada, sem reactor). Pasta sem nenhum `pom.xml` não inicia a execução e a tela informa o motivo. Um projeto Maven local roda com todos os testes e vira um lote de 1 bug, sem gabarito. Se a pasta for a raiz de uma coleção ou um repositório do Bugs.jar (`.bugs-dot-jar/`), a tela trata como Bugs.jar, com a lista de bugs.
+
+**Ambiente.** Um cartão por perfil (Maven puro, Jaguar 1 e Jaguar 2) mostra **✓ pronto** ou **✗ falta X**, com só os botões do que falta (JDK, Maven ou a pasta do Jaguar 1). O Jaguar 2 tem também **Preparar Jaguar 2 para uso offline**, que baixa para o `m2/` próprio o que ele precisa, para rodar sem internet. Os detalhes técnicos (JDKs e Mavens encontrados, Git, WSL/Defects4J, pastas e configuração) ficam em **Detalhes**, recolhido. Para o Jaguar 1 são necessários JDK 8 e Maven 3.6.3, e a `lib/` do Jaguar 1 (baixada pela tela ou apontada em `jaguar1.lib`).
+
+**Resultado no código** (`Ver no código`, nos detalhes do bug e na página da execução). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`. Os bugs do Bugs.jar rodados pela tela não arquivam o checkout (`archive_checkout: False`): nesse caso o código é lido do ramo do bug no próprio repositório.
 
 **Lentidão ao copiar.** A cópia de uma pasta local nunca leva `.git` (nem o de sub-repositórios), `target/` de módulos nem `.idea`. Pastas maiores que `run.max_copy_mb` (2048) ou `run.max_copy_files` (200000) são recusadas com a sugestão de escolher a subpasta do projeto ou um módulo. Erros de "sem POM" ou "projeto não encontrado no reactor" terminam como `projeto_invalido` sem busca automática.
-
-**Resultado no código** (`Ver no código`, nas execuções Jaguar 1/2). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`.
 
 **Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal: no Windows, procure **JFLP Studio** no Menu Iniciar (dá para fixar na barra de tarefas com o botão direito) ou use o ícone da Área de Trabalho. O lançador sem argumentos já cria o atalho; para criar ou remover à mão:
 
@@ -101,15 +128,6 @@ A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com
 ```
 
 O atalho executa `pythonw.exe -m sbfl ui --app` do `.venv` (sem console; a saída vai para `ui.log` na pasta de dados do JFLP). No Linux cria `~/.local/share/applications/jflp.desktop`. Sem Edge/Chrome/Chromium, `--app` tenta o pywebview e depois o navegador padrão.
-
-1. **Ambiente.** Mostra JDKs, Mavens, Git, WSL/Defects4J e o perfil resolvido de cada tipo de execução. Os botões baixam, com confirmação de URL e tamanho, o **JDK 11** e o **Maven 3.9.9** (perfil do Jaguar 2). Também há o *pre-fetch* do Jaguar 2 para o `m2/` próprio, para depois rodar offline. Para o Jaguar 1 são necessários JDK 8 e Maven 3.6.3, e a `lib/` do Jaguar 1 (baixada pela tela ou apontada em `jaguar1.lib`).
-2. **Bugs.** Escolha a origem:
-   - **Pasta local**: um projeto no disco (é *copiada*; o original nunca é tocado) ou `URL@commit` (clone raso);
-   - **Bugs.jar**: configure `bugsjar.root` e `bugsjar.projects` e rode `jflp fetch` (ou use a tela); os bugs são os branches `bugs-dot-jar_*`;
-   - **Defects4J**: veja a seção 3.
-3. **Revisão do POM** (Jaguar 2). Mostra o diff `pom.xml` → `jaguar2-pom.xml`, a lista de correções com liga/desliga e o motivo de cada uma, e a receita aplicada, se houver. Em lotes a revisão é pulada (valem as correções detectadas e as receitas).
-4. **Rodar.** O log aparece ao vivo. Se a execução falhar por infraestrutura, a tela mostra o diagnóstico, o trecho do log e o botão "tentar de novo com a correção sugerida".
-5. **Resultado.** Resumo dos testes (passou/falhou/erro/ignorado), tabela do relatório do Jaguar (classe, linha, cef/cnf/cep/cnp, score) com as linhas do defeito destacadas quando há *ground truth*, saídas puras, log completo e botão "abrir pasta".
 
 Para validar a instalação inteira (Maven, Jaguar 2 e, se existir, Jaguar 1) com um projeto de exemplo embutido:
 

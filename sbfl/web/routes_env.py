@@ -15,13 +15,15 @@ from ..run_jaguar2 import prefetch_jaguar2
 from ..proc import NO_WINDOW
 from ..toolchain.detect import clear_cache, find_jdks, find_mavens, java_info, maven_info, wsl_status
 from ..toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
-from ..toolchain.profiles import PROFILES, MissingTool, resolve
+from ..toolchain.profiles import PROFILES, MissingTool, _pick_maven, resolve
 
 router = APIRouter()
 
 JDK_OPTIONS = (8, 11, 17)
 MAVEN_OPTIONS = ("3.6.3", "3.9.9")
 KIND_LABEL = {"jaguar2": "Jaguar 2", "jaguar1": "Jaguar 1", "maven": "Maven puro"}
+# versão de Maven oferecida no botão quando falta um Maven para o perfil
+MAVEN_DOWNLOAD = {"maven": "3.6.3", "jaguar1": "3.6.3", "jaguar2": "3.9.9"}
 
 
 def _vstr(v) -> str:
@@ -78,6 +80,53 @@ def clear_git_cache() -> None:
     _GIT_CACHE.clear()
 
 
+def _botao(tipo: str, v: str = "") -> dict:
+    if tipo == "jdk":
+        label = f"Baixar JDK {v}"
+    elif tipo == "maven":
+        label = f"Baixar Maven {v}"
+    else:
+        label = "Baixar Jaguar 1 (2 jars)"
+    url = f"/ambiente/plano?tipo={tipo}" + (f"&v={v}" if v else "")
+    return {"label": label, "url": url}
+
+
+def _faltas(home, settings, name: str) -> list[dict]:
+    """O que falta ao perfil, cada item com os botões de download do que resolve."""
+    spec = PROFILES[name]
+    jdks = find_jdks(home, settings)
+    faltas: list[dict] = []
+    if spec["jdk"] is not None:
+        if not any(j.major == spec["jdk"] for j in jdks):
+            faltas.append({"texto": f"JDK {spec['jdk']}", "botoes": [_botao("jdk", str(spec["jdk"]))]})
+    elif not jdks:
+        faltas.append({"texto": "JDK", "botoes": [_botao("jdk", str(v)) for v in JDK_OPTIONS]})
+    try:
+        _pick_maven(spec, find_mavens(home, settings), None)
+    except MissingTool as e:
+        faltas.append({"texto": f"Maven {e.wanted}", "botoes": [_botao("maven", MAVEN_DOWNLOAD[name])]})
+    if name == "jaguar1" and not (jaguar1_lib(home, settings) / "jacocoagent.jar").is_file():
+        faltas.append({"texto": "pasta do Jaguar 1 (jacocoagent.jar)", "botoes": [_botao("jaguar1")]})
+    return faltas
+
+
+def _cartoes(home, settings) -> list[dict]:
+    """Um cartão por perfil: pronto (com resumo) ou o que falta e os botões."""
+    cartoes = []
+    for name in ("maven", "jaguar1", "jaguar2"):
+        faltas = _faltas(home, settings, name)
+        resumo = ""
+        if not faltas:
+            try:
+                te = resolve(name, home, settings)
+                resumo = f"JDK {te.jdk.major} · Maven {_vstr(te.maven.version)}"
+            except MissingTool as e:
+                faltas.append({"texto": e.message, "botoes": []})
+        cartoes.append({"nome": KIND_LABEL[name], "ok": not faltas, "resumo": resumo,
+                        "faltas": faltas, "offline": name == "jaguar2"})
+    return cartoes
+
+
 def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) -> dict:
     st = request.app.state
     home, settings = st.home, st.settings
@@ -89,6 +138,7 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
         "git": _git(),
         "wsl": wsl_status(settings),
         "jaguar1_lib": lib, "jaguar1_ok": (lib / "jacocoagent.jar").is_file(),
+        "cartoes": _cartoes(home, settings),
         "profiles": _profiles(home, settings),
         "jdk_options": JDK_OPTIONS, "maven_options": MAVEN_OPTIONS,
     }

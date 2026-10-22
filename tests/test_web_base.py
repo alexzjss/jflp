@@ -56,8 +56,28 @@ class WebBase(WebFixture, unittest.TestCase):
             self.addCleanup(p.stop)
         r = self.authed().get("/ambiente")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("não encontrado", r.text)
-        self.assertIn("baixe na tela Ambiente", r.text)
+        for nome in ("Maven puro", "Jaguar 1", "Jaguar 2"):
+            self.assertIn(f"<h2>{nome}</h2>", r.text)
+        self.assertIn("✗ falta JDK 11", r.text)            # Jaguar 2 precisa de JDK 11
+        self.assertIn("Baixar JDK 11", r.text)
+        self.assertIn("não encontrado", r.text)            # detalhes continuam no <details>
+        self.assertIn("<details", r.text)
+        self.assertIn("<summary>Detalhes</summary>", r.text)
+
+    def test_ambiente_cartao_pronto_sem_botao_de_download(self):
+        from sbfl.toolchain.detect import Jdk, Maven
+        jdks = [Jdk(self.tmp / "j8", 8, "1.8", "config"), Jdk(self.tmp / "j11", 11, "11", "config")]
+        mavens = [Maven(self.tmp / "m369", (3, 6, 9), "config"), Maven(self.tmp / "m399", (3, 9, 9), "config")]
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        (lib / "jacocoagent.jar").write_bytes(b"x")
+        self.settings.set("jaguar1", "lib", str(lib))
+        with mock.patch("sbfl.web.routes_env.find_jdks", return_value=jdks),              mock.patch("sbfl.web.routes_env.find_mavens", return_value=mavens),              mock.patch("sbfl.toolchain.profiles.find_jdks", return_value=jdks),              mock.patch("sbfl.toolchain.profiles.find_mavens", return_value=mavens),              mock.patch("sbfl.web.routes_env.wsl_status",
+                        return_value=mock.Mock(installed=False, distros=[], d4j=None, message="x")),              mock.patch("sbfl.web.routes_env._git", return_value=None):
+            r = self.authed().get("/ambiente")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.text.count('class="perfil pronto"'), 3)
+        self.assertNotIn("Baixar", r.text.split('<div id="dialogo">')[0])
 
     def test_plano_shows_unknown_size_and_checksum(self):
         from sbfl.toolchain.download import Download
