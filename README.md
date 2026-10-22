@@ -177,7 +177,7 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `bugsjar.url_template` | `https://github.com/bugs-dot-jar/{project}.git` | URL de clone |
 | `defects4j.home` | `""` | instalação do Defects4J (dentro do WSL no Windows) |
 | `defects4j.wsl_distro` | `""` | distribuição WSL (seção 3) |
-| `defects4j.projects` | Lang, Math, Time, Chart, Closure, Mockito, Jsoup | projetos listados na tela Bugs |
+| `defects4j.projects` | Lang, Math, Time, Chart, Closure, Mockito, Jsoup | projetos listados por `jflp bugs d4j` |
 | `ui.port` | `0` | porta da interface (0 = automática) |
 
 `run.skip_flags` padrão: `-Drat.skip=true -Drat.numUnapprovedLicenses=999999 -Drat.ignoreErrors=true -Dremoteresources.skip=true -Denforcer.skip=true -Dcheckstyle.skip=true -Dlicense.skip=true -Dmaven.javadoc.skip=true -Danimal.sniffer.skip=true -Dfindbugs.skip=true` (desligam verificações de qualidade que atrapalham checkouts antigos).
@@ -210,7 +210,7 @@ Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), 
    - dependências `br.usp.each.saeg:jaguar2-junit4`, `jaguar2-jacoco-provider`, `jaguar2-core`, `jaguar2-xml-exporter` e `jaguar2-csv-exporter` (escopo `test`);
    - `jacoco-maven-plugin` com o goal `prepare-agent` (reaproveitando a execução já herdada do pai, se houver);
    - `maven-surefire-plugin` com a propriedade `listener = br.usp.each.saeg.jaguar2.junit.JaguarJUnitRunListener` (somada a um listener já existente, sem duplicar) e `argLine` preservando `@{argLine}` para não perder o agente do JaCoCo.
-3. **Correções** (ligadas pela detecção, ajustáveis na tela de revisão, no CLI com `--fix ID` / `--no-fix ID`):
+3. **Correções** (ligadas pela detecção; ajustáveis só na CLI com `--fix ID` / `--no-fix ID`):
 
    | id | Título | Quando é detectada |
    |---|---|---|
@@ -272,9 +272,9 @@ O **status final** é o da tentativa que foi mais longe (checkout < pom < reacto
 
 No Maven puro o JFLP acrescenta `-Djacoco.skip=true` (cobertura não serve para nada ali, e o JaCoCo antigo de alguns POMs derruba a JVM de teste com `processing of -javaagent failed`). No Jaguar 1, esse sintoma gera a sugestão `skip-jacoco`. No Jaguar 1 o resultado de cada teste vem do log do JaguarRunner (`Test m(Classe) : Passed|Failed`), então falhas de teste dão `ok_testes_falhando`.
 
-Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou na tela.
+Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou desmarque **Opções → busca automática de correções** na página Rodar.
 
-**Receitas** guardam o que funcionou e são reaplicadas nas execuções seguintes. A tela de execução oferece "salvar como receita" (todos os bugs, faixa/glob ou só este bug). Ficam em `<pasta do JFLP>/recipes/<benchmark>/<projeto>.toml`, em TOML legível e versionável (podem ser publicadas junto com os dados):
+**Receitas** guardam o que funcionou e são reaplicadas nas execuções seguintes. Hoje nem a interface nem a CLI criam receitas: os arquivos são lidos quando existem e podem ser escritos à mão. Ficam em `<pasta do JFLP>/recipes/<benchmark>/<projeto>.toml`, em TOML legível e versionável (podem ser publicadas junto com os dados):
 
 ```toml
 [[recipe]]
@@ -289,7 +289,7 @@ note = "animal-sniffer exige Java 7"
 
 Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale a mais recente do arquivo. Opções dadas na execução (`--fix`, `--no-fix`, `--jdk`, `--maven`) somam-se à receita; `--no-fix` vence a receita. A receita guarda também `fixes_off` (correções desligadas) e `test_scope` (só quando não é `relevant`), e ambos são reaplicados.
 
-`--fix ID` **acrescenta** à lista detectada (não a substitui). "Tentar de novo com esta correção" na tela de execução também parte das correções detectadas na última tentativa (menos as desligadas) e soma a sugestão. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
+`--fix ID` **acrescenta** à lista detectada (não a substitui). "Tentar de novo com esta correção" na página de detalhes da execução também parte das correções detectadas na última tentativa (menos as desligadas) e soma a sugestão. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
 
 ## 8. Layout da pasta de execução
 
@@ -315,7 +315,7 @@ runs/<benchmark>/<projeto>/<bug>/<AAAAMMDD-HHMMSS>-<tipo>/
 
 ## 9. Layout do dataset exportado
 
-`jflp export` (ou a tela Exportar) pega, para cada bug da seleção, a **última execução Jaguar 2 bem-sucedida** (`ok` ou `ok_testes_falhando`) e monta, em `datasets/<nome>/` (o nome não pode já existir):
+`jflp export` pega, para cada bug da seleção, a **última execução Jaguar 2 bem-sucedida** (`ok` ou `ok_testes_falhando`) e monta, em `datasets/<nome>/` (o nome não pode já existir):
 
 ```text
 README.md             # o que é, layout e colunas
@@ -380,7 +380,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 - **maven-remote-resources-plugin** ("Could not find resource ..."): o reactor instala só o módulo do bug (`-pl <módulo> -am`) e `-Dremoteresources.skip=true` está em `run.skip_flags`; se o erro voltar, confira se o flag não foi removido da configuração.
 - **Apache RAT** ("Too many files with unapproved license"): o checkout do Bugs.jar não leva mais a pasta `.bugs-dot-jar` para a cópia de trabalho e os flags `-Drat.*` estão em `run.skip_flags`; se ainda falhar, a correção `skip-rat` desliga o plugin no POM gerado.
 - **JUnit 3 / sem `jaguar2.csv`** (testes rodaram, há relatórios do Surefire, mas o Jaguar 2 não foi acionado): o POM do projeto usa `junit` < 4 e o Surefire escolhe o provedor JUnit 3. A correção `junit4` é detectada e aplicada sozinha; o diagnóstico `jaguar_sem_saida` também a sugere. O JUnit 4 executa classes `TestCase` do JUnit 3, então os testes continuam os mesmos.
-- **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada na revisão, o diagnóstico a sugere de volta.
+- **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada, o diagnóstico a sugere de volta.
 - **Surefire 2.x** ("maven-surefire-plugin:2.x", "The forked VM terminated"): o Jaguar 2 precisa do Surefire 3. O POM gerado fixa `jaguar2.surefire`; se ainda falhar, a busca tenta 3.2.5 e 3.0.0-M5.
 - **Testes fora de `src/test/java`** (ex.: `src/test/org/...`; "Nenhum teste foi executado" ou "package ... does not exist"): a correção `source-dirs` aponta `testSourceDirectory` para a pasta real, sem mover arquivos.
 - **Jaguar 2 com relatório vazio**: se nenhum teste falhou, o defeito **não foi reproduzido** (aviso na execução, status `ok`; confira o escopo `relevant` e tente `--all-tests`). Se há testes falhando e o CSV está vazio, o status é `jaguar_sem_saida`: confirme que a execução usou `-Djaguar2.classesDirs` (veja `command.txt`) e que o módulo certo foi escolhido.
