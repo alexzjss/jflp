@@ -13,7 +13,7 @@
   <nav class="lateral">
     <div class="marca">JFLP Studio</div>
     {% set itens = [("painel", "/", "Painel"), ("executar", "/executar", "Executar"), ("ambiente", "/ambiente", "Ambiente"),
-                    ("bugs", "/bugs", "Bugs"), ("lotes", "/lotes", "Lotes"),
+                    ("bugs", "/bugs", "Bugs"), ("lotes", "/lotes", "Lotes"), ("fila", "/fila", "Fila"),
                     ("comparar", "/comparar", "Comparar"), ("receitas", "/receitas", "Receitas"),
                     ("exportar", "/exportar", "Exportar")] %}
     {% for chave, href, nome in itens %}
@@ -21,5 +21,12 @@
     {% endfor %}
   </nav>
   <main>{% block content %}{% endblock %}</main>
+  <script>
+    // recusas das ações da fila (htmx) chegam como texto simples: mostra num alerta
+    document.body.addEventListener("htmx:responseError", function (e) {
+      var t = e.detail.xhr.responseText || "";
+      if (t && t.charAt(0) !== "<") { alert(t.slice(0, 300)); }
+    });
+  </script>
 </body>
 </html>

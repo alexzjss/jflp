@@ -16,18 +16,20 @@ class Aborted(Exception):
 
 
 _LIVE: set[subprocess.Popen] = set()
+_OWNER: dict[subprocess.Popen, int] = {}     # processo -> id da thread que o iniciou
 _LIVE_LOCK = threading.Lock()
 _LOCAL = threading.local()
 
 
-def set_abort(event: threading.Event | None) -> None:
-    """Liga à thread atual um evento de interrupção: com ele aceso, `run` recusa novos processos."""
-    _LOCAL.abort = event
+def set_abort(*events: threading.Event | None) -> None:
+    """Liga à thread atual eventos de interrupção: com qualquer um aceso, `run` recusa novos processos.
+
+    O worker passa dois: o do fechamento do app e o do cancelamento pelo usuário."""
+    _LOCAL.abort = tuple(e for e in events if e is not None)
 
 
 def aborted() -> bool:
-    ev = getattr(_LOCAL, "abort", None)
-    return ev is not None and ev.is_set()
+    return any(ev.is_set() for ev in getattr(_LOCAL, "abort", ()))
 
 
 def live_count() -> int:
@@ -39,6 +41,15 @@ def kill_all() -> int:
     """Mata a árvore de todos os processos em andamento (fechar o app não deixa Maven órfão)."""
     with _LIVE_LOCK:
         procs = list(_LIVE)
+    for p in procs:
+        kill_tree(p)
+    return len(procs)
+
+
+def kill_thread(ident: int) -> int:
+    """Mata a árvore dos processos iniciados por uma thread (cancelar um job sem tocar nos demais)."""
+    with _LIVE_LOCK:
+        procs = [p for p in _LIVE if _OWNER.get(p) == ident]
     for p in procs:
         kill_tree(p)
     return len(procs)
@@ -86,6 +97,7 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
             bufsize=1, start_new_session=(os.name != "nt"),
         )
         _LIVE.add(p)
+        _OWNER[p] = threading.get_ident()
     if aborted():           # o aviso chegou entre a checagem e o registro
         kill_tree(p)
     state = {"timed_out": False}
@@ -122,6 +134,7 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
         p.wait()
         with _LIVE_LOCK:
             _LIVE.discard(p)
+            _OWNER.pop(p, None)
         if timer:
             timer.cancel()
         if f:

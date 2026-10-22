@@ -238,6 +238,17 @@ def list_runs(home: Home, benchmark=None, project=None, bug=None, kind=None) -> 
         return [dict(r) for r in con.execute(sql, args)]
 
 
+def delete_run(home: Home, rel: str) -> None:
+    """Descarta uma execução: apaga a pasta final, a `.partial` homônima e a linha do índice."""
+    d = run_dir(home, rel)
+    for folder in (d, d.with_name(f".{d.name}.partial")):
+        if lp(folder).exists():
+            make_writable(folder)
+            shutil.rmtree(long_path(folder), ignore_errors=True)
+    with contextlib.closing(_connect(home)) as con, con:
+        con.execute("DELETE FROM runs WHERE path = ?", (rel,))
+
+
 def reindex(home: Home) -> int:
     """Reconstrói a tabela varrendo runs/**/run.json."""
     rows = []

@@ -83,6 +83,20 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("outra instância", err)
 
+    def test_batch_cancel_and_delete(self):
+        from sbfl.queue import batch_status, create_batch
+        h = Home(self.tmp / "h").ensure()
+        bid = create_batch(h, "t", [Bug("local", "p", "1", {"dir": "/x"})], ["maven"], {})
+        rc, out, err = _run_main(["batch", "delete", str(bid)], h.root)
+        self.assertEqual(rc, 1)                       # ainda pendente: recusa
+        self.assertIn("cancele antes", err)
+        rc, out, _ = _run_main(["batch", "cancel", str(bid)], h.root)
+        self.assertEqual(rc, 0)
+        self.assertEqual(batch_status(h, bid)["counts"]["cancelled"], 1)
+        rc, out, _ = _run_main(["batch", "delete", str(bid)], h.root)
+        self.assertEqual(rc, 0)
+        self.assertIn("excluído", out)
+
     def test_run_releases_the_lock_when_done(self):
         from sbfl.instance import WorkerLock
         h = self.tmp / "h"

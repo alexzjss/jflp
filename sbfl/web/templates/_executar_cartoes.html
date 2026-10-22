@@ -3,9 +3,13 @@
 <section class="exe-cartao">
   <h2>{{ c.nome }}</h2>
   {% if c.state == 'pending' %}
-  <p class="vazio">Na fila. <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a></p>
+  <p class="vazio">Na fila. <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a>
+    <button type="button" hx-post="/job/{{ c.job.id }}/cancelar" hx-vals='{"proximo": "/executar/{{ bid }}"}' hx-swap="none"
+      hx-confirm="Cancelar esta execução? O que já foi feito é descartado.">Cancelar</button></p>
   {% elif c.state == 'running' %}
-  <p>Rodando… <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a></p>
+  <p>Rodando… <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a>
+    <button type="button" hx-post="/job/{{ c.job.id }}/cancelar" hx-vals='{"proximo": "/executar/{{ bid }}"}' hx-swap="none"
+      hx-confirm="Cancelar esta execução? O que já foi feito é descartado.">Cancelar</button></p>
   {% elif c.state == 'cancelled' %}
   <p class="vazio">Cancelado.</p>
   {% elif c.run %}

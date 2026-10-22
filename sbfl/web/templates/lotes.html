@@ -24,9 +24,11 @@
   <h2>Lotes existentes</h2>
   {% if lotes %}
   <table>
-    <thead><tr><th>#</th><th>Nome</th><th>Criado</th><th>Estado</th><th>Jobs</th></tr></thead>
+    <thead><tr><th>#</th><th>Nome</th><th>Criado</th><th>Estado</th><th>Jobs</th><th></th></tr></thead>
     <tbody>{% for l in lotes %}
-      <tr><td><a href="/lote/{{ l.id }}">{{ l.id }}</a></td><td>{{ l.name }}</td><td>{{ l.created }}</td><td>{{ l.state }}</td><td>{{ l.done }}/{{ l.total }}</td></tr>
+      <tr><td><a href="/lote/{{ l.id }}">{{ l.id }}</a></td><td>{{ l.name }}</td><td>{{ l.created }}</td><td>{{ l.state }}</td><td>{{ l.done }}/{{ l.total }}</td>
+        <td>{% if l.state in ('done', 'cancelled') %}<button type="button" hx-post="/lote/{{ l.id }}/excluir" hx-swap="none"
+            hx-confirm="Excluir o lote {{ l.id }} do histórico? As execuções gravadas ficam.">Excluir lote</button>{% endif %}</td></tr>
     {% endfor %}</tbody>
   </table>
   {% else %}<p class="vazio">Nenhum lote ainda.</p>{% endif %}

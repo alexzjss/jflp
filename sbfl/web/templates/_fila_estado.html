@@ -1,0 +1,42 @@
+<section>
+  <h2>Em andamento</h2>
+  {% if running %}
+  <table>
+    <thead><tr><th>Bug</th><th>Tipo</th><th>Lote</th><th>Tempo</th><th></th></tr></thead>
+    <tbody>{% for j in running %}
+      <tr><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td>
+        <td><a href="/lote/{{ j.batch_id }}">{{ j.batch_id }}{% if j.batch_name %}: {{ j.batch_name }}{% endif %}</a></td>
+        <td>{{ j.tempo or '-' }}</td>
+        <td class="botoes">
+          <a class="botao" href="/job/{{ j.id }}/ao-vivo">Log ao vivo</a>
+          <button type="button" hx-post="/job/{{ j.id }}/cancelar" hx-swap="none"
+            hx-confirm="Cancelar este job? O Maven é encerrado agora e a execução parcial é descartada.">Cancelar</button>
+        </td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p class="vazio">Nenhum job em execução.</p>{% endif %}
+</section>
+<section>
+  <h2>Esperando ({{ pending|length }})</h2>
+  {% if pending %}
+  <table>
+    <thead><tr><th>#</th><th>Bug</th><th>Tipo</th><th>Lote</th><th></th></tr></thead>
+    <tbody>{% for j in pending %}
+      <tr><td>{{ loop.index }}</td><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td>
+        <td><a href="/lote/{{ j.batch_id }}">{{ j.batch_id }}: {{ j.batch_name }}</a>{% if j.batch_state == 'paused' %} <span class="vazio">(pausado)</span>{% endif %}</td>
+        <td><button type="button" hx-post="/job/{{ j.id }}/remover" hx-swap="none"
+            hx-confirm="Remover este job da fila?">Remover</button></td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% else %}<p class="vazio">A fila está vazia.</p>{% endif %}
+</section>
+{% if running or pending %}
+<div class="botoes">
+  {% if pending %}
+  <button type="button" hx-post="/fila/limpar" hx-swap="none"
+    hx-confirm="Cancelar todos os {{ pending|length }} jobs que estão esperando? O job em andamento continua.">Limpar fila</button>
+  {% endif %}
+  <button type="button" hx-post="/fila/cancelar-tudo" hx-swap="none"
+    hx-confirm="Cancelar tudo? Os jobs que esperam saem da fila e o job em andamento é encerrado e descartado.">Cancelar tudo</button>
+</div>
+{% endif %}
