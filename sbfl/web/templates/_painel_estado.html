@@ -1,0 +1,57 @@
+{% if status.last_error %}
+<p class="aviso erro">Erro no processador da fila: <code>{{ status.last_error }}</code></p>
+{% endif %}
+{% if status.other_instance %}
+<p class="aviso">outra instância está processando a fila: você pode enfileirar normalmente, os jobs rodam quando ela terminar.</p>
+{% endif %}
+{% if not status.alive %}
+<p class="aviso">O processador da fila não está ativo.</p>
+{% endif %}
+
+<section>
+  <h2>Job atual</h2>
+  {% if current %}
+  <p><strong>{{ current.bug }}</strong> ({{ current.kind }}), lote {{ current.batch_id }}</p>
+  <pre class="log">{{ current.log[-15:] | join("\n") }}</pre>
+  {% else %}
+  <p class="vazio">Nenhum job em execução.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Fila</h2>
+  {% if pending %}
+  <table>
+    <thead><tr><th>Lote</th><th>Bug</th><th>Tipo</th></tr></thead>
+    <tbody>
+    {% for j in pending %}
+      <tr><td>{{ j.batch_id }}</td><td>{{ j.bug_key }}</td><td>{{ j.kind }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vazio">A fila está vazia.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Últimas execuções</h2>
+  {% if runs %}
+  <table>
+    <thead><tr><th>Bug</th><th>Tipo</th><th>Status</th><th>Início</th><th>Duração</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td>{{ r.benchmark }}/{{ r.project }}/{{ r.bug }}</td>
+        <td>{{ r.kind }}</td>
+        <td>{{ r.status }}</td>
+        <td>{{ r.started }}</td>
+        <td>{% if r.seconds is not none %}{{ r.seconds | round(1) }} s{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="vazio">Nenhuma execução ainda.</p>
+  {% endif %}
+</section>

@@ -1,0 +1,41 @@
+<section>
+  <h2>Progresso</h2>
+  <p>Estado: <strong>{{ b.state }}</strong> · {{ b.counts.done }} de {{ b.total }} concluídos
+    · {{ b.counts.running }} em andamento · {{ b.counts.pending }} na fila · {{ b.counts.cancelled }} cancelados
+    {% if b.eta_seconds is not none %}· ETA {{ (b.eta_seconds / 60)|round(1) }} min{% endif %}</p>
+  <progress max="{{ b.total or 1 }}" value="{{ b.counts.done + b.counts.cancelled }}"></progress>
+  {% if not b.finished %}
+  <div class="botoes" style="margin-top:8px">
+    {% if b.state == 'paused' %}
+    <form method="post" action="/lote/{{ b.id }}/retomar"><button type="submit">Retomar</button></form>
+    {% else %}
+    <form method="post" action="/lote/{{ b.id }}/pausar"><button type="submit">Pausar</button></form>
+    {% endif %}
+    <form method="post" action="/lote/{{ b.id }}/cancelar"><button type="submit">Cancelar</button></form>
+  </div>
+  {% endif %}
+</section>
+<section>
+  <h2>Resumo</h2>
+  {% if b.summary %}
+  <table>
+    <thead><tr><th>Benchmark</th><th>Projeto</th><th>Tipo</th><th>Bugs</th><th>ok</th><th>ok c/ testes falhando</th><th>Falhas</th><th>Taxa de sucesso</th></tr></thead>
+    <tbody>{% for r in b.summary %}
+      <tr><td>{{ r.benchmark }}</td><td>{{ r.project }}</td><td>{{ kind_label.get(r.kind, r.kind) }}</td><td>{{ r.bugs }}</td><td>{{ r.ok }}</td><td>{{ r.ok_testes_falhando }}</td>
+        <td>{% for s, n in r.falhas.items() %}{{ s }}: {{ n }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{{ (r.taxa_sucesso * 100)|round(1) }}%</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  <p><a class="botao" href="/lote/{{ b.id }}/csv">Baixar CSV</a></p>
+  {% else %}<p class="vazio">Sem execuções concluídas ainda.</p>{% endif %}
+</section>
+<section>
+  <h2>Jobs</h2>
+  <table>
+    <thead><tr><th>Bug</th><th>Tipo</th><th>Estado</th><th>Execução</th></tr></thead>
+    <tbody>{% for j in b.jobs %}
+      <tr><td>{{ j.bug_key }}</td><td>{{ kind_label.get(j.kind, j.kind) }}</td><td>{{ j.state }}{% if j.error %} <span class="erro">({{ j.error[:120] }})</span>{% endif %}</td>
+        <td>{% if j.run_rel %}<a href="/run/{{ j.run_rel }}">abrir</a>{% else %}-{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+</section>

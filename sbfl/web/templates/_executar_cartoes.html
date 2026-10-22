@@ -1,0 +1,44 @@
+<div id="exe-cartoes"{% if pendente %} hx-get="/executar/{{ bid }}/cartoes" hx-trigger="load delay:{{ poll }}s" hx-swap="outerHTML"{% endif %}>
+{% for c in cards %}
+<section class="exe-cartao">
+  <h2>{{ c.nome }}</h2>
+  {% if c.state == 'pending' %}
+  <p class="vazio">Na fila. <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a></p>
+  {% elif c.state == 'running' %}
+  <p>Rodando… <a href="/job/{{ c.job.id }}/ao-vivo">ver log ao vivo</a></p>
+  {% elif c.state == 'cancelled' %}
+  <p class="vazio">Cancelado.</p>
+  {% elif c.run %}
+  <p>Status: <strong class="{{ 'ok' if c.ok else 'erro' }}">{{ c.run.status }}</strong>
+    {% if c.run.attempts %}· tentativas: {{ c.run.attempts }}{% endif %}
+    {% if c.run.seconds is not none and c.run.seconds is defined %}· {{ c.run.seconds|round|int }} s{% endif %}</p>
+  {% if c.cause %}<p>{{ c.cause }}</p>{% endif %}
+  {% for w in c.run.warnings or [] %}<p class="aviso">{{ w }}</p>{% endfor %}
+  {% if c.suggestions %}
+  <ul class="exe-sug">{% for s in c.suggestions %}<li>{{ s.label }}</li>{% endfor %}</ul>
+  <p class="vazio">Aplique uma sugestão em &quot;Detalhes da execução&quot;.</p>
+  {% endif %}
+  {% if c.tests %}
+  <p>{{ c.tests.total }} testes · {{ (c.tests.failed or 0) + (c.tests.error or 0) }} com falha</p>
+  {% endif %}
+  {% if c.kind != 'maven' %}
+    {% if c.linhas %}
+    <table class="exe-linhas">
+      <thead><tr><th>Classe</th><th>Linha</th><th>Suspeita</th></tr></thead>
+      <tbody>{% for l in c.linhas %}
+        <tr><td><a href="{{ l.href }}">{{ l.cls }}</a></td><td>{{ l.line }}</td><td>{{ '%.2f'|format(l.susp) }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% else %}<p class="vazio">Sem linhas suspeitas nesta execução.</p>{% endif %}
+  {% endif %}
+  <div class="botoes">
+    <a class="botao" href="/run/{{ c.rel|q }}">Detalhes da execução</a>
+    {% if c.kind != 'maven' and c.linhas %}<a class="botao" href="/run/{{ c.rel|q }}/codigo">Ver no código</a>{% endif %}
+  </div>
+  {% else %}
+  <p class="erro">{{ c.erro or 'A execução terminou sem resultado.' }}</p>
+  {% endif %}
+</section>
+{% endfor %}
+{% if comparar %}<p><a class="botao" href="{{ comparar }}">Comparar Maven e Jaguar 2</a></p>{% endif %}
+</div>

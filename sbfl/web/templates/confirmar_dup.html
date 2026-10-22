@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Confirmar exclusão - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Excluir arquivos duplicados?</h1>
+<section>
+  <p>Esta correção remove do checkout os arquivos abaixo antes de compilar. Confirme para enfileirar uma nova execução.</p>
+  {% if files %}<ul>{% for f in files %}<li><code>{{ f }}</code></li>{% endfor %}</ul>
+  {% else %}<p class="vazio">Nenhum arquivo foi identificado no log.</p>{% endif %}
+  <form method="post" action="/run/{{ rel|q }}/tentar" class="botoes">
+    <input type="hidden" name="idx" value="{{ idx }}">
+    <input type="hidden" name="confirmar" value="1">
+    <button type="submit">Confirmar e tentar de novo</button>
+    <a class="botao" href="/run/{{ rel|q }}">Cancelar</a>
+  </form>
+</section>
+{% endblock %}

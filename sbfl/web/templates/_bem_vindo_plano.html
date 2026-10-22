@@ -1,0 +1,34 @@
+<div class="dialogo">
+  <h3>{{ 'Preparar tudo' if escopo == 'tudo' else 'Só o essencial (Jaguar 2)' }}</h3>
+  <ul class="bv-plano">
+  {% for i in linhas %}
+    <li>
+      <strong>{{ i.label }}</strong>
+      {% if i.presente %}
+        &mdash; <span class="ok">já instalado</span>
+      {% elif i.error %}
+        <br><span class="erro">{{ i.error }}</span>
+      {% elif i.m2 %}
+        <br>O Maven baixa as dependências por conta própria (tamanho desconhecido).<br>
+        Destino: <code>{{ i.m2 }}</code>
+      {% else %}
+        {% for p in i.plans %}
+        <br>{{ p.name }}<br>
+        URL: <code>{{ p.url }}</code><br>
+        Tamanho: {{ p.size }}<br>
+        Destino: <code>{{ p.dest }}</code>
+        {% endfor %}
+      {% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% if falta %}
+  <form hx-post="/bem-vindo/preparar" hx-target="#dialogo">
+    <input type="hidden" name="escopo" value="{{ escopo }}">
+    <button type="submit">Baixar e preparar</button>
+    <button type="button" onclick="document.getElementById('dialogo').innerHTML=''">Cancelar</button>
+  </form>
+  {% else %}
+  <p class="ok">Nada a baixar: tudo deste escopo já está instalado.</p>
+  {% endif %}
+</div>

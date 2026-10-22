@@ -1,0 +1,26 @@
+<div class="dialogo bv-progresso"{% if not t.done %} hx-get="/bem-vindo/progresso/{{ tid }}" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+  {% if t.error %}<p class="aviso erro">{{ t.error }}</p>{% endif %}
+  <ul class="bv-passos">
+  {% for s in t.steps %}
+    <li class="bv-{{ s.state }}">
+      <strong>{{ s.label }}</strong> &mdash;
+      {% if s.state == 'pending' %}aguardando
+      {% elif s.state == 'running' %}em andamento
+        {% if t.total %}<br><progress max="{{ t.total }}" value="{{ t.bytes }}"></progress>
+          {{ (100 * t.bytes / t.total) | round | int }}% ({{ (t.bytes / 1048576) | round(1) }} de {{ (t.total / 1048576) | round(1) }} MB)
+        {% elif t.bytes %}<br>{{ (t.bytes / 1048576) | round(1) }} MB baixados{% endif %}
+      {% elif s.state == 'ok' %}<span class="ok">ok</span> <code>{{ s.msg }}</code>
+      {% elif s.state == 'skipped' %}<span class="ok">já instalado</span>
+      {% else %}<span class="erro">falhou: {{ s.msg }}</span>{% endif %}
+    </li>
+  {% endfor %}
+  </ul>
+  {% if t.done %}
+    {% if t.failed %}
+    <p class="aviso erro">Terminou com {{ t.failed }} falha(s). Os demais itens foram preparados;
+      você pode tentar de novo ou usar a <a href="/ambiente">tela Ambiente</a>.</p>
+    {% elif not t.error %}
+    <p class="aviso ok">Tudo pronto. <a href="/">Ir para o Painel</a></p>
+    {% endif %}
+  {% endif %}
+</div>

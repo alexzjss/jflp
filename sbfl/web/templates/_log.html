@@ -1,0 +1,12 @@
+<div id="log-resultado">
+{% if not q.strip() %}<p class="vazio">Digite um termo para buscar nos logs das tentativas.</p>
+{% elif not blocks %}<p class="vazio">Nenhuma ocorrência de "{{ q }}".</p>
+{% else %}
+<p class="vazio">{{ total }} ocorrências{% if capped %} (mostrando as primeiras {{ max }}){% endif %}</p>
+{% for b in blocks %}
+<pre class="log" style="max-height:none"><span class="vazio">tentativa {{ b.attempt }}, linha {{ b.line }}</span>
+{% for n, t, hit in b.ctx %}<span class="{{ 'acerto' if hit else '' }}">{{ n }}: {{ t }}</span>
+{% endfor %}</pre>
+{% endfor %}
+{% endif %}
+</div>

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Bugs - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Bugs</h1>
+
+{% if error %}<p class="aviso erro">{{ error }}</p>{% endif %}
+
+<section>
+  <h2>Escolher bugs</h2>
+  <form method="get" action="/bugs" class="linha">
+    <select name="bench" onchange="this.form.proj.value='';this.form.submit()">
+      <option value="">Benchmark…</option>
+      {% for k, nome in benchmarks %}<option value="{{ k }}" {{ 'selected' if k == bench else '' }}>{{ nome }}</option>{% endfor %}
+    </select>
+    {% if projects %}
+    <select name="proj" onchange="this.form.submit()">
+      <option value="">Projeto…</option>
+      {% for p in projects %}<option value="{{ p }}" {{ 'selected' if p == proj else '' }}>{{ p }}</option>{% endfor %}
+    </select>
+    <label><input type="checkbox" name="pendentes" value="1" {{ 'checked' if pendentes else '' }} onchange="this.form.submit()"> sem execução ok</label>
+    {% endif %}
+    <noscript><button type="submit">Ver</button></noscript>
+  </form>
+</section>
+
+{% if rows is not none %}
+<section>
+  <h2>{{ proj }} ({{ rows|length }})</h2>
+  {% if rows %}
+  {# A tela de novo lote (Tarefa 19) lê ?bugs=<chaves separadas por vírgula>. #}
+  <form method="get" action="/lotes">
+    <table>
+      <thead><tr><th></th><th>Bug</th>{% for k, nome in kinds %}<th>{{ nome }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td><input type="checkbox" class="sel" value="{{ r.bug.key }}"></td>
+          <td><a href="/bug/{{ r.bug.key|q }}">{{ r.bug.bug_id }}</a></td>
+          {% for k, nome in kinds %}
+          {% set run = r.last.get(k) %}
+          <td>{% if run %}<a href="/run/{{ run.path }}" class="{{ 'ok' if run.status == 'ok' else 'erro' }}">{{ run.status }}</a>{% else %}<span class="vazio">-</span>{% endif %}</td>
+          {% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <input type="hidden" name="bugs" id="bugs-sel">
+    <p><button type="submit" onclick="document.getElementById('bugs-sel').value=[...document.querySelectorAll('.sel:checked')].map(c=>c.value).join(',')">Rodar selecionados…</button></p>
+  </form>
+  {% else %}
+  <p class="vazio">Nenhum bug para mostrar.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+<section>
+  <h2>Projeto local</h2>
+  <form method="post" action="/bugs/local" class="linha">
+    <input type="text" name="spec" placeholder="Pasta do projeto, ou URL@commit" required>
+    <button type="submit">Abrir</button>
+  </form>
+  {% if locais %}
+  <ul>{% for b in locais %}<li><a href="/bug/{{ b.key|q }}">{{ b.key }}</a></li>{% endfor %}</ul>
+  {% endif %}
+</section>
+{% endblock %}

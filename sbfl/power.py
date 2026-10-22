@@ -34,7 +34,7 @@ def keep_awake():
         elif sys.platform == "darwin" and shutil.which("caffeinate"):
             proc = subprocess.Popen(["caffeinate", "-i"], start_new_session=True)
         elif shutil.which("systemd-inhibit"):
-            proc = subprocess.Popen(["systemd-inhibit", "--what=sleep:idle", "--why=sbfl campaign",
+            proc = subprocess.Popen(["systemd-inhibit", "--what=sleep:idle", "--why=JFLP Studio: execuções em andamento",
                                      "sleep", "infinity"], stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, start_new_session=True)
     except Exception:

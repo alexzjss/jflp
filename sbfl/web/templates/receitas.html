@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Receitas - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Receitas</h1>
+{% if erro %}<p class="aviso erro">{{ erro }}</p>{% endif %}
+{% if ok %}<p class="aviso ok">Receitas salvas.</p>{% endif %}
+<section>
+  <h2>Arquivos</h2>
+  {% if files %}
+  <ul>{% for x in files %}<li><a href="/receitas?f={{ x|q }}">{{ x }}</a></li>{% endfor %}</ul>
+  {% else %}<p class="vazio">Nenhuma receita ainda. Elas são criadas pelo botão "Salvar como receita" numa execução bem-sucedida.</p>{% endif %}
+</section>
+{% if f %}
+<section>
+  <h2>{{ f }}</h2>
+  <form method="post" action="/receitas">
+    <input type="hidden" name="f" value="{{ f }}">
+    <textarea name="texto" rows="20" style="width:100%;font-family:ui-monospace,Consolas,monospace" spellcheck="false">{{ texto }}</textarea>
+    <p><button type="submit">Salvar</button></p>
+  </form>
+</section>
+{% endif %}
+{% endblock %}

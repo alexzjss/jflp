@@ -1,153 +1,128 @@
-"""`sbfl compare`: o mesmo módulo com e sem o Jaguar, e o rank que o próprio Jaguar fornece.
-
- - sem Jaguar: `mvn test` no módulo (resultado dos testes nos relatórios do surefire);
- - com Jaguar: testes executados na tentativa final do Jaguar (log) e o relatório XML dele;
- - rank do Jaguar: posição das linhas do defeito segundo o `suspicious-value` gravado pelo Jaguar.
+"""Comparações entre execuções gravadas: Maven × Jaguar (testes), Jaguar 1 × Jaguar 2 (espectros),
+posição das linhas do defeito e resumo de lote com a taxa de sucesso.
 Nada aqui calcula fórmulas próprias; só lê o que o Maven e o Jaguar produziram."""
 from __future__ import annotations
 
-import gzip
-import json
-import xml.etree.ElementTree as ET
+import csv
+import io
 from collections import Counter
 from pathlib import Path
 
-from .build import resolve_tool
+from . import status as S
 from .diffgt import FaultLine, select_lines
-from .errors import StageError
-from .jaguar import TEST_RE
-from .proc import make_env, run
-from .report import outer, parse_xml
+from .outputs import (LineScore, jaguar1_scores, outer, parse_jaguar1_log, parse_jaguar2_csv,
+                      parse_jaguar2_xml, parse_surefire)
+from .store import load_run, run_dir
 
-MARK = "# sbfl attempt"
-
-
-def parse_surefire(reports: Path) -> dict[str, str]:
-    """{classe#teste: passed|failed|error|skipped} a partir de target/surefire-reports/TEST-*.xml."""
-    out = {}
-    for f in sorted(Path(reports).glob("TEST-*.xml")):
-        try:
-            root = ET.parse(f).getroot()
-        except ET.ParseError:
-            continue
-        for tc in root.iter("testcase"):
-            st = "passed"
-            if tc.find("failure") is not None:
-                st = "failed"
-            elif tc.find("error") is not None:
-                st = "error"
-            elif tc.find("skipped") is not None:
-                st = "skipped"
-            out[f"{tc.get('classname', '')}#{tc.get('name', '')}"] = st
-    return out
+_TOL = 1e-6
+NOTE_J2 = "Jaguar 2 só grava linhas com susp > 0"
 
 
-def parse_jaguar_log(path: Path) -> dict[str, str]:
-    """{classe#teste: passed|failed} dos testes da ÚLTIMA tentativa do Jaguar."""
-    opener = gzip.open if str(path).endswith(".gz") else open
-    with opener(path, "rt", encoding="utf-8", errors="replace") as f:
-        lines = f.read().splitlines()
-    last = max((i for i, l in enumerate(lines) if l.startswith(MARK)), default=-1)
-    out = {}
-    for line in lines[last + 1:]:
-        m = TEST_RE.search(line)
-        if m:
-            out[f"{m.group(2)}#{m.group(1)}"] = "passed" if m.group(3) == "Passed" else "failed"
-    return out
-
-
-def compare_tests(maven: dict, jag: dict) -> dict:
-    ok = lambda st: st == "passed"
-    m_run = {t: s for t, s in maven.items() if s != "skipped"}
+def compare_tests(a: dict, b: dict) -> dict:
+    ok = lambda st: st == "passed"  # noqa: E731
+    a_run = {t: s for t, s in a.items() if s != "skipped"}
     return {
-        "maven": dict(Counter(maven.values())),
-        "jaguar": dict(Counter(jag.values())),
-        "only_maven": sorted(set(m_run) - set(jag)),
-        "only_jaguar": sorted(set(jag) - set(m_run)),
-        "outcome_differs": sorted((t, m_run[t], jag[t]) for t in set(m_run) & set(jag)
-                                  if ok(m_run[t]) != ok(jag[t])),
-        "maven_failing": sorted(t for t, s in m_run.items() if not ok(s)),
-        "jaguar_failing": sorted(t for t, s in jag.items() if not ok(s)),
+        "a_counts": dict(Counter(a.values())),
+        "b_counts": dict(Counter(b.values())),
+        "only_a": sorted(set(a_run) - set(b)),
+        "only_b": sorted(set(b) - set(a_run)),
+        "outcome_differs": sorted((t, a_run[t], b[t]) for t in set(a_run) & set(b)
+                                  if ok(a_run[t]) != ok(b[t])),
+        "a_failing": sorted(t for t, s in a_run.items() if not ok(s)),
+        "b_failing": sorted(t for t, s in b.items() if not ok(s)),
     }
 
 
-def jaguar_rank(xml_path: Path, faults: list[FaultLine]) -> dict:
-    """Posição das linhas do defeito no relatório do Jaguar. `position_in_file` é a ordem em que o
-    Jaguar gravou; rank_best/rank_worst vêm do `suspicious-value` dele (empates entre os dois)."""
-    reqs = parse_xml(xml_path)
-    vals = [round(r.sus, 12) for r in reqs]
+def compare_spectra(a: list[LineScore], b: list[LineScore]) -> dict:
+    ka = {(outer(s.cls), s.line): s for s in a}
+    kb = {(outer(s.cls), s.line): s for s in b}
+    pick = lambda s: {"cef": s.cef, "cep": s.cep, "susp": s.susp}  # noqa: E731
+    diffs = []
+    for key in sorted(set(ka) & set(kb)):
+        x, y = ka[key], kb[key]
+        if x.cef != y.cef or x.cep != y.cep or abs(x.susp - y.susp) > _TOL:
+            diffs.append({"cls": key[0], "line": key[1], "a": pick(x), "b": pick(y)})
+    return {"only_a": sorted(set(ka) - set(kb)), "only_b": sorted(set(kb) - set(ka)),
+            "both": len(set(ka) & set(kb)), "diffs": diffs, "note": NOTE_J2}
+
+
+def fault_positions(scores: list[LineScore], faults: list[FaultLine]) -> dict:
+    """Posição das linhas do defeito, ordenando por `susp` decrescente (empates entre best e worst)."""
+    vals = [round(s.susp, 12) for s in scores]
     wanted = {(f.cls, f.line) for f in select_lines(faults)}
     rows = []
-    for pos, (r, v) in enumerate(zip(reqs, vals), 1):
-        if (outer(r.cls), r.line) in wanted:
+    for s, v in zip(scores, vals):
+        if (outer(s.cls), s.line) in wanted:
             better = sum(1 for x in vals if x > v)
-            tied = sum(1 for x in vals if x == v)
-            rows.append({"cls": r.cls, "line": r.line, "position_in_file": pos,
-                         "suspicious_value": r.sus, "rank_best": better + 1,
-                         "rank_worst": better + tied, "tied": tied,
-                         "cef": r.ef, "cep": r.ep, "cnf": r.nf, "cnp": r.np})
-    return {"total": len(reqs), "sorted_desc": all(a >= b for a, b in zip(vals, vals[1:])),
-            "lines": rows, "not_covered": len(wanted) - len(rows)}
+            rows.append({"cls": s.cls, "line": s.line, "susp": s.susp, "rank_best": better + 1,
+                         "rank_worst": sum(1 for x in vals if x >= v),
+                         "tied": sum(1 for x in vals if x == v),
+                         "cef": s.cef, "cep": s.cep, "cnf": s.cnf, "cnp": s.cnp})
+    return {"total": len(scores), "lines": rows, "not_covered": len(wanted) - len(rows)}
 
 
-def render(bug_key: str, meta: dict, cmp: dict, rank: dict) -> str:
-    c = lambda d: ", ".join(f"{k} {v}" for k, v in sorted(d.items())) or "nenhum"
-    out = [f"# Comparação com e sem Jaguar — {bug_key}", "",
-           "## Testes", f"- Sem Jaguar (mvn test): {c(cmp['maven'])}",
-           f"- Com Jaguar (tentativa final): {c(cmp['jaguar'])}",
-           f"- Classes excluídas nas tentativas do Jaguar: {', '.join(meta.get('excluded_classes') or []) or 'nenhuma'}",
-           f"- Falham no Maven: {len(cmp['maven_failing'])}; falham no Jaguar: {len(cmp['jaguar_failing'])}"]
-    for title, key in (("Só no Maven (o Jaguar não executou)", "only_maven"),
-                       ("Só no Jaguar (o Maven não executou)", "only_jaguar")):
-        out.append(f"- {title}: {len(cmp[key])}" + (f" — ex.: {', '.join(cmp[key][:3])}" if cmp[key] else ""))
-    d = cmp["outcome_differs"]
-    out.append(f"- Resultado diferente entre os dois: {len(d)}" +
-               ("".join(f"\n  - {t}: Maven {m}, Jaguar {j}" for t, m, j in d[:10])))
-    out += ["", "## Rank fornecido pelo Jaguar (linhas do defeito)",
-            f"Relatório com {rank['total']} linhas. O arquivo está "
-            f"{'ordenado' if rank['sorted_desc'] else 'NÃO ordenado'} por suspicious-value decrescente."]
-    if not rank["lines"]:
-        out.append("Nenhuma linha do defeito aparece no relatório do Jaguar (não foi coberta).")
-    else:
-        out += ["", "| Linha | Posição no arquivo | suspicious-value | Rank (melhor–pior) | Empatadas | cef/cep/cnf/cnp |",
-                "|---|---:|---:|---:|---:|---|"]
-        for r in rank["lines"]:
-            out.append(f"| {r['cls']}:{r['line']} | {r['position_in_file']} | {r['suspicious_value']:.4f} | "
-                       f"{r['rank_best']}–{r['rank_worst']} de {rank['total']} | {r['tied']} | "
-                       f"{r['cef']}/{r['cep']}/{r['cnf']}/{r['cnp']} |")
-    if rank["not_covered"]:
-        out.append(f"\n{rank['not_covered']} linha(s) do defeito não aparecem no relatório.")
-    return "\n".join(out) + "\n"
+def run_tests(home, rel: str) -> dict[str, str]:
+    """Resultado dos testes de uma execução gravada ({} se os arquivos não existem)."""
+    d = run_dir(home, rel)
+    if load_run(home, rel).get("kind") == "jaguar1":
+        log = d / "outputs" / "jaguar1.log.gz"
+        return parse_jaguar1_log(log) if log.exists() else {}
+    return parse_surefire(d / "outputs" / "surefire-reports")
 
 
-def run_compare(cfg, adapter, bug) -> str:
-    d = cfg.results / bug.benchmark / bug.project / bug.bug_id
-    xmls = sorted(d.glob("jaguar_*.xml"))
-    if not (d / "meta.json").exists() or not xmls:
-        raise StageError("no_results", f"sem resultado do Jaguar para {bug.bug_id}: rode `sbfl run` antes")
-    meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
-    faults = [FaultLine(**t) for t in json.loads((d / "truth.json").read_text(encoding="utf-8"))]
-    jag = parse_jaguar_log(d / "jaguar.log.gz")
+def run_scores(home, rel: str) -> list[LineScore] | None:
+    kind = load_run(home, rel).get("kind")
+    out = run_dir(home, rel) / "outputs"
+    if kind == "jaguar2":
+        if (out / "jaguar2.csv").exists():
+            return parse_jaguar2_csv(out / "jaguar2.csv")
+        if (out / "jaguar2.xml").exists():
+            return parse_jaguar2_xml(out / "jaguar2.xml")[1]
+    elif kind == "jaguar1" and (out / "jaguar1.xml").exists():
+        return jaguar1_scores(out / "jaguar1.xml")
+    return None
 
-    mlog = d / "maven_test.log"
-    mlog.write_text("", encoding="utf-8")
-    ctx = adapter.prepare(bug, mlog)          # mesmo checkout e build do `run`
-    try:
-        if not (ctx.project_dir / "pom.xml").exists():
-            raise StageError("not_maven", "a execução sem Jaguar só é suportada para módulos Maven")
-        cmd = [resolve_tool(cfg.get("java", "mvn")), "-B", "test", *cfg.get("maven", "skip_flags"),
-               *cfg.get("maven", "extra_args"), "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false"]
-        r = run(cmd, cwd=ctx.project_dir, env=make_env(cfg, ctx.java_home),
-                timeout=cfg.get("maven", "build_timeout_s"), log_path=mlog)
-        maven = parse_surefire(ctx.project_dir / "target" / "surefire-reports")
-        if not maven:
-            raise StageError("no_surefire", "o `mvn test` não gerou relatórios do surefire "
-                             f"(rc={r['rc']}); veja {mlog}")
-    finally:
-        ctx.cleanup()
-    cmp, rank = compare_tests(maven, jag), jaguar_rank(xmls[0], faults)
-    text = render(bug.key, meta, cmp, rank)
-    (d / "compare.md").write_text(text, encoding="utf-8")
-    (d / "compare.json").write_text(json.dumps({"tests": cmp, "jaguar_rank": rank}, indent=2,
-                                               ensure_ascii=False), encoding="utf-8")
-    return text
+
+def compare_runs(home, rel_a: str, rel_b: str) -> dict:
+    ra, rb = load_run(home, rel_a), load_run(home, rel_b)
+    sa, sb = run_scores(home, rel_a), run_scores(home, rel_b)
+    truth = [FaultLine(**t) for t in (ra.get("truth") or rb.get("truth") or [])]
+    return {"tests": compare_tests(run_tests(home, rel_a), run_tests(home, rel_b)),
+            "spectra": compare_spectra(sa, sb) if sa is not None and sb is not None else None,
+            "faults_a": fault_positions(sa, truth) if sa is not None else None,
+            "faults_b": fault_positions(sb, truth) if sb is not None else None}
+
+
+def batch_summary(home, runs: list[dict]) -> list[dict]:
+    """Por (benchmark, project, kind): usa a última execução de cada bug."""
+    last: dict[tuple, dict] = {}
+    for r in runs:
+        key = (r["benchmark"], r["project"], r["kind"], r["bug"])
+        if key not in last or (r.get("started") or "") > (last[key].get("started") or ""):
+            last[key] = r
+    groups: dict[tuple, list[dict]] = {}
+    for key, r in last.items():
+        groups.setdefault(key[:3], []).append(r)
+    rows = []
+    for (bench, proj, kind), rs in sorted(groups.items(), key=lambda kv: tuple(str(x) for x in kv[0])):
+        st = Counter(r.get("status") for r in rs)
+        ok_n = sum(n for s, n in st.items() if s == S.OK)
+        okf = st.get(S.OK_TEST_FAIL, 0)
+        succ = sum(n for s, n in st.items() if S.is_success(s))
+        rows.append({"benchmark": bench, "project": proj, "kind": kind, "bugs": len(rs),
+                     "ok": ok_n, "ok_testes_falhando": okf,
+                     "falhas": {s: n for s, n in sorted(st.items(), key=lambda x: str(x[0]))
+                                if not S.is_success(s)},
+                     "taxa_sucesso": round(succ / len(rs), 4) if rs else 0})
+    return rows
+
+
+def summary_csv(rows: list[dict]) -> str:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["benchmark", "project", "kind", "bugs", "ok", "ok_testes_falhando", "falhas",
+                "taxa_sucesso"])
+    for r in rows:
+        w.writerow([r["benchmark"], r["project"], r["kind"], r["bugs"], r["ok"],
+                    r["ok_testes_falhando"], sum(r["falhas"].values()), r["taxa_sucesso"]])
+    return buf.getvalue()

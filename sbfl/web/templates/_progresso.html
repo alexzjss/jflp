@@ -1,0 +1,22 @@
+{% if t.done %}
+<div class="dialogo">
+  {% if t.error %}
+  <p class="aviso erro">{{ t.error }}</p>
+  {% else %}
+  <p class="aviso ok">Concluído: {{ t.label }}.{% if t.dest %} <code>{{ t.dest }}</code>{% endif %}
+    <a href="/ambiente">Atualizar a tela</a></p>
+  {% endif %}
+</div>
+{% else %}
+<div class="dialogo" hx-get="/ambiente/progresso/{{ tid }}" hx-trigger="every 1s" hx-swap="outerHTML">
+  <p>{{ t.label }}&hellip;</p>
+  {% if t.total %}
+  <progress max="{{ t.total }}" value="{{ t.bytes }}"></progress>
+  {{ (t.bytes / 1048576) | round(1) }} de {{ (t.total / 1048576) | round(1) }} MB
+  {% elif t.bytes %}
+  {{ (t.bytes / 1048576) | round(1) }} MB baixados
+  {% else %}
+  em andamento
+  {% endif %}
+</div>
+{% endif %}

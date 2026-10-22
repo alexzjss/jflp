@@ -1,1073 +1,382 @@
-# JFLP — Java Fault Localization Pipeline
+# JFLP Studio
 
-A modular experimental pipeline for **Spectrum-Based Fault Localization (SBFL)** on Java software.
+Ferramenta local (Windows e Arch Linux) para rodar **Maven puro**, **Jaguar 2** (principal) e **Jaguar 1** (compatibilidade) sobre versões defeituosas de projetos Java, guardar os **resultados brutos** de cada execução e compará-los. Serve para gerar, em escala, dados de cobertura de linhas (espectros) com o Jaguar 2 a partir de benchmarks como Defects4J e Bugs.jar.
 
-JFLP automates the complete workflow required to execute and evaluate fault-localization experiments over real-world Java bugs:
+O que ela faz:
 
-```mermaid
-flowchart LR
-    A["Java Benchmarks<br/>Defects4J · Bugs.jar · Bears<br/>GitBug-Java · any Git repository"]
-    B["Prepare & Build<br/>Checkout · Maven / Gradle · Tests"]
-    C["Fault Localization<br/>Jaguar 2"]
-    D["Execution Spectrum<br/>cef · cep · cnf · cnp"]
-    E["SBFL Evaluation<br/>Ochiai · Tarantula · DStar<br/>Jaccard · Zoltar · ..."]
-    F["Evaluation<br/>EXAM · Top-N · Rankings"]
-    G["Results<br/>CSV · JSON · PNG"]
+- roda o Maven e o Jaguar 2 "limpos": o Jaguar 2 usa um POM gerado (`jaguar2-pom.xml`) ao lado do original, que nunca é alterado;
+- aplica automaticamente, e mostra para revisão, as correções conhecidas para projetos legados (animal-sniffer, compiler, Surefire antigo, testes fora de `src/test/java`, ...);
+- distingue **falha de teste** (é o bug, é dado) de **falha de infraestrutura** (build, JDK, plugin, Jaguar), diagnostica a segunda em português e tenta a busca automática de correções;
+- grava cada execução numa pasta imutável (logs completos, saídas puras, ambiente exato, checkout);
+- compara Maven × Jaguar e Jaguar 1 × Jaguar 2 para o mesmo bug, e resume lotes (taxa de sucesso por projeto);
+- roda lotes em fila sequencial, retomável após fechar o programa;
+- exporta um dataset (saídas puras do Jaguar 2 + `manifest.csv/json`) pronto para publicar.
 
-    A --> B --> C --> D --> E --> F --> G
+A ferramenta **não calcula** fórmulas SBFL nem EXAM: o score de cada linha é o que o próprio Jaguar grava.
+
+Licença: veja [LICENSE](LICENSE).
+
+## Índice
+
+1. [Instalação](#1-instalação)
+2. [Primeira execução](#2-primeira-execução)
+3. [Defects4J no Windows (WSL)](#3-defects4j-no-windows-wsl)
+4. [Configurações (`config.toml`)](#4-configurações-configtoml)
+5. [Como o Jaguar 2 é executado](#5-como-o-jaguar-2-é-executado)
+6. [Status e diagnóstico](#6-status-e-diagnóstico)
+7. [Busca automática e receitas](#7-busca-automática-e-receitas)
+8. [Layout da pasta de execução](#8-layout-da-pasta-de-execução)
+9. [Layout do dataset exportado](#9-layout-do-dataset-exportado)
+10. [Referência da linha de comando](#10-referência-da-linha-de-comando)
+11. [Solução de problemas](#11-solução-de-problemas)
+12. [Desenvolvimento](#12-desenvolvimento)
+
+## 1. Instalação
+
+Requisitos mínimos: **Python 3.11 ou mais novo** e **git**. JDK e Maven podem ser baixados pela própria ferramenta (tela Ambiente); eles ficam na pasta do JFLP e nada é alterado no sistema (PATH, registro, `~/.bashrc`). O Jaguar 2 vem do Maven Central como dependência do POM gerado.
+
+Os lançadores criam um `.venv` ao lado do script na primeira execução (com o Python ≥ 3.11 encontrado) e rodam `pip install -e .[full]`; se o extra falhar, instalam sem ele. O extra `full` traz `zstandard` (checkout arquivado em `.tar.zst`, senão `.zip`) e `pywebview` (janela própria). Sem argumentos, o lançador executa `jflp ui`. Se uma instalação falhar pela metade ou as dependências mudarem (por exemplo, depois de um `git pull`), apague a pasta `.venv` e rode o lançador de novo para reinstalar tudo.
+
+**Windows** (PowerShell ou cmd):
+
+```powershell
+git clone <url-do-repositorio> jflp
+cd jflp
+.\jflp.ps1            # abre a interface (jflp ui)
+.\jflp.ps1 doctor     # qualquer comando da CLI
+jflp.cmd selftest     # mesmo lançador, para o cmd ou duplo clique
 ```
 
-The goal is to make fault-localization experiments **reproducible, extensible and comparable** across different Java benchmarks and projects.
+O `jflp.ps1` procura `py -3` (e confere `sys.version_info >= 3.11`), senão `python`. Se o PowerShell bloquear scripts, use `jflp.cmd` (ele chama o PowerShell com `-ExecutionPolicy Bypass`).
 
-## Contents
-
-- [Why?](#why) · [Features](#features) · [Requirements](#requirements)
-- [Quick start: step by step](#quick-start-step-by-step)
-- [Running with Maven and Jaguar](#running-with-maven-and-jaguar)
-- [Bugs.jar campaign](#bugsjar-campaign)
-- [Command reference](#command-reference) · [Configuration reference](#configuration-reference)
-- [Troubleshooting](#troubleshooting)
-- [Supported benchmarks](#supported-benchmarks) · [Manifest format](#manifest-format)
-- [Fault localization and evaluation](#fault-localization) · [Ground truth](#ground-truth)
-- [Experiment artifacts and status](#experiment-artifacts) · [Crash recovery](#crash-recovery)
-- [Reproducibility](#reproducibility) · [Known limitations](#known-limitations)
-- [Architecture](#architecture) · [Testing](#testing) · [Extending JFLP](#extending-jflp) · [Roadmap](#roadmap)
-
-## Why?
-
-Spectrum-Based Fault Localization techniques use the execution behavior of passing and failing tests to estimate which program elements are most likely responsible for a failure.
-
-In practice, however, evaluating SBFL techniques involves considerably more than calculating a suspiciousness formula.
-
-A complete experiment must deal with:
-
-- checking out specific defective versions;
-- compiling legacy Java projects;
-- identifying and executing test suites;
-- collecting execution spectra;
-- identifying the actual faulty code;
-- handling build and execution failures;
-- calculating suspiciousness scores;
-- handling tied suspiciousness values;
-- calculating ranking metrics;
-- aggregating results across many bugs.
-
-JFLP provides an automated workflow for these steps.
-
-## Features
-
-- Support for multiple Java bug benchmarks, plus any Git repository through a JSONL manifest.
-- Adapter-based benchmark architecture.
-- Pluggable build strategies: Maven, Gradle or custom commands (Ant, Docker, scripts).
-- Integration with Jaguar 2 for spectrum collection.
-- Automatic ground-truth extraction from buggy/fixed versions (two commits, a patch file, or two source trees).
-- Offline calculation of multiple SBFL formulas.
-- Line-level and class-level fault ranking.
-- Explicit handling of suspiciousness ties.
-- EXAM and Top-N evaluation.
-- Automatic recovery from selected fault-localization crashes.
-- Automatic exclusion of abstract test classes and JUnit 5-only classes.
-- Environment checks (`doctor`) and an end-to-end `selftest` on a tiny project with a known bug.
-- Failure triage that groups failed bugs by probable cause and suggests what to adjust.
-- Per-bug JDK selection based on the Java level declared in the project's `pom.xml`.
-- Campaign tooling for large benchmarks: resumable runs, progress and ETA, success levels, quality alerts, retry by failure reason, per-project sampling and per-bug inspection.
-- Structured per-bug experiment artifacts, aggregated CSV reports and plots.
-- Reproducible experiment metadata and an environment record.
-- A `compare` command that runs the same Maven module with and without Jaguar and reports Jaguar's own rank.
-- Safe Git worktree-based benchmark preparation.
-
-## Requirements
-
-| Requirement | Notes |
-|---|---|
-| Python 3.11+ | `pandas` and `matplotlib` are needed only by `aggregate`. |
-| Git | Used for checkouts (`git worktree`) and for the ground truth. |
-| JDK | **Java 8 is recommended.** Jaguar embeds an older JaCoCo that may not read class files built for newer Java versions. Several JDKs can be configured (see [JDK selection](#jdk-selection)). |
-| Maven | Maven 3.6.x is the safest choice for legacy projects. Maven 3.8.1 and later block `http://` repositories. |
-| Jaguar 2 | A built Jaguar whose `lib/` folder contains `jacocoagent.jar` and the Jaguar jars (`br.usp.each.saeg.jaguar.core...`). |
-| Operating system | Linux, macOS or Windows for Git-based benchmarks (Bugs.jar, Bears, manifests). Defects4J requires Linux or WSL. |
-
-## Quick start: step by step
-
-The steps below take you from a fresh machine to the first validated result. Each step says what to look for before moving on. CLI messages are printed in Portuguese.
-
-### 1. Install JFLP
+**Arch Linux:**
 
 ```bash
-unzip sbfl-pipeline.zip && cd sbfl-pipeline
+sudo pacman -S python git
+git clone <url-do-repositorio> jflp
+cd jflp
+./jflp.sh             # abre a interface (jflp ui)
+./jflp.sh doctor
+```
+
+> O `jflp.sh` foi escrito junto com o resto, mas só teve a sintaxe conferida (`bash -n`); a execução em Arch ainda não foi verificada.
+
+**Pasta do JFLP** (`tools/`, `m2/`, `work/`, `runs/`, `recipes/`, `datasets/`, `jflp.db`, `config.toml`):
+
+- Windows: `%LOCALAPPDATA%\jflp`
+- Linux: `~/.jflp`
+- para mudar: variável de ambiente `JFLP_HOME`. No Windows prefira um caminho **curto** (ex.: `C:\jflp`) por causa do limite de 260 caracteres.
+
+## 2. Primeira execução
+
+```text
+.\jflp.ps1 ui        # ou ./jflp.sh ui
+```
+
+O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem: Painel, Executar, Ambiente, Bugs, Lotes, Comparar, Receitas e Exportar.
+
+**Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, o Painel abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
+
+**Jeito rápido: tela Executar.** Para rodar um projeto sem passar por Bugs, revisão do POM e receitas:
+
+1. em **Projeto**, cole a pasta (ou clique em **Procurar…**) ou informe `URL@commit`. Em projeto multi-módulo, informe o **Módulo** (subpasta com `pom.xml`, ex.: `maven-artifact`): as dependências do reactor são instaladas antes (`-pl <módulo> -am`) e o Jaguar 2 instrumenta só esse módulo;
+2. marque **Maven**, **Jaguar 2** e/ou **Jaguar 1**;
+3. escolha os testes: **todos** ou **só estes** (`Classe` ou `Classe#metodo`, separados por vírgula ou linha);
+4. clique em **Executar**. Cada tipo ganha um cartão que se atualiza sozinho. Ao terminar, o cartão mostra o status, o diagnóstico, o resumo dos testes e as 10 linhas mais suspeitas, com links para os detalhes, para o código e para a comparação Maven × Jaguar 2.
+
+A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com as mesmas opções.
+
+**Resultado no código** (`Ver no código`, nas execuções Jaguar 1/2). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`.
+
+**Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal:
+
+```text
+.\jflp.ps1 atalho            # cria "JFLP Studio" na Área de Trabalho e no Menu Iniciar
+.\jflp.ps1 atalho --remover  # desfaz
+```
+
+O atalho executa `pythonw.exe -m sbfl ui --app` do `.venv` (sem console; a saída vai para `ui.log` na pasta de dados do JFLP). No Linux cria `~/.local/share/applications/jflp.desktop`. Sem Edge/Chrome/Chromium, `--app` tenta o pywebview e depois o navegador padrão.
+
+1. **Ambiente.** Mostra JDKs, Mavens, Git, WSL/Defects4J e o perfil resolvido de cada tipo de execução. Os botões baixam, com confirmação de URL e tamanho, o **JDK 11** e o **Maven 3.9.9** (perfil do Jaguar 2). Também há o *pre-fetch* do Jaguar 2 para o `m2/` próprio, para depois rodar offline. Para o Jaguar 1 são necessários JDK 8 e Maven 3.6.3, e a `lib/` do Jaguar 1 (baixada pela tela ou apontada em `jaguar1.lib`).
+2. **Bugs.** Escolha a origem:
+   - **Pasta local**: um projeto no disco (é *copiada*; o original nunca é tocado) ou `URL@commit` (clone raso);
+   - **Bugs.jar**: configure `bugsjar.root` e `bugsjar.projects` e rode `jflp fetch` (ou use a tela); os bugs são os branches `bugs-dot-jar_*`;
+   - **Defects4J**: veja a seção 3.
+3. **Revisão do POM** (Jaguar 2). Mostra o diff `pom.xml` → `jaguar2-pom.xml`, a lista de correções com liga/desliga e o motivo de cada uma, e a receita aplicada, se houver. Em lotes a revisão é pulada (valem as correções detectadas e as receitas).
+4. **Rodar.** O log aparece ao vivo. Se a execução falhar por infraestrutura, a tela mostra o diagnóstico, o trecho do log e o botão "tentar de novo com a correção sugerida".
+5. **Resultado.** Resumo dos testes (passou/falhou/erro/ignorado), tabela do relatório do Jaguar (classe, linha, cef/cnf/cep/cnp, score) com as linhas do defeito destacadas quando há *ground truth*, saídas puras, log completo e botão "abrir pasta".
+
+Para validar a instalação inteira (Maven, Jaguar 2 e, se existir, Jaguar 1) com um projeto de exemplo embutido:
+
+```text
+.\jflp.ps1 selftest
+```
+
+Ele roda um bug pequeno e confere que `jaguar2.csv` contém a linha defeituosa. Sai com código 0 se tudo passou.
+
+## 3. Defects4J no Windows (WSL)
+
+O Defects4J exige Perl/Linux. No Windows a ferramenta chama os comandos `defects4j` por `wsl -d <distro> -- bash -lc ...` e converte caminhos para `/mnt/<drive>/...`; Maven e Jaguar rodam no Windows nativo sobre o checkout. É preciso:
+
+1. WSL instalado (`wsl --install`) com uma distribuição Linux.
+2. O Defects4J instalado **dentro** dessa distribuição (clone, `cpanm --installdeps .`, `./init.sh`; veja a documentação do Defects4J). O comando `defects4j` precisa estar no PATH do shell de login, ou use `defects4j.home`.
+3. As configurações (opcionais):
+   - `defects4j.home`: pasta de instalação **dentro do WSL** (ex.: `/home/usuario/defects4j`); usada quando `defects4j` não está no PATH;
+   - `defects4j.wsl_distro`: nome da distribuição (`wsl -l -q`); vazio = a primeira que tiver o Defects4J.
+
+No Linux, o `defects4j` vem do PATH ou de `defects4j.home` (pasta nativa). A tela Ambiente e `jflp doctor` mostram o estado ("WSL/Defects4J"). Projetos do Defects4J sem `pom.xml` (ex.: Closure, Chart) aparecem como "não suportados pelo Jaguar 2"; use o Jaguar 1.
+
+## 4. Configurações (`config.toml`)
+
+Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O arquivo guarda só os valores que diferem do padrão**: chaves ausentes usam o padrão abaixo (assim, quando um padrão muda numa versão nova, ele chega também a quem já tem `config.toml`). Se o arquivo estiver inválido, a CLI e `jflp ui` imprimem o arquivo, a linha e a coluna do erro e saem com código 1; em caminhos do Windows use aspas simples (`'C:\Java\jdk-11'`) ou barras (`"C:/Java/jdk-11"`).
+
+| Seção.chave | Padrão | Significado |
+|---|---|---|
+| `tools.jdks` | `{}` | JDKs manuais: `{ "11" = "C:/Java/jdk-11" }` |
+| `tools.mavens` | `{}` | Mavens manuais: `{ "3.9.9" = "C:/tools/maven" }` |
+| `jaguar2.version` | `0.0.2` | versão dos artefatos `br.usp.each.saeg:jaguar2-*` |
+| `jaguar2.jacoco` | `0.8.7` | `jacoco-maven-plugin` do POM gerado |
+| `jaguar2.surefire` | `3.5.3` | `maven-surefire-plugin` do POM gerado |
+| `jaguar2.compiler` | `3.8.0` | `maven-compiler-plugin` usado pela correção `compiler-java` |
+| `jaguar2.junit` | `4.12` | JUnit adicionado pela correção `junit4` |
+| `jaguar1.lib` | `""` | pasta `lib/` do Jaguar 1 (com `jacocoagent.jar`); vazio = `tools/jaguar1/lib` |
+| `jaguar1.timeout_s` | `3600` | tempo limite do Jaguar 1 |
+| `jaguar1.max_retries` | `6` | recuperações de crash da JVM do Jaguar 1 |
+| `jaguar1.jvm_args` | `[]` | argumentos extras da JVM do Jaguar 1 |
+| `run.test_scope` | `relevant` | `relevant` (só testes relevantes) ou `all` (suíte inteira) |
+| `run.timeout_s` | `7200` | tempo limite de cada processo Maven |
+| `run.archive_checkout` | `true` | arquiva o checkout inteiro na pasta da execução (pode ocupar muito disco) |
+| `run.max_attempts` | `6` | máximo de tentativas por execução (inclui a primeira) |
+| `run.maven_opts` | `""` | opções extras de Maven |
+| `run.skip_flags` | lista abaixo | flags `-D...skip=true` passadas ao Maven |
+| `bugsjar.root` | `""` | pasta onde ficam os clones do Bugs.jar (um por projeto) |
+| `bugsjar.projects` | `[]` | projetos do Bugs.jar usados por `fetch` e pela listagem |
+| `bugsjar.url_template` | `https://github.com/bugs-dot-jar/{project}.git` | URL de clone |
+| `defects4j.home` | `""` | instalação do Defects4J (dentro do WSL no Windows) |
+| `defects4j.wsl_distro` | `""` | distribuição WSL (seção 3) |
+| `defects4j.projects` | Lang, Math, Time, Chart, Closure, Mockito, Jsoup | projetos listados na tela Bugs |
+| `ui.port` | `0` | porta da interface (0 = automática) |
+
+`run.skip_flags` padrão: `-Drat.skip=true -Drat.numUnapprovedLicenses=999999 -Drat.ignoreErrors=true -Dremoteresources.skip=true -Denforcer.skip=true -Dcheckstyle.skip=true -Dlicense.skip=true -Dmaven.javadoc.skip=true -Danimal.sniffer.skip=true -Dfindbugs.skip=true` (desligam verificações de qualidade que atrapalham checkouts antigos).
+
+Exemplo:
+
+```toml
+[bugsjar]
+root = 'D:\bugsjar'
+projects = ["commons-math", "maven"]
+
+[defects4j]
+home = "/home/usuario/defects4j"
+wsl_distro = "Ubuntu"
+
+[run]
+max_attempts = 4
+```
+
+O repositório Maven usado pelas execuções é o `m2/` da própria ferramenta (nunca o `~/.m2`).
+
+## 5. Como o Jaguar 2 é executado
+
+O Jaguar 2 roda como *listener* do Surefire, então exige **Maven** (Gradle/Ant não são suportados) e testes **JUnit 4**. Perfil de ambiente: **JDK 11 + Maven ≥ 3.9.9**. (Jaguar 1: JDK 8 + Maven 3.6.3; Maven puro: JDK escolhido pelo nível declarado no `pom.xml`, com override.)
+
+Cada execução parte de uma cópia limpa do checkout (`pristine/` no workdir), então nada vaza entre execuções (`target/`, `jaguar2-pom.xml`).
+
+1. **Reactor (só multi-módulo).** Se o bug está num submódulo, roda antes `mvn install -DskipTests` no reactor com os POMs **originais**, para popular o `m2/` próprio. Depois o `jaguar2-pom.xml` é gerado **só no módulo que contém os testes**, e o `<parent>` continua resolvendo pelo `pom.xml` original do pai. Nenhum POM do pai ou dos módulos irmãos é reescrito.
+2. **Geração do `jaguar2-pom.xml`** no diretório do módulo, ao lado do `pom.xml` (para que caminhos relativos e `<parent>` resolvam igual). O `pom.xml` original nunca é modificado. O que é injetado **sempre**:
+   - dependências `br.usp.each.saeg:jaguar2-junit4`, `jaguar2-jacoco-provider`, `jaguar2-core`, `jaguar2-xml-exporter` e `jaguar2-csv-exporter` (escopo `test`);
+   - `jacoco-maven-plugin` com o goal `prepare-agent` (reaproveitando a execução já herdada do pai, se houver);
+   - `maven-surefire-plugin` com a propriedade `listener = br.usp.each.saeg.jaguar2.junit.JaguarJUnitRunListener` (somada a um listener já existente, sem duplicar) e `argLine` preservando `@{argLine}` para não perder o agente do JaCoCo.
+3. **Correções** (ligadas pela detecção, ajustáveis na tela de revisão, no CLI com `--fix ID` / `--no-fix ID`):
+
+   | id | Título | Quando é detectada |
+   |---|---|---|
+   | `skip-animal-sniffer` | Ignorar o animal-sniffer | `animal-sniffer` aparece em algum POM da cadeia (módulo, pais) |
+   | `compiler-java` | Compilar com bytecode antigo | o projeto declara Java < 8 (ou nada); fixa o `maven-compiler-plugin` (`jaguar2.compiler`) com source/target = `max(8, nível declarado)` (`1.8` quando 8; `params.target` sobrescreve) e UTF-8, porque plugins de build antigos não leem classes mais novas |
+   | `source-dirs` | Ajustar pastas de código-fonte | fontes fora de `src/main/java` ou `src/test/java` (ex.: `src/test`); aponta `sourceDirectory`/`testSourceDirectory` sem mover arquivos |
+   | `junit4` | Adicionar JUnit 4 | não há `junit:junit` na cadeia de POMs, ou a versão efetiva (resolvendo `${...}` pelas propriedades da cadeia) é < 4: o Surefire usaria o provedor JUnit 3, que ignora o listener do Jaguar 2. Redeclara `junit:junit:4.12` (`jaguar2.junit`) no POM gerado e, se a versão vem de uma propriedade, redefine a propriedade também |
+   | `override-version` | Forçar versões | nunca automática; redeclara versões de dependências/plugins (`params`: `deps`, `plugins`); usada pelo diagnóstico e pela busca |
+   | `exclude-duplicates` | Excluir classes duplicadas | nunca automática; exclui arquivos duplicados da compilação, só por sugestão do diagnóstico |
+   | `skip-rat` | Ignorar o Apache RAT | `apache-rat-plugin` aparece em algum POM da cadeia; define `skip` e `numUnapprovedLicenses=999999` no POM gerado |
+   | `unblock-http` | Liberar repositórios http | nunca automática (correção de execução, não do POM); passa `-s <home>/tools/jflp-settings-unblock.xml` a todo `mvn`, cujo mirror anula o bloqueio do Maven ≥ 3.8.1 |
+
+   A ferramenta **detecta e mostra** classes duplicadas; não apaga código por conta própria.
+4. **Comando:** `mvn -B -Dmaven.repo.local=<m2> -f jaguar2-pom.xml clean test -Djaguar2.classesDirs=<módulo>/target/classes -Dmaven.test.failure.ignore=true <skip_flags> [-Dtest=...]`.
+   - `-Djaguar2.classesDirs` é obrigatório: o Jaguar 2 só analisa as classes listadas nessa propriedade; sem ela o relatório sai vazio.
+   - A JVM do Surefire roda com `-Duser.language=en -Duser.country=US` (via `JAVA_TOOL_OPTIONS`, só nessa chamada): sem isso o CSV sai com vírgula decimal em máquinas pt-BR e as colunas quebram.
+   - Escopo de testes: padrão **só testes relevantes** (Defects4J: `tests.relevant`; Bugs.jar: testes ligados ao fix; local: suíte inteira). Vão em `-Dtest=` ou, se a lista for longa, num `includesFile` do Surefire. `--all-tests` / `run.test_scope = "all"` roda tudo.
+5. **Saídas:** `target/jaguar2.csv`, `jaguar2.xml`, `jacoco.exec` e `surefire-reports/`.
+6. **Sucesso** = existe relatório do Jaguar 2 legível. Testes falhando são esperados.
+
+## 6. Status e diagnóstico
+
+**Princípio: testes que falham são dados, não erros.** O Jaguar 2 precisa justamente dos testes que falham. Nenhum teste é excluído ou "consertado" para ficar verde, e uma execução cujo build fechou e produziu relatórios nunca dispara retry por causa de testes falhando.
+
+| Status | Significado | Retry/busca? |
+|---|---|---|
+| `ok` | infraestrutura OK e todos os testes passaram | não |
+| `ok_testes_falhando` | infraestrutura OK; há testes falhando (o esperado num bug) | não |
+| `checkout_falhou` | não foi possível obter/preparar o bug | não |
+| `jdk_incompativel` | JDK incompatível com o projeto ou com o JaCoCo, ou JDK pedido ausente | sim |
+| `dependencia_nao_resolvida` | dependência/plugin não baixado (inclui repositório `http` bloqueado) | sim |
+| `plugin_incompativel` | animal-sniffer, Surefire ou compiler incompatível; JVM de teste caiu | sim |
+| `compilacao_falhou` | erro de compilação | sim |
+| `classes_duplicadas` | classes duplicadas entre diretórios de fontes | sim (com confirmação) |
+| `testes_nao_encontrados` | nenhum teste executado | sim |
+| `jaguar_sem_saida` | o build terminou mas não há relatório do Jaguar (ou ele é ilegível) | sim |
+| `jaguar_crash` | a JVM do Jaguar 1 caiu | sim |
+| `timeout` | excedeu o tempo limite | não |
+| `interrompido` | a execução foi interrompida antes de terminar (recuperada na abertura) | não |
+| `desconhecido` | falha não reconhecida; veja o log | sim |
+
+As regras de diagnóstico (regex sobre o log, só em linhas de erro quando necessário) mapeiam o sintoma para causa em português, o trecho do log que disparou a regra e correções sugeridas. Para o Jaguar 2, se nenhum teste falhou e o relatório está vazio, a execução continua `ok` mas com o aviso "defeito não reproduzido"; se **há testes falhando e o CSV está vazio**, o status é `jaguar_sem_saida` ("testes falharam mas o relatório do Jaguar 2 está vazio (cobertura/classesDirs não ligados)"): sucesso exige relatório não vazio. Um módulo sem `pom.xml` termina como `desconhecido` ("projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)") sem busca.
+
+**Sugestões por tipo:** as correções do POM (`junit4`, `source-dirs`, `skip-rat`...) só são sugeridas, mostradas e aplicadas ao **Jaguar 2**; `unblock-http` vale para todos os tipos. O Jaguar 2 nunca recebe a sugestão `maven=3.6.3` (exige Maven ≥ 3.9.9): para repositórios `http` bloqueados só se sugere `unblock-http`.
+
+## 7. Busca automática e receitas
+
+**Busca automática** (só para falhas de infraestrutura; nunca altera testes nem código-fonte). Depois da 1ª tentativa falhar, tenta, nesta ordem e sem repetir configurações:
+
+1. as sugestões do diagnóstico;
+2. JDK `8` → `17` → `11` (o padrão do perfil é descartado como duplicata; plugins de build antigos costumam falhar com classes de JDKs novos, por isso o JDK vem antes de variar plugins);
+3. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
+4. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`.
+
+Se uma tentativa com outro JDK chegou até os testes (sucesso ou `jaguar_sem_saida`), as candidatas seguintes sem JDK próprio herdam esse JDK.
+
+Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou na tela.
+
+**Receitas** guardam o que funcionou e são reaplicadas nas execuções seguintes. A tela de execução oferece "salvar como receita" (todos os bugs, faixa/glob ou só este bug). Ficam em `<pasta do JFLP>/recipes/<benchmark>/<projeto>.toml`, em TOML legível e versionável (podem ser publicadas junto com os dados):
+
+```toml
+[[recipe]]
+match = "*"                       # "*" = projeto todo; um id exato; um glob ("MNG-5*"); ou uma lista
+kind = "jaguar2"                  # maven | jaguar2 | jaguar1 | "*"
+fixes = ["skip-animal-sniffer"]   # correções ligadas
+params = { override-version = { plugins = { "org.apache.maven.plugins:maven-surefire-plugin" = "3.2.5" } } }
+jdk = 11                          # opcional
+maven = "3.6.3"                   # opcional
+note = "animal-sniffer exige Java 7"
+```
+
+Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale a mais recente do arquivo. Opções dadas na execução (`--fix`, `--no-fix`, `--jdk`, `--maven`) somam-se à receita; `--no-fix` vence a receita. A receita guarda também `fixes_off` (correções desligadas) e `test_scope` (só quando não é `relevant`), e ambos são reaplicados.
+
+`--fix ID` **acrescenta** à lista detectada (não a substitui). "Tentar de novo com esta correção" na tela de execução também parte das correções detectadas na última tentativa (menos as desligadas) e soma a sugestão. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
+
+## 8. Layout da pasta de execução
+
+Cada execução é uma pasta nova (nunca sobrescrita). Ela é gravada em `.<nome>.partial/`, renomeada ao final e seus arquivos viram somente leitura. A pasta é a fonte da verdade; o índice (`jflp.db`) pode ser reconstruído com `jflp reindex`. Execuções que ficaram pela metade viram `interrompido` quando a fila (interface ou `jflp batch run`) é iniciada.
+
+```text
+runs/<benchmark>/<projeto>/<bug>/<AAAAMMDD-HHMMSS>-<tipo>/
+  run.json            # status, tipo, tempos, resumo dos testes, diagnóstico, receita, ground truth, tentativas
+  env.json            # SO, Python, Git, JDK/Maven exatos, commit do checkout, versão do jflp
+  command.txt         # comando de cada fase (reactor, compilar, jaguar2...) com JAVA_HOME/MAVEN_OPTS/JAVA_TOOL_OPTIONS, já com as aspas da plataforma
+  pom/                # jaguar2-pom.xml usado e jaguar2-pom.diff (Jaguar 2)
+  attempts/
+    0-prepare.log     # log da preparação do bug
+    <n>/log.txt.gz    # log completo da tentativa n
+    <n>/attempt.json  # configuração, diagnóstico, comando, ambiente e status da tentativa
+  outputs/            # saídas puras da última tentativa real
+    surefire-reports/ jaguar2.csv jaguar2.xml jacoco.exec   # Maven e Jaguar 2
+    jaguar1.xml jaguar1.log.gz                              # Jaguar 1
+  checkout.tar.zst    # checkout inteiro (com target/); checkout.zip sem zstandard
+```
+
+`jaguar2.csv` **não tem linha de cabeçalho**: colunas `classe,linha,cef,cnf,cep,cnp,susp` (só linhas com `susp > 0`). Para apagar uma execução à mão, remova antes o atributo somente leitura dos arquivos.
+
+## 9. Layout do dataset exportado
+
+`jflp export` (ou a tela Exportar) pega, para cada bug da seleção, a **última execução Jaguar 2 bem-sucedida** (`ok` ou `ok_testes_falhando`) e monta, em `datasets/<nome>/` (o nome não pode já existir):
+
+```text
+README.md             # o que é, layout e colunas
+manifest.csv
+manifest.json         # o mesmo, com schema_version (atual: 1)
+<benchmark>/<projeto>/<bug>/
+  jaguar2.csv  jaguar2.xml  surefire-reports/  env.json
+```
+
+O `jaguar2.csv` exportado também **não tem linha de cabeçalho** (colunas `classe,linha,cef,cnf,cep,cnp,susp`).
+
+Colunas do manifest: `benchmark, project, bug, status, test_scope, n_tests, n_failed, jdk, maven, jaguar2_version, recipe, path`. Bugs sem execução bem-sucedida entram com o status da última tentativa e `path` vazio, para a taxa de sucesso ficar explícita; além dos status da seção 6, o manifest usa `sem_execucao`, `cancelado` e `desconhecido` (job que terminou com erro, sem execução gravada). `jaguar2_version` vem do plano do POM da execução usada (se não houver registro, da configuração no momento da exportação). Os arquivos copiados para o dataset são graváveis (as execuções originais continuam somente leitura).
+
+## 10. Referência da linha de comando
+
+Toda ação da interface tem um comando equivalente. Use `jflp <comando> --help` para ver o uso. Em lançadores: `.\jflp.ps1 <comando>` / `./jflp.sh <comando>`.
+
+Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/maven/bugs-dot-jar_MNG-5742_6ab41ee8`) ou por `local:<pasta>` / `local:<URL>@<commit>`.
+
+| Comando | O que faz |
+|---|---|
+| `jflp ui [--port N] [--no-browser] [--window] [--app]` | abre a interface web (`--app`: janela de app do Edge/Chrome) |
+| `jflp atalho [--remover]` | cria (ou remove) o atalho JFLP Studio na Área de Trabalho e no Menu Iniciar |
+| `jflp doctor` | JDKs, Mavens, git, WSL/Defects4J e o perfil resolvido de cada tipo; sai com 1 se faltar ferramenta |
+| `jflp tools list` | ferramentas encontradas (JDK, Maven, Jaguar 1) |
+| `jflp tools get {jdk\|maven\|jaguar1} [valor] [--yes]` | baixa uma ferramenta (`valor` = versão do JDK ou do Maven); pergunta antes, salvo `--yes` |
+| `jflp fetch [projeto]` | clona/atualiza os projetos do Bugs.jar (`bugsjar.root`, `bugsjar.projects`) |
+| `jflp bugs {d4j\|bugsjar} [projeto]` | lista os bugs de um benchmark |
+| `jflp prepare <bug> [--refresh]` | faz o checkout e mostra módulo e linhas defeituosas conhecidas; `--refresh` refaz a cópia pristine do zero |
+| `jflp run {maven\|jaguar2\|jaguar1} <bug> [opções]` | executa; sai com 0 se o status for `ok`/`ok_testes_falhando` |
+| `jflp runs [bug]` | lista execuções gravadas |
+| `jflp compare <execução-A> <execução-B>` | compara duas execuções (caminhos relativos a `runs/`, como em `jflp runs`) |
+| `jflp batch create <nome> <tipos> <bug>...` | cria um lote; `tipos` separados por vírgula (`maven,jaguar2`) |
+| `jflp batch run` | roda a fila em primeiro plano até esvaziar (Ctrl+C espera o job atual; um 2º Ctrl+C mata o Maven e devolve o job à fila). Recusa se outra instância (`jflp ui`) já processa a fila |
+| `jflp batch status <id>` | situação e resumo por projeto |
+| `jflp export <nome> [bug...] [--batch ID]` | exporta o dataset (informe `--batch` **ou** bugs) |
+| `jflp recipes [benchmark/projeto]` | lista as receitas, ou mostra a de um projeto |
+| `jflp reindex` | reconstrói o índice varrendo `runs/` |
+| `jflp selftest` | valida o ambiente com um projeto de exemplo |
+
+Opções de `jflp run`: `--all-tests` (suíte inteira), `--fix ID` (acrescenta às correções detectadas) e `--no-fix ID` (repetíveis), `--jdk N`, `--maven VERSÃO`, `--no-search` (sem busca automática), `--no-archive` (não arquiva o checkout), `--refresh` (refaz a cópia pristine antes de rodar). `jflp run` também recusa (código 1) quando outra instância está processando a fila.
+
+Exemplo completo:
+
+```text
+jflp doctor
+jflp tools get jdk 11
+jflp tools get maven 3.9.9
+jflp run jaguar2 local:D:\projetos\meu-projeto
+jflp runs
+jflp batch create teste maven,jaguar2 bugsjar/maven/bugs-dot-jar_MNG-5742_6ab41ee8
+jflp batch run
+jflp export meu-dataset --batch 1
+```
+
+Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
+
+## 11. Solução de problemas
+
+- **"JDK N não encontrado"** (`jdk_incompativel` com causa de ferramenta ausente): baixe o JDK na tela Ambiente (`jflp tools get jdk 11`) ou aponte-o em `tools.jdks`. O Jaguar 2 usa JDK 11; o Jaguar 1, JDK 8.
+- **Maven bloqueia repositório `http`** ("Blocked mirror for repositories", `maven-default-http-blocker`): projetos antigos usam repositórios `http://`, que o Maven ≥ 3.8.1 bloqueia. O diagnóstico sugere primeiro a correção **`unblock-http`** (funciona também com o Maven ≥ 3.9.9 que o Jaguar 2 exige) e depois o **Maven 3.6.3** (`--maven 3.6.3`, ou receita com `maven = "3.6.3"`). Baixe-o em `jflp tools get maven 3.6.3`.
+- **maven-remote-resources-plugin** ("Could not find resource ..."): o reactor instala só o módulo do bug (`-pl <módulo> -am`) e `-Dremoteresources.skip=true` está em `run.skip_flags`; se o erro voltar, confira se o flag não foi removido da configuração.
+- **Apache RAT** ("Too many files with unapproved license"): o checkout do Bugs.jar não leva mais a pasta `.bugs-dot-jar` para a cópia de trabalho e os flags `-Drat.*` estão em `run.skip_flags`; se ainda falhar, a correção `skip-rat` desliga o plugin no POM gerado.
+- **JUnit 3 / sem `jaguar2.csv`** (testes rodaram, há relatórios do Surefire, mas o Jaguar 2 não foi acionado): o POM do projeto usa `junit` < 4 e o Surefire escolhe o provedor JUnit 3. A correção `junit4` é detectada e aplicada sozinha; o diagnóstico `jaguar_sem_saida` também a sugere. O JUnit 4 executa classes `TestCase` do JUnit 3, então os testes continuam os mesmos.
+- **animal-sniffer** ("Undefined reference", build quebra por API Java): a correção `skip-animal-sniffer` é detectada e aplicada sozinha. Se foi desligada na revisão, o diagnóstico a sugere de volta.
+- **Surefire 2.x** ("maven-surefire-plugin:2.x", "The forked VM terminated"): o Jaguar 2 precisa do Surefire 3. O POM gerado fixa `jaguar2.surefire`; se ainda falhar, a busca tenta 3.2.5 e 3.0.0-M5.
+- **Testes fora de `src/test/java`** (ex.: `src/test/org/...`; "Nenhum teste foi executado" ou "package ... does not exist"): a correção `source-dirs` aponta `testSourceDirectory` para a pasta real, sem mover arquivos.
+- **Jaguar 2 com relatório vazio**: se nenhum teste falhou, o defeito **não foi reproduzido** (aviso na execução, status `ok`; confira o escopo `relevant` e tente `--all-tests`). Se há testes falhando e o CSV está vazio, o status é `jaguar_sem_saida`: confirme que a execução usou `-Djaguar2.classesDirs` (veja `command.txt`) e que o módulo certo foi escolhido.
+- **"outra instância está processando a fila"**: só um processo por pasta do JFLP executa jobs, por causa do arquivo `worker.lock`. A interface continua aceitando enfileirar; os jobs rodam quando a outra instância (outra `jflp ui` ou `jflp batch run`) terminar. A trava some sozinha se o processo morrer. Uma `.partial` só é recuperada quando o processo dono (PID gravado em `.writer.json`) não existe mais.
+- **Editei a pasta local e a execução não mudou**: bugs `local:<pasta>` são recopiados sozinhos quando a árvore muda (nº de arquivos, data de modificação mais nova e tamanho total, ignorando `target/` de módulos e `.idea`). Para forçar, use o botão **Re-preparar** na página do bug ou `--refresh` no CLI. Pastas `target/` sem `pom.xml` ao lado e arquivos `*.class` em `src/` são entradas de teste e sempre são copiados.
+- **Fechei o app no meio de uma execução**: o Maven em andamento é encerrado, a execução vira `interrompido` e o job volta para a fila; as cópias de trabalho (`work/w/`) órfãs são apagadas na próxima abertura.
+- **Download recusado por checksum**: `tools get` só instala arquivos verificados. O JDK exige o SHA-256 informado pelo Adoptium (sem ele o download é recusado), o Maven usa o `.sha512` oficial e os dois jars do Jaguar 1 têm SHA-256 fixo no código; um arquivo adulterado ou trocado no servidor é rejeitado.
+- **Projeto sem `pom.xml` ou sem JUnit 4**: o Jaguar 2 não se aplica (aparece como "não suportado"); use o Jaguar 1.
+- **CSV com colunas quebradas / vírgula decimal**: a ferramenta já força o locale en-US na JVM do Surefire; ao rodar o Maven por fora, passe `JAVA_TOOL_OPTIONS="-Duser.language=en -Duser.country=US"`.
+- **WSL / Defects4J ausente** ("WSL/Defects4J: ..." em `doctor`): siga a seção 3 e confira `defects4j.home` e `defects4j.wsl_distro`. Sem WSL, use Bugs.jar ou projetos locais.
+- **Windows e caminhos longos** (erros de checkout ou de arquivo não encontrado com caminhos > 260 caracteres): use um `JFLP_HOME` curto (`C:\jflp`), habilite `git config --global core.longpaths true` e, se necessário, os caminhos longos do Windows (`LongPathsEnabled=1` no registro, pede administrador).
+- **Pouco espaço em disco**: o checkout arquivado (`run.archive_checkout`) e os `work/` são os maiores consumidores; use `--no-archive` ou desligue a opção.
+- **Falha ao instalar com `[full]`** (pywebview/zstandard sem wheel): o lançador instala sem o extra; `--window` não funcionará, e o checkout sai em `.zip`.
+- **A interface não abre**: rode `jflp ui --no-browser` e abra o endereço mostrado; a porta fixa é `--port` ou `ui.port`.
+
+## 12. Desenvolvimento
+
+```text
 python -m venv .venv
-source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install pandas matplotlib
-cp config.example.toml config.toml   # Windows: copy config.example.toml config.toml
+.venv\Scripts\activate          # Linux: source .venv/bin/activate
+pip install -e .[dev]           # [dev] traz httpx, usado nos testes da interface
+python -m unittest discover -s tests -v
 ```
 
-### 2. Edit `config.toml`
+Os testes usam `unittest` (não pytest) e Maven/Java falsos; a integração real é validada por `jflp selftest` e pelos casos de aceitação. O pacote é `sbfl/` (comando `jflp` → `sbfl.cli:main`); a interface web (FastAPI + Jinja2 + htmx vendorizado, sem CDN) está em `sbfl/web/`. Dependências de execução: `fastapi`, `uvicorn`, `jinja2`, `python-multipart`; extra `full`: `zstandard`, `pywebview`.
 
-The minimum for a Bugs.jar campaign on Linux or macOS:
-
-```toml
-[paths]
-jaguar_lib = "~/jaguar/br.usp.each.saeg.jaguar.plugin/lib"   # contains jacocoagent.jar and the Jaguar jars
-workdir    = "./work"                                         # temporary checkouts
-results    = "./results"
-
-[java]
-java_home = "/usr/lib/jvm/java-8-openjdk-amd64"
-
-[bugsjar]
-root     = "~/bugs-dot-jar"        # one clone per project: ~/bugs-dot-jar/maven, ...
-projects = ["maven"]
-```
-
-The same on Windows. Use single quotes (or forward slashes): in a double-quoted TOML string the backslash is an escape character. Keep `workdir` short because of the 260-character path limit.
-
-```toml
-[paths]
-jaguar_lib = 'C:\tools\jaguar\lib'
-workdir    = 'C:\w'
-results    = 'C:\jflp\results'
-
-[java]
-java_home = 'C:\Program Files\Java\jdk1.8.0_202'
-
-[bugsjar]
-root     = 'C:\data\bugs-dot-jar'
-projects = ["maven"]
-```
-
-Relative paths are resolved from the folder that contains `config.toml`. The full list of options is in the [configuration reference](#configuration-reference).
-
-### 3. Check the environment
-
-```bash
-python -m sbfl doctor
-```
-
-`doctor` checks the Jaguar library, Git, Maven and Java, whether `JaguarRunner --help` lists the options JFLP uses, free disk space and the length of the working directory path. Lines marked `[OK]` are fine, `[!!]` are warnings (for example, a Java version above 8) and `[XX]` must be fixed before continuing.
-
-### 4. Run the selftest
-
-```bash
-python -m sbfl selftest
-```
-
-The selftest creates a tiny Maven project with a known defect, runs the **real** pipeline on it (Git, Maven, Jaguar, metrics) and checks that Ochiai ranks the faulty line first. The first run downloads Maven plugins, so it needs internet access. Success looks like this:
-
-```text
-[OK] linha defeituosa em 1º lugar (Ochiai, pior caso nos empates)
-SELFTEST OK — o ambiente está pronto para uma campanha.
-```
-
-On failure it prints the status and a hint; see [Troubleshooting](#troubleshooting). Do not start a campaign before the selftest passes.
-
-### 5. Get the benchmark
-
-```bash
-python -m sbfl fetch                                # clones the projects listed in [bugsjar] projects
-python -m sbfl list --benchmark bugsjar --summary   # bugs per project
-```
-
-If you already have the clones, point `[bugsjar] root` at the folder that contains them (or list them in `repos`) and skip `fetch`.
-
-### 6. Run one bug and check it by hand
-
-```bash
-python -m sbfl run --benchmark bugsjar --project maven --bug bugs-dot-jar_MNG-5742_6ab41ee8
-python -m sbfl inspect bugs-dot-jar_MNG-5742_6ab41ee8
-```
-
-Check, in order:
-
-1. `status: ok`.
-2. `ground truth` points to the production class that the fixing commit changed.
-3. `failed_tests` contains the test that exposes the bug.
-4. The `top 10 por Ochiai` list marks the ground-truth lines with `*`.
-5. `truth_crosscheck` is `agree` (the ground truth matches the benchmark's developer patch) or `absent`.
-
-If anything looks wrong, stop here and use [Reproducing one bug by hand](#reproducing-one-bug-by-hand).
-
-### 7. Run a pilot
-
-```bash
-python -m sbfl run --benchmark bugsjar --sample-per-project 5 --seed 1
-python -m sbfl status --benchmark bugsjar
-python -m sbfl triage --benchmark bugsjar
-```
-
-The pilot estimates the success rate and the time per bug. `status` shows the success levels (L1, L2, L3), quality alerts and an ETA; `triage` groups the failures by probable cause and suggests what to adjust.
-
-### 8. Adjust and retry
-
-Edit `config.toml` according to the triage (for example `java_home`, `[java.homes]`, `jvm_args`), then redo only what failed:
-
-```bash
-python -m sbfl run --benchmark bugsjar --retry build_failed,jaguar_crash
-```
-
-### 9. Run the whole campaign
-
-```bash
-python -m sbfl run --benchmark bugsjar --max-hours 8 --abort-after 5
-```
-
-Bugs already processed are skipped, so you can run the same command again after a stop, an interruption or a power loss. See [Long campaigns](#long-campaigns) for the options.
-
-### 10. Recalculate and aggregate
-
-```bash
-python -m sbfl analyze      # recalculates metrics from the saved spectra, without running Jaguar again
-python -m sbfl aggregate    # CSVs and plots in results/_agregado/
-```
-
-`aggregate` writes `status_por_bug.csv`, `funil_status.csv/png`, `metricas_por_bug.csv`, `resumo_por_heuristica.csv`, `topN_por_heuristica.png`, `exam_cdf.png` and `exam_boxplot.png`.
-
-## Running with Maven and Jaguar
-
-This section explains what JFLP does with Maven and Jaguar for every bug, so that you can configure it, debug it and reproduce a run by hand.
-
-### What happens for each bug
-
-```mermaid
-sequenceDiagram
-    participant J as JFLP
-    participant G as Git
-    participant M as Maven
-    participant K as Jaguar
-    J->>G: worktree add (buggy version)
-    J->>G: diff buggy to fixed (ground truth)
-    J->>M: install -DskipTests (-pl module -am)
-    J->>M: dependency:copy-dependencies
-    J->>J: select test classes
-    J->>K: JaguarRunner with the JaCoCo agent
-    K-->>J: .jaguar/sbfl_Ochiai.xml
-    J->>J: metrics, meta.json, cleanup
-```
-
-### Maven
-
-JFLP runs two Maven commands in the checkout (Maven is only used for builds that JFLP detects as Maven):
-
-| Step | Command (simplified) | Purpose |
-|---|---|---|
-| Build | `mvn -B -q install -DskipTests <skip flags> [-pl <module> -am]` | Compiles production and test code. `-pl <module> -am` builds only the module touched by the fix and the modules it depends on. |
-| Dependencies | `mvn -B -q dependency:copy-dependencies -DoutputDirectory=target/dependency <skip flags>` | Copies the test classpath next to the module so Jaguar can run outside Maven. |
-
-Things worth knowing:
-
-- The default skip flags (`-Drat.skip`, `-Denforcer.skip`, `-Dcheckstyle.skip`, `-Dlicense.skip`, `-Dmaven.javadoc.skip`, `-Danimal.sniffer.skip`, `-Dfindbugs.skip`) avoid plugins that often fail on old versions. Change them in `[maven] skip_flags`.
-- `install` writes each buggy version as a SNAPSHOT into the shared Maven repository. Run Bugs.jar **sequentially**: two bugs of the same project in parallel can overwrite each other's artifacts. `[maven] local_repo` isolates the repository (and downloads everything again).
-- `[maven] extra_args` is appended to both commands: `["-T", "1C"]` parallelizes modules, `["-o"]` goes offline after the dependencies are cached.
-- `[maven] opts` sets `MAVEN_OPTS` (for example `"-Xmx2g"`), and `build_timeout_s` limits each Maven command.
-- Which JDK Maven uses comes from `java_home`, from `[java.homes]` or from the `PATH`, in that order of priority.
-
-### Jaguar
-
-JFLP selects the test classes, writes their names to `.sbfl_tests.txt` inside the module (one class per line, UTF-8 **without** BOM) and runs:
-
-```text
-java <jvm_args>
-     -javaagent:<jaguar_lib>/jacocoagent.jar=output=tcpserver,port=6300
-     -cp "<jaguar_lib>/*:target/classes:target/test-classes:target/dependency/*"
-     br.usp.each.saeg.jaguar.core.cli.JaguarRunner
-     -p . -c target/classes -t target/test-classes
-     -tf .sbfl_tests.txt -h Ochiai -ot F -o sbfl_Ochiai -l DEBUG
-```
-
-| Option | Meaning |
-|---|---|
-| `-javaagent ... tcpserver,port=6300` | JaCoCo agent that Jaguar uses to collect coverage. The fixed port is why two Jaguar runs cannot share a machine. |
-| `-cp` | Jaguar jars, compiled classes, compiled tests and the test dependencies. The separator is `:` on Linux and macOS and `;` on Windows. |
-| `-p`, `-c`, `-t` | Project directory (the module), production classes and test classes. |
-| `-tf` | File with the test classes to execute. |
-| `-h Ochiai` | Heuristic computed by Jaguar. The other formulas are recalculated offline from `cef/cep/cnf/cnp`. |
-| `-ot F` | Flat output (one entry per line). |
-| `-o sbfl_Ochiai` | Base name of the report. Jaguar appends `.xml` and writes it to `.jaguar/`. JFLP copies it to `jaguar_Ochiai.xml` in the results folder. |
-| `-l DEBUG` | Log level. DEBUG is needed to find the test that kills the JVM (see [Crash recovery](#crash-recovery)). |
-
-The report has one `requirements` element per line, with these attributes:
-
-```xml
-<requirements name="org.example.Foo" location="42"
-              cef="3" cep="0" cnf="0" cnp="120" suspicious-value="1.0"/>
-```
-
-`cef`/`cep` are the failing/passing tests that execute the line, and `cnf`/`cnp` are the failing/passing tests that do not.
-
-Jaguar writes the report only when it finishes. If the JVM dies, nothing is saved, which is why JFLP has a [crash recovery loop](#crash-recovery). `jvm_args = ["-Xmx4g"]` helps with large projects and `timeout_s` limits each Jaguar execution.
-
-### JDK selection
-
-Old projects need old JDKs, and Jaguar's JaCoCo prefers Java 8. With a single JDK, set `[java] java_home`. With several, list them once and let JFLP choose per bug:
-
-```toml
-[java.homes]
-8  = "/usr/lib/jvm/java-8-openjdk-amd64"
-11 = "/usr/lib/jvm/java-11-openjdk-amd64"
-```
-
-When no explicit `java_home` is set for the bug or benchmark, the level declared in the project's `pom.xml` (`maven.compiler.source`, `java.version` and similar) selects the smallest configured JDK that is at least `max(level, 8)`, or the largest one if none qualifies. The same JDK builds the project and runs Jaguar, and the detected level is stored as `java_level` in `meta.json`.
-
-### Reproducing one bug by hand
-
-When a bug misbehaves, run the same steps manually. First keep the checkout:
-
-```bash
-python -m sbfl run --benchmark bugsjar --bug <bug-id> --force --keep
-```
-
-The checkout stays in `work/bugsjar/<project>/<bug-id>/` (the module folder is inside it, for example `maven-core`, or it is the checkout itself for single-module projects). The Maven commands from the table above can be repeated there. Then, from the **module folder**, run Jaguar as JFLP does. `.sbfl_tests.txt` from the last attempt is already there.
-
-Linux and macOS:
-
-```bash
-cd work/bugsjar/maven/<bug-id>/maven-core
-L=~/jaguar/br.usp.each.saeg.jaguar.plugin/lib
-java -javaagent:$L/jacocoagent.jar=output=tcpserver,port=6300 \
-     -cp "$L/*:target/classes:target/test-classes:target/dependency/*" \
-     br.usp.each.saeg.jaguar.core.cli.JaguarRunner \
-     -p . -c target/classes -t target/test-classes -tf .sbfl_tests.txt \
-     -h Ochiai -ot F -o manual -l DEBUG
-```
-
-Windows PowerShell:
-
-```powershell
-cd C:\w\bugsjar\maven\<bug-id>\maven-core
-$L = "C:\tools\jaguar\lib"
-java "-javaagent:$L\jacocoagent.jar=output=tcpserver,port=6300" `
-     -cp "$L\*;target\classes;target\test-classes;target\dependency\*" `
-     br.usp.each.saeg.jaguar.core.cli.JaguarRunner `
-     -p . -c target\classes -t target\test-classes -tf .sbfl_tests.txt `
-     -h Ochiai -ot F -o manual -l DEBUG
-```
-
-The report is `.jaguar/manual.xml`. To run only some tests, write your own list. In PowerShell, avoid `Out-File -Encoding utf8` (Windows PowerShell 5 adds a BOM that can corrupt the first class name) and use:
-
-```powershell
-[System.IO.File]::WriteAllLines("$PWD\tests.txt", @("org.example.FooTest", "org.example.BarTest"))
-```
-
-Quote the whole `-javaagent` argument in PowerShell, as above, so the comma is not interpreted as an array separator. When you are done, remove the leftovers with `python -m sbfl clean`.
-
-### Comparing with and without Jaguar
-
-To check that Jaguar sees the same tests as Maven, and to read the rank that Jaguar itself reports, run a bug and then compare it:
-
-```bash
-python -m sbfl run --benchmark bugsjar --project maven --bug bugs-dot-jar_MNG-5742_6ab41ee8 --force
-python -m sbfl compare bugs-dot-jar_MNG-5742_6ab41ee8 --benchmark bugsjar
-```
-
-`compare` checks out and builds the same module again, runs `mvn test` there (without Jaguar) and compares the surefire reports with the last Jaguar attempt: tests per outcome, tests that only one side executed, tests whose outcome differs and the classes Jaguar had to exclude. It then prints, for each line of the defect, its position in Jaguar's report, its `suspicious-value`, and its best and worst rank given the ties. It computes no formulas of its own. The result is saved as `compare.md` and `compare.json` (and the Maven output as `maven_test.log`) in the bug's results folder. Only Maven modules are supported.
-
-The same experiment, step by step with plain Maven and Jaguar commands, is in [`docs/COMPARACAO_COM_E_SEM_JAGUAR.md`](docs/COMPARACAO_COM_E_SEM_JAGUAR.md) (in Portuguese).
-
-## Bugs.jar campaign
-
-The typical workflow for collecting line coverage over a whole benchmark, designed to be resumed at any time:
-
-```mermaid
-flowchart TD
-    V["doctor and selftest<br/>validate the environment"] --> F["fetch<br/>clone the Bugs.jar projects"]
-    F --> L["list --summary<br/>bugs per project"]
-    L --> P["run --sample-per-project 5<br/>pilot: success rate and time"]
-    P --> S["status<br/>levels L1 L2 L3 and ETA"]
-    S --> D{"Acceptable?"}
-    D -->|no| T["triage<br/>group failures by probable cause"]
-    T --> I["inspect BUG<br/>log, failed tests, top suspects"]
-    I --> X["Adjust config.toml<br/>java_home, extra_args, timeouts"]
-    X --> R["run --retry STATUS<br/>redo only what failed"]
-    R --> S
-    D -->|yes| A["run, full campaign<br/>Ctrl-C safe"]
-    A --> S
-```
-
-Already processed bugs are skipped, and an interrupted run (Ctrl-C, power loss) loses at most the bug in progress. `run` prints progress and an ETA based on the bugs executed so far.
-
-### Success levels
-
-`status` counts every bug at the highest level it reached. Levels are cumulative, so L3 bugs also count in L1 and L2.
-
-| Level | Meaning | Statuses |
-|---|---|---|
-| L1 | Jaguar produced a valid report | `no_failing_tests`, `fault_not_covered`, `ok` |
-| L2 | L1 and at least one test fails | `fault_not_covered`, `ok` |
-| L3 | L2 and the faulty line is covered | `ok` |
-
-`status` also reports **L3 clean**: L3 bugs without any quality alert. Alerts flag data that is formally valid but suspicious:
-
-| Alert | Raised when |
-|---|---|
-| `many_failures` | more than half of the executed tests fail (suspect environment) |
-| `instrumentation_errors` | Jaguar reported analysis exceptions, so some classes were not instrumented and the spectrum is incomplete |
-| `tests_excluded` | more than 10% of the test classes had to be excluded |
-| `truth_disagrees` | the ground truth derived from Git disagrees with the benchmark's own developer patch |
-
-Which level counts as "success" is a methodological choice that should be fixed before collecting. L1 measures whether coverage was collected at all; L3 measures whether the data is usable for fault-localization experiments.
-
-### Long campaigns
-
-- **Keep awake.** `run` asks the operating system not to sleep while it works (Windows, macOS and systemd-based Linux). Disable it with `--no-keep-awake`.
-- **Time limit.** `--max-hours H` stops starting new bugs after H hours (for example, run only overnight). The bug in progress finishes, and running the same command later continues. Exit code 0.
-- **Systematic failures.** `--abort-after N` stops after N consecutive failures with the same status, which usually means a configuration problem rather than N independent bugs. Exit code 3.
-- **Notification.** `--notify-cmd "CMD"` runs a command when the run ends, with the summary in the `SBFL_SUMMARY` environment variable.
-- **Cleanup.** After a crash or a hard kill, `clean` removes leftover checkouts from `work/` and prunes orphan Git worktrees. `clean --all` also removes cached clones and the selftest directory.
-- **Exit codes.** 0 for a normal end or the time limit, 3 for `--abort-after`, 130 for Ctrl-C.
-
-### Environment record
-
-Every `run` writes `results/_env.json` with the JFLP version, Python, platform, Java, Maven, the SHA-256 prefix of every jar in the Jaguar library and the key settings. Keep it with the results: it documents how the data was produced.
-
-### Practical notes
-
-- Multi-module projects (such as Camel or Flink) can take a long time to build. `[maven] extra_args = ["-T", "1C"]` enables parallel module builds.
-- Check `truth_crosscheck` in `meta.json` on the first bugs. `agree` means the ground truth derived from Git matches the developer patch shipped with the benchmark; `absent` means the benchmark folder had no such file.
-- The benchmark's own metadata (the files in `.bugs-dot-jar/`) is saved in each result under `provenance/`.
-
-## Command reference
-
-All commands accept `-c config.toml` before the subcommand (default: `config.toml` in the current folder).
-
-| Command | Purpose |
-|---|---|
-| `doctor` | Checks Jaguar, Git, Maven, Java, disk space and paths. |
-| `selftest` | Runs the real pipeline on a tiny project with a known defect. |
-| `fetch [--project P]` | Clones or updates the Bugs.jar projects listed in `[bugsjar] projects`. |
-| `list [--benchmark B] [--project P] [--bug ID] [--limit N] [--sample-per-project N --seed S] [--summary]` | Lists the bugs found. `B` is `d4j`, `bugsjar`, `bears`, `gitbugjava` or `manifest` (default: all that are available). |
-| `run` (same selectors as `list`) `[--force] [--keep] [--workers N] [--retry STATUS,...] [--max-hours H] [--abort-after N] [--notify-cmd CMD] [--no-keep-awake]` | Runs the pending bugs. `--force` redoes everything selected, `--retry` redoes only bugs with those statuses, `--keep` keeps the checkout in `work/`. |
-| `status [--benchmark B] [--project P] [--md FILE]` | Progress, success levels, quality alerts and ETA per project. |
-| `triage [--benchmark B] [--project P] [--md FILE]` | Groups failures by probable cause and suggests adjustments. |
-| `compare BUG [--benchmark B] [--project P]` | Runs the same Maven module with and without Jaguar and reports the rank written by Jaguar. Needs a previous `run`. |
-| `inspect BUG [--top N]` | Summary of one result: status, failed tests, ground truth, most suspicious lines and the end of the log. |
-| `analyze` | Recalculates the metrics of every saved spectrum, without running Jaguar again. |
-| `aggregate` | Writes CSV reports and plots to `results/_agregado/`. |
-| `clean [--all]` | Removes leftovers of interrupted runs and prunes orphan worktrees. |
-
-## Configuration reference
-
-| Section | Key | Default | Meaning |
-|---|---|---|---|
-| `[paths]` | `jaguar_lib` | — | Folder with `jacocoagent.jar` and the Jaguar jars. |
-| | `workdir` | `./work` | Temporary checkouts (removed after each bug unless `--keep`). |
-| | `results` | `./results` | Per-bug artifacts and aggregates. |
-| `[java]` | `java`, `mvn` | `java`, `mvn` | Executables, if not on the `PATH`. |
-| | `java_home` | empty | JDK for build and Jaguar. |
-| `[java.homes]` | `8 = "..."`, `11 = "..."` | empty | JDKs chosen per bug from the level declared in `pom.xml`. |
-| `[maven]` | `skip_flags` | see [Maven](#maven) | Flags that disable troublesome plugins. |
-| | `extra_args` | `[]` | Extra Maven arguments (`["-T","1C"]`, `["-o"]`). |
-| | `opts` | empty | `MAVEN_OPTS`. |
-| | `local_repo` | empty | Isolated Maven repository. |
-| | `build_timeout_s` | `3600` | Timeout of each Maven command. |
-| `[jaguar]` | `heuristic` | `Ochiai` | Heuristic computed by Jaguar. |
-| | `output_type` | `F` | Report type. |
-| | `log_level` | `DEBUG` | Needed for crash recovery. |
-| | `timeout_s` | `3600` | Timeout of each Jaguar execution. |
-| | `max_retries` | `6` | Attempts of the crash recovery loop. |
-| | `jvm_args` | `[]` | Extra JVM arguments, such as `["-Xmx4g"]`. |
-| | `test_scope` | `all` | `all`, `changed` (tests touched by the fix) or `relevant` (Defects4J). |
-| `[analysis]` | `heuristics` | all nine | Formulas written to `metrics.json`. |
-| `[bugsjar]` | `root`, `projects`, `url_template` | see example | Folder with one clone per project, and where `fetch` clones from. |
-| | `repos`, `java_home` | empty | Explicit clone paths (take priority over `root`) and a JDK for this benchmark. |
-| `[bears]` | `repo`, `java_home` | empty | Clone of the Bears benchmark. |
-| `[gitbugjava]` | `bin`, `projects`, `java_home` | `gitbug-java` | CLI and project filter. |
-| `[defects4j]` | `home`, `projects` | empty | Defects4J installation and projects to run. |
-| `[manifest]` | `files` | `[]` | JSONL files with bugs (see [Manifest format](#manifest-format)). |
-
-## Troubleshooting
-
-`triage` applies the same rules automatically to the logs of a campaign. The table below covers the most common situations.
-
-| Symptom | Likely cause | What to do |
-|---|---|---|
-| `selftest` ends with `build_failed` | Maven missing, no internet for the first plugin download, or a wrong JDK | Run `mvn -v`, check the network and `java_home`. |
-| `selftest` ends with `jaguar_crash` | Wrong `jaguar_lib`, or a Java version Jaguar cannot use | Check that the folder has `jacocoagent.jar`, use JDK 8 and read `work/_selftest/results`. |
-| `Blocked mirror for repositories` / `maven-default-http-blocker` | Maven 3.8.1+ blocks `http://` repositories | Use Maven 3.6.x or a `settings.xml` with a mirror. |
-| `Could not resolve dependencies` / `Could not find artifact` | Old or removed artifacts | Rarely recoverable. Try another repository in `settings.xml`, or accept the loss. |
-| Many `analysis_exceptions`, `Unsupported class file major version`, `Error while analyzing class` | Jaguar's JaCoCo cannot read the bytecode | Build and run with JDK 8 (`java_home` or `[java.homes]`). |
-| `invalid target release`, `release version N not supported` | JDK does not match the project | Configure `[java.homes]` or `java_home` for the benchmark. |
-| `COMPILATION ERROR`, `cannot find symbol` | Different JDK or missing dependency | Try the JDK the project targets. |
-| `OutOfMemoryError`, `Java heap space` | Not enough memory | Raise `[jaguar] jvm_args` and `[maven] opts`. |
-| `Address already in use` | Port 6300 is held by another Jaguar JVM | Run sequentially and kill orphan `java` processes. |
-| `no_failing_tests` | The failing test was not run (JUnit 5, abstract class, `test_scope`) or the bug does not reproduce | Use `inspect` and check `junit5_skipped` and `excluded_classes` in `meta.json`. |
-| `junit5_only` | Every test class uses JUnit 5 | Out of reach without changing Jaguar. |
-| `fault_not_covered` | The faulty line is not executed, or the ground truth is imprecise | Compare `truth.json` with the fix commit. |
-| `jaguar_timeout` | A very long test suite | Raise `[jaguar] timeout_s` or narrow `test_scope`. |
-| `build_failed` on Windows with paths in the message | Path longer than 260 characters | Use a short `workdir` such as `C:\w` and enable long paths in Windows. |
-| `git_failed` | Missing clone, unknown ref or a Git error | Run `fetch` and check `[bugsjar] root`. |
-| Run stopped by `--abort-after` | The same failure repeats | Run `triage`, fix the cause and rerun with `--retry`. |
-
-## Supported benchmarks
-
-| Benchmark | Adapter | How buggy/fixed versions are obtained | Notes |
-|---|---|---|---|
-| Defects4J | `d4j` | `defects4j` CLI (`b` and `f` checkouts) | Linux/WSL only |
-| Bugs.jar / bugs-dot-jar | `bugsjar` | one Git branch per bug; the fixing commit is the hash at the end of the branch name | layout checked against a real `git log` |
-| Bears | `bears` | one Git branch per bug (`<slug>-<buggy build>-<patched build>`); buggy = `HEAD~2`, fixed = `HEAD~1` | layout follows the Bears README; Java 8 |
-| GitBug-Java | `gitbugjava` | `gitbug-java checkout BID DIR [--fixed]` | see [Known limitations](#known-limitations) |
-| Any other dataset | `manifest` | JSONL file: repository, buggy ref, fixed ref or patch | see [Manifest format](#manifest-format) |
-
-The benchmark layer is implemented through adapters, allowing additional Java datasets to be integrated without changing the core evaluation pipeline.
-
-Potential future adapters include:
-
-- GrowingBugs
-- BugSwarm
-
-## Manifest format
-
-Any collection of bugs backed by Git repositories can be run without writing code. Create a JSONL file with one bug per line and list it under `[manifest] files` in `config.toml`.
-
-```json
-{"project": "my-project", "bug_id": "my-project-1", "repo": "~/clones/my-project", "buggy": "a1b2c3d", "fixed": "e4f5a6b"}
-{"project": "other", "bug_id": "other-7", "repo": "https://github.com/org/other.git", "buggy": "v1.2.0", "fix_patch": "patches/other-7.diff", "test_patch": "patches/other-7.test.diff", "build": "gradle", "java_home": "/usr/lib/jvm/java-11-openjdk"}
-{"project": "legacy", "bug_id": "legacy-3", "repo": "~/clones/legacy", "buggy": "abc", "fixed": "def", "build": "custom", "custom": {"cmds": ["ant compile compile-tests"], "classes": "build/classes", "tests": "build/test-classes", "classpath": ["lib/*"]}}
-```
-
-| Field | Required | Meaning |
-|---|---|---|
-| `project`, `bug_id` | yes | identifiers used in the results directory |
-| `repo` | yes | local path or Git URL (cloned once) |
-| `buggy` | yes | Git ref of the defective version |
-| `fixed` or `fix_patch` | one of them | fixing commit, or a patch applied to the buggy version |
-| `test_patch` | no | patch applied before the build, to add the failing test |
-| `build` | no | `auto` (default), `maven`, `gradle` or `custom` |
-| `module` | no | build module; otherwise derived from the fix diff |
-| `java_home` | no | JDK used for the build and for Jaguar |
-| `custom` | for `custom` | `cmds`, `classes`, `tests` and `classpath`; `{wt}` and `{module_dir}` are substituted |
-
-A complete example is provided in `manifests/exemplo.jsonl`.
-
-## Fault Localization
-
-JFLP currently integrates with Jaguar 2 as its spectrum collection engine.
-
-Jaguar produces execution information containing the values required to calculate SBFL suspiciousness formulas:
-
-```text
-cef
-cep
-cnf
-cnp
-```
-
-Once the spectrum has been collected, additional SBFL techniques can be calculated without executing the benchmark again.
-
-Currently supported formulas include:
-
-- Ochiai
-- Tarantula
-- Jaccard
-- DStar
-- Op2
-- Zoltar
-- Barinel
-- Kulczynski2
-
-The metrics also include a `jaguar` row that uses the suspiciousness value written by Jaguar itself. Comparing it with the recalculated `ochiai` row is a cheap consistency check: Jaguar appears to normalize its values, so the *ranking* should match even when the raw values do not.
-
-This separation between spectrum collection and metric calculation makes experiments considerably cheaper to reproduce and compare.
-
-## Evaluation
-
-For each fault, JFLP calculates suspiciousness rankings and evaluation metrics such as:
-
-- best rank;
-- average rank;
-- worst rank;
-- EXAM;
-- Top-1, Top-3, Top-5 and Top-10;
-- class-level ranking.
-
-Ties are handled explicitly.
-
-For example, if several program elements receive the same suspiciousness score, the evaluation can report:
-
-```text
-rank_best
-rank_avg
-rank_worst
-```
-
-This prevents an arbitrary ordering of tied elements from artificially improving the reported performance of a technique.
-
-Top-N evaluation uses the conservative interpretation of ties.
-
-A bug is only evaluated when at least one test fails and the faulty line is covered by the collected spectrum. Without a failing test, every suspiciousness score is degenerate and any ranking would be an artifact, so the bug is reported as `no_failing_tests` instead.
-
-## Ground Truth
-
-JFLP derives line-level ground truth by comparing the defective and corrected versions of a program. The left side of the diff is always the defective version.
-
-The comparison can come from three sources:
-
-- `git diff` between a buggy and a fixed commit;
-- a patch file that, applied to the buggy version, produces the fixed one;
-- a comparison of two checked-out source trees.
-
-For a conventional modification:
-
-```text
-buggy:
-
-x = calculate(a);
-return x;
-```
-
-```text
-fixed:
-
-x = calculate(a);
-x = normalize(x);
-return x;
-```
-
-the modified lines in the defective version can be identified from the diff.
-
-Pure additions require special treatment because the inserted code does not exist in the defective version.
-
-JFLP therefore uses neighboring lines as anchors in this situation.
-
-```mermaid
-flowchart TD
-    H["Diff hunk<br/>buggy to fixed"] --> Q{"Does the left side<br/>contain lines?"}
-    Q -->|yes| R["Removed or changed lines<br/>kind = removed"]
-    Q -->|"no, pure addition"| A2["Lines around the insertion<br/>kind = anchor"]
-    R --> S{"Is there any<br/>removed line?"}
-    A2 --> S
-    S -->|yes| U["Use only removed lines"]
-    S -->|no| V["Use the anchors"]
-    U --> W["rank = best rank among the<br/>covered faulty lines"]
-    V --> W
-```
-
-This behavior is intentionally explicit because ground-truth construction is a methodological decision that can influence SBFL evaluation results.
-
-Only production code is considered: changes under test directories are ignored.
-
-Future versions may support alternative ground-truth strategies, including method-level localization.
-
-## Experiment Artifacts
-
-Each analyzed bug produces a self-contained result directory:
-
-```text
-results/
-├── _env.json
-└── <benchmark>/
-    └── <project>/
-        └── <bug>/
-            ├── jaguar_Ochiai.xml
-            ├── truth.json
-            ├── metrics.json
-            ├── meta.json
-            ├── provenance/
-            ├── compare.md, compare.json, maven_test.log   (only after `compare`)
-            └── jaguar.log.gz
-```
-
-### `jaguar_Ochiai.xml`
-
-Raw spectrum information collected by Jaguar.
-
-### `truth.json`
-
-Ground-truth fault locations derived from the buggy/fixed diff.
-
-### `metrics.json`
-
-SBFL rankings and evaluation metrics.
-
-### `meta.json`
-
-Experiment metadata, including:
-
-- execution status;
-- execution time;
-- Java version and detected Java level;
-- failed tests;
-- excluded classes;
-- skipped abstract and JUnit 5 classes;
-- analysis exceptions and quality alerts;
-- `truth_crosscheck`: whether the derived ground truth agrees (`agree`, `partial`, `disagree`) with the benchmark's own developer patch, when available (`absent` otherwise);
-- benchmark information.
-
-### `provenance/`
-
-Metadata shipped by the benchmark itself (for Bugs.jar, the files in `.bugs-dot-jar/`; for Bears, `bears.json`), kept next to the result for later analysis.
-
-### `jaguar.log.gz`
-
-Compressed execution log useful for diagnosing failed experiments. Noise lines (such as `classFilesCache` messages) are filtered out.
-
-## Experiment Status
-
-Each bug receives an explicit execution status.
-
-Examples include:
-
-```text
-ok
-fault_not_covered
-no_failing_tests
-jaguar_crash
-jaguar_timeout
-build_failed
-no_tests
-junit5_only
-no_truth
-```
-
-This is important when running large benchmark studies.
-
-Instead of silently discarding failed experiments, JFLP preserves the reason why a bug did not reach the final evaluation stage.
-
-The resulting funnel can therefore show how many benchmark versions successfully passed through each stage of the experiment.
-
-```mermaid
-flowchart LR
-    S0["Bug listed"] --> S1{"Checkout and<br/>ground truth"}
-    S1 -->|fails| E1(["git_failed<br/>d4j_failed<br/>no_truth<br/>test_patch_failed"])
-    S1 --> S2{"Build"}
-    S2 -->|fails| E2(["build_failed<br/>unknown_build"])
-    S2 --> S3{"Tests"}
-    S3 -->|none usable| E3(["no_tests<br/>junit5_only"])
-    S3 --> S4{"Jaguar"}
-    S4 -->|fails| E4(["jaguar_crash<br/>jaguar_timeout"])
-    S4 --> S5{"Metrics"}
-    S5 -->|no valid data| E5(["empty_report<br/>no_failing_tests<br/>fault_not_covered"])
-    S5 --> OK(["ok"])
-```
-
-## Crash Recovery
-
-Jaguar writes its report only at the end of the run, so a single test that kills the JVM loses the whole spectrum. JFLP locates the culprit from the DEBUG log and retries without it.
-
-```mermaid
-flowchart TD
-    A["Write the test list<br/>UTF-8 without BOM"] --> B["Run JaguarRunner<br/>with timeout"]
-    B --> C{"XML produced?"}
-    C -->|yes| D{"initializationError<br/>among the tests?"}
-    D -->|"yes, exclude those classes"| A
-    D -->|no| OK(["status ok"])
-    C -->|no| E{"Timeout reached?"}
-    E -->|yes| T(["jaguar_timeout"])
-    E -->|no| F["Find the last test that finished<br/>in the DEBUG log"]
-    F --> G{"Same class as in the<br/>previous attempt?"}
-    G -->|no| H["Exclude the next class"]
-    G -->|yes| I["Exclude the class itself"]
-    H --> J{"attempts below<br/>max_retries?"}
-    I --> J
-    J -->|yes| A
-    J -->|no| X(["jaguar_crash"])
-```
-
-If the last test to finish already belonged to the last class in the list, that class itself is excluded. Excluded classes are recorded in `meta.json`.
-
-Abstract classes are filtered beforehand by reading the `.class` file, and classes without runnable tests (which JUnit reports as a failing `initializationError`) are excluded so they do not pollute the spectrum.
-
-## Reproducibility
-
-Large-scale fault-localization experiments are sensitive to the execution environment.
-
-Before running a complete benchmark, verify:
-
-- Java version;
-- Maven version;
-- Jaguar version;
-- benchmark version;
-- test selection;
-- available memory;
-- execution timeouts.
-
-`doctor` checks most of these, and `results/_env.json` records them for every run. `meta.json` records `analysis_exceptions` and the Java version of each bug so that problems can be correlated with the environment.
-
-Legacy Java projects may require older Maven and Java versions. Java 8 is recommended: Jaguar embeds an older JaCoCo, and class files built for newer Java versions may fail to be analyzed. Maven 3.8.1 and later block `http://` repositories, which breaks some legacy snapshots.
-
-Defects4J (Perl and shell based) requires Linux or WSL. The Git-based benchmarks (Bugs.jar, Bears and manifests) have no such requirement and can run natively on Windows.
-
-Jaguar's execution environment should be isolated when running multiple experiments in parallel: the JaCoCo agent listens on a fixed port (6300), so two runs on the same machine tend to collide. Use separate machines or containers.
-
-### Windows notes
-
-- Write Windows paths in `config.toml` with single quotes (`'C:\jdk8'`) or forward slashes.
-- Keep `workdir` on a short path (for example `C:\w`). Git is invoked with `core.longpaths=true`; if Maven still fails, enable long paths in Windows.
-- `mvn` and `gradlew` are resolved to `mvn.cmd` and `gradlew.bat` automatically.
-- Custom build commands are split without POSIX rules, so backslashes in paths are preserved.
-- Jaguar's classpath uses `;` and the `lib\*` wildcard, which the JVM expands itself.
-
-## Safe Repository Handling
-
-Git-based experiments (Bugs.jar, Bears, manifests) use Git worktrees instead of modifying the original repository checkout.
-
-This allows the pipeline to prepare different defective versions without relying on commands such as:
-
-```bash
-git reset --hard
-git clean -fdx
-```
-
-which can destroy uncommitted files in a working repository.
-
-## Known limitations
-
-- **JUnit 5.** Jaguar's runner is based on JUnit 4. Classes that only use Jupiter are skipped and counted as `junit5_skipped`; if every test class is Jupiter, the bug ends as `junit5_only`. This is likely to affect recent benchmarks such as GitBug-Java. Supporting the JUnit Platform would require changes to Jaguar itself.
-- **Modern Java.** Recent projects (Java 11, 17, 21) combined with Jaguar's older JaCoCo may produce many analysis exceptions. `java_home` and `[java.homes]` can be set per benchmark, per bug and by Java level.
-- **GitBug-Java.** Its builds are reproduced inside an offline Docker image. The adapter performs the checkouts and tries a local build; if the local environment cannot reproduce it, the bug ends as `build_failed`. Running Jaguar inside the image is not implemented, and the exact output format of `gitbug-java bids` has not been verified.
-- **Gradle.** The build strategy uses an init script to read class directories and the test classpath. It has not been tested against a real Gradle project, and it assumes the Gradle project path matches the directory layout.
-- **Ground truth is an approximation.** Large refactorings, renamed files and fixes spanning several modules may point to lines that are not the actual fault. Inspect a sample of each new benchmark manually.
-- **Other build systems.** Ant and unusual builds are supported only through `build = "custom"`.
-- **Sequential Bugs.jar runs.** Maven installs each buggy version as a SNAPSHOT into the shared repository, so bugs of the same project must not run in parallel.
-
-## Architecture
-
-```text
-sbfl/
-├── adapters/
-│   ├── base.py
-│   ├── gitpair.py
-│   ├── bugsjar.py
-│   ├── bears.py
-│   ├── manifest.py
-│   ├── defects4j.py
-│   └── gitbugjava.py
-│
-├── aggregate.py
-├── build.py
-├── campaign.py
-├── classfile.py
-├── cli.py
-├── config.py
-├── diffgt.py
-├── envcheck.py
-├── envinfo.py
-├── errors.py
-├── gitutil.py
-├── inspect.py
-├── jaguar.py
-├── jdk.py
-├── pipeline.py
-├── power.py
-├── proc.py
-├── report.py
-├── selftest.py
-├── selftest_data/
-├── triage.py
-└── truth.py
-```
-
-The core pipeline is intentionally separated from benchmark-specific logic.
-
-A benchmark adapter is responsible for:
-
-```text
-list_bugs()
-prepare()
-```
-
-The adapter prepares a bug and returns the execution context required by the fault-localization engine.
-
-The rest of the pipeline can then operate independently of the benchmark.
-
-```mermaid
-classDiagram
-    class Adapter {
-        <<abstract>>
-        +list_bugs(project, bug) list~Bug~
-        +prepare(bug, log_path) Ctx
-    }
-    class GitPairAdapter {
-        +prepare(bug, log_path) Ctx
-        +check_layout(repo, bug)
-        +provenance(repo, bug, wt) dict
-        +crosscheck(prov, faults) str
-    }
-    class Defects4J
-    class GitBugJava
-    class BugsJar
-    class Bears
-    class Manifest
-    class Ctx {
-        +Path project_dir
-        +str classes_dir
-        +str tests_dir
-        +list extra_cp
-        +list test_classes
-        +list truth
-        +str java_home
-        +dict provenance
-    }
-    Adapter <|-- GitPairAdapter
-    Adapter <|-- Defects4J
-    Adapter <|-- GitBugJava
-    GitPairAdapter <|-- BugsJar
-    GitPairAdapter <|-- Bears
-    GitPairAdapter <|-- Manifest
-    Adapter ..> Ctx : produces
-```
-
-Module responsibilities:
-
-| Module | Responsibility |
-|---|---|
-| `pipeline.py` | runs one bug end to end: prepare, Jaguar, metrics, `meta.json` |
-| `adapters/` | list bugs and prepare them (checkout, truth, build, test selection) |
-| `build.py` | build strategies: Maven, Gradle, custom commands |
-| `truth.py`, `diffgt.py` | ground truth from commits, patches or source trees |
-| `jaguar.py` | JaguarRunner execution and crash recovery |
-| `report.py` | spectrum parsing, SBFL formulas, rank, EXAM, Top-N |
-| `aggregate.py` | CSV reports and plots |
-| `campaign.py`, `inspect.py` | success levels, quality alerts, progress/ETA tables, per-bug inspection |
-| `triage.py` | groups failures by probable cause and suggests adjustments |
-| `jdk.py` | chooses the JDK from the Java level declared in `pom.xml` |
-| `envcheck.py`, `envinfo.py`, `selftest.py` | `doctor` checks, `_env.json` record, end-to-end self test |
-| `power.py` | keeps the machine awake during long runs |
-
-## Testing
-
-Run the test suite with:
-
-```bash
-python tests/test_core.py
-```
-
-The project contains unit tests for the core experimental logic, including:
-
-- diff parsing;
-- ground-truth generation;
-- SBFL ranking;
-- tie handling;
-- class-file inspection and JUnit flavor detection;
-- Git integration;
-- Bears branch layout and manifest parsing;
-- crash recovery;
-- result aggregation;
-- campaign tooling (levels, quality alerts, progress, retry, inspect, fetch, triage, clean, abort and time limits);
-- JDK selection, environment checks, the environment record and the selftest (with fake tools);
-- an end-to-end run, including the CLI, using fake `mvn` and `java` executables.
-
-The test suite validates the pipeline logic using controlled test cases and **fake** Maven and Java executables. Full integration testing with Jaguar, Maven, Defects4J, Bugs.jar, Bears and GitBug-Java depends on the external toolchain and benchmarks, and is what `selftest` and a small pilot are for.
-
-## Extending JFLP
-
-### Without code
-
-Describe the bugs in a JSONL manifest (see [Manifest format](#manifest-format)).
-
-### With code
-
-For any benchmark where a bug is a (buggy version, fixed version) pair stored in Git, inherit from `GitPairAdapter` in `sbfl/adapters/gitpair.py` and fill `Bug.extra` inside `list_bugs()`. This is what `bugsjar.py` and `bears.py` do, in about 30 lines each.
-
-For benchmarks with their own tooling, implement an adapter under:
-
-```text
-sbfl/adapters/
-```
-
-The adapter should provide:
-
-```python
-list_bugs(project, bug)
-prepare(bug, log_path)
-```
-
-The preparation stage should return the information required by the fault-localization engine:
-
-```text
-project directory
-compiled classes
-compiled tests
-classpath
-test classes
-ground-truth locations
-```
-
-Once registered in `sbfl/adapters/__init__.py`, the benchmark can reuse the existing:
-
-```text
-fault localization
-        ↓
-spectrum parsing
-        ↓
-SBFL metrics
-        ↓
-evaluation
-        ↓
-aggregation
-```
-
-pipeline.
-
-## Roadmap
-
-### Benchmark support
-
-- [x] Defects4J
-- [x] Bugs.jar
-- [x] Bears
-- [x] GitBug-Java (checkout and local build only)
-- [x] Generic Git repositories through manifests
-- [ ] GrowingBugs
-- [ ] BugSwarm
-
-### Build and execution
-
-- [x] Maven
-- [x] Gradle (untested)
-- [x] Custom build commands
-- [x] Automatic JDK selection by Java level
-- [ ] Running Jaguar inside Docker images (needed for GitBug-Java)
-- [ ] JUnit 5 support
-
-### Fault localization engines and formulas
-
-- [x] Jaguar integration
-- [x] Ochiai
-- [x] Tarantula
-- [x] Jaccard
-- [x] DStar
-- [x] Op2
-- [x] Zoltar
-- [x] Barinel
-- [x] Kulczynski2
-- [ ] Additional localization engines
-
-### Evaluation metrics
-
-- [x] Line-level ranking
-- [x] Class-level ranking
-- [x] EXAM
-- [x] Top-N
-- [x] Tie-aware ranking
-- [ ] Method-level ground truth
-- [ ] Method-level ranking
-- [ ] Confidence intervals
-- [ ] Statistical comparison between techniques
-
-### Experiment infrastructure
-
-- [x] Structured per-bug artifacts
-- [x] Execution metadata and environment record
-- [x] Failure classification and triage
-- [x] Result aggregation
-- [x] Campaign tooling (progress, retry, sampling, quality alerts)
-- [ ] Parallel experiment execution
-- [ ] Containerized execution
-- [ ] Reproducible experiment manifests
-
-## Research Questions
-
-JFLP can be used as infrastructure for experiments such as:
-
-- How do different SBFL formulas perform across Java bug benchmarks?
-- How sensitive are SBFL rankings to the selected test scope?
-- How does class-level localization compare with line-level localization?
-- How frequently is the actual fault covered by the collected spectrum?
-- How do ties affect Top-N and EXAM measurements?
-- How do different benchmarks influence the observed performance of SBFL techniques?
-- What proportion of benchmark bugs can be successfully analyzed by a given fault-localization engine?
-
-## Project Status
-
-This is an experimental research tool.
-
-The core pipeline and evaluation logic are covered by automated tests that use fake Maven and Java executables. The integration with real Jaguar, Maven and benchmark repositories has not been exercised yet: before any large-scale experiment, run `doctor`, `selftest` and a small pilot on known bugs.
+Segurança: o servidor escuta só em `127.0.0.1` e nenhum comando roda com shell (listas de argumentos). Downloads só de fontes fixas (Adoptium, Apache, Maven Central, GitHub saeg) e sempre com confirmação.

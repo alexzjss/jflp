@@ -4,13 +4,28 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from .proc import run, make_env, java_exe
+from .proc import run
 
 TEST_RE = re.compile(r"Test (\S+?)\(([\w.$]+)\) : (Passed|Failed)")
 OUT_RE = re.compile(r"Output xml created at: (.+\.xml)\s*$")
 NOISE = r"to classFilesCache|Time to (analyze|receive|read|collect)|#lines = \d+"
+
+
+@dataclass
+class JaguarOptions:
+    """Entradas explícitas do JaguarRunner (substitui o config legado)."""
+    lib: Path
+    java: str
+    env: dict = field(default_factory=dict)
+    heuristic: str = "Ochiai"
+    output_type: str = "F"
+    log_level: str = "DEBUG"
+    timeout_s: int = 3600
+    max_retries: int = 6
+    jvm_args: list = field(default_factory=list)
 
 
 def write_test_list(path: Path, classes: list[str]) -> None:
@@ -20,20 +35,20 @@ def write_test_list(path: Path, classes: list[str]) -> None:
         f.write("\n".join(classes) + "\n")
 
 
-def build_cmd(cfg, ctx, tf: Path, out_base: str, heuristic: str) -> list:
-    lib = cfg.path("paths", "jaguar_lib")
+def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str) -> list:
+    lib = Path(opts.lib)
     sep = os.pathsep
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
     return [
-        java_exe(cfg, ctx.java_home),
-        *cfg.get("jaguar", "jvm_args"),
+        opts.java,
+        *opts.jvm_args,
         f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",
         "-p", ".", "-c", ctx.classes_dir, "-t", ctx.tests_dir,
         "-tf", str(tf), "-h", heuristic,
-        "-ot", cfg.get("jaguar", "output_type"), "-o", out_base,
-        "-l", cfg.get("jaguar", "log_level"),
+        "-ot", opts.output_type, "-o", out_base,
+        "-l", opts.log_level,
     ]
 
 
@@ -49,8 +64,8 @@ def _find_xml(project_dir: Path, tail: list[str], out_base: str) -> Path | None:
     return p if p.exists() else None
 
 
-def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
-    heuristic = heuristic or cfg.get("jaguar", "heuristic")
+def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
+    heuristic = heuristic or opts.heuristic
     out_base = f"sbfl_{heuristic}"
     log = out_dir / "jaguar.log"
     tf = ctx.project_dir / ".sbfl_tests.txt"
@@ -59,7 +74,7 @@ def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
     last_seen = None
     meta = {"attempts": 0, "excluded_classes": excluded, "analysis_exceptions": 0}
     stale = ctx.project_dir / ".jaguar" / f"{out_base}.xml"
-    for attempt in range(cfg.get("jaguar", "max_retries") + 1):
+    for attempt in range(opts.max_retries + 1):
         meta["attempts"] = attempt + 1
         if stale.exists():
             stale.unlink()
@@ -70,8 +85,8 @@ def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
         write_test_list(tf, remaining)
         with open(log, "a", encoding="utf-8") as lf:
             lf.write(f"# sbfl attempt {attempt + 1}\n")
-        r = run(build_cmd(cfg, ctx, tf, out_base, heuristic), cwd=ctx.project_dir,
-                env=make_env(cfg, ctx.java_home), timeout=cfg.get("jaguar", "timeout_s"), log_path=log,
+        r = run(build_cmd(opts, ctx, tf, out_base, heuristic), cwd=ctx.project_dir,
+                env=opts.env or None, timeout=opts.timeout_s, log_path=log,
                 drop=NOISE,
                 count={"analysis_exceptions": r"Exception during analysis"},
                 collect={"test": r"(Test \S+?\([\w.$]+\) : (?:Passed|Failed))"})
@@ -86,7 +101,7 @@ def run_jaguar(cfg, ctx, out_dir: Path, heuristic: str | None = None) -> dict:
             # classes que não são testes de verdade (abstract/sem @Test) viram
             # `initializationError` "falho" e poluem o espectro: remove e repete.
             bad = sorted({c for n, c, s in events if n == "initializationError" and c in remaining})
-            if bad and attempt < cfg.get("jaguar", "max_retries"):
+            if bad and attempt < opts.max_retries:
                 excluded += bad
                 continue
             shutil.copy(xml, out_dir / f"jaguar_{heuristic}.xml")

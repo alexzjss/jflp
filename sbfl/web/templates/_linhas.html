@@ -1,0 +1,30 @@
+<div id="linhas">
+{% if erro %}<p class="aviso erro">{{ erro }}</p>
+{% elif sem is defined %}<p class="vazio">Esta execução não tem pontuações por linha.</p>
+{% else %}
+<table>
+  <thead><tr>
+  {% for c in cols %}
+    {% set nd = 'asc' if (c == ord and dir == 'desc') else 'desc' %}
+    <th><a href="#" hx-get="/run/{{ rel|q }}/linhas?ord={{ c }}&dir={{ nd }}" hx-include="#filtro" hx-target="#linhas" hx-swap="outerHTML">{{ {'cls':'classe','line':'linha','susp':'susp'}.get(c, c) }}{% if c == ord %} {{ '▼' if dir == 'desc' else '▲' }}{% endif %}</a></th>
+  {% endfor %}
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr {% if r.defeito %}class="defeito"{% endif %}>
+      <td><a href="/run/{{ rel|q }}/codigo?classe={{ r.s.cls|q }}#L{{ r.s.line }}">{{ r.s.cls }}</a></td><td><a href="/run/{{ rel|q }}/codigo?classe={{ r.s.cls|q }}#L{{ r.s.line }}">{{ r.s.line }}</a></td><td>{{ r.s.cef }}</td><td>{{ r.s.cep }}</td>
+      <td>{{ r.s.cnf if r.s.cnf is not none else '-' }}</td><td>{{ r.s.cnp if r.s.cnp is not none else '-' }}</td>
+      <td>{{ '%.4f'|format(r.s.susp) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="vazio">{{ total }} linhas{% if pages > 1 %} · página {{ pag }} de {{ pages }}{% endif %}</p>
+{% if pages > 1 %}
+<div class="botoes">
+  {% if pag > 1 %}<a class="botao" href="#" hx-get="/run/{{ rel|q }}/linhas?ord={{ ord }}&dir={{ dir }}&pag={{ pag - 1 }}" hx-include="#filtro" hx-target="#linhas" hx-swap="outerHTML">Anterior</a>{% endif %}
+  {% if pag < pages %}<a class="botao" href="#" hx-get="/run/{{ rel|q }}/linhas?ord={{ ord }}&dir={{ dir }}&pag={{ pag + 1 }}" hx-include="#filtro" hx-target="#linhas" hx-swap="outerHTML">Próxima</a>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+</div>

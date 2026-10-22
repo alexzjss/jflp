@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Execução ao vivo - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Execução ao vivo</h1>
+<p>{{ job.bug_key }} ({{ job.kind }}), job {{ job.id }}</p>
+<p id="situacao" class="vazio">Conectando…</p>
+<pre class="log" id="log" style="max-height:70vh"></pre>
+<script>
+(function () {
+  var log = document.getElementById("log"), sit = document.getElementById("situacao");
+  var es = new EventSource("/job/{{ job.id }}/stream");
+  es.onmessage = function (e) {
+    sit.textContent = "Em execução…";
+    var seguir = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.appendChild(document.createTextNode(e.data + "\n"));
+    if (seguir) log.scrollTop = log.scrollHeight;
+  };
+  es.addEventListener("espera", function () { sit.textContent = "Na fila, aguardando o worker…"; });
+  es.addEventListener("fim", function (e) {
+    es.close();
+    if (e.data) { sit.textContent = "Concluído. Abrindo a execução…"; location.href = "/run/" + e.data; }
+    else { sit.textContent = "Concluído sem pasta de execução."; }
+  });
+  es.onerror = function () { if (es.readyState === 2) sit.textContent = "Conexão encerrada."; };
+})();
+</script>
+{% endblock %}

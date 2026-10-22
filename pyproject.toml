@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jflp"
+version = "0.2.0"
+description = "JFLP Studio: localizacao de defeitos em Java com Maven e Jaguar 2, com interface local"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+full = ["zstandard", "pywebview"]
+dev = ["httpx"]
+
+[project.scripts]
+jflp = "sbfl.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sbfl*"]
+
+[tool.setuptools.package-data]
+sbfl = [
+    "web/templates/*",
+    "web/static/*",
+    "selftest_data/**",
+]
