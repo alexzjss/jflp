@@ -224,7 +224,7 @@ class ProgressoWeb(WebFixture, unittest.TestCase):
         self.sql("UPDATE jobs SET state='done' WHERE id=1")
         self.assertEqual(self.c.get(f"/lote/{bid}/painel", params={"sig": sig}).status_code, 200)
         self.assertEqual(self.c.get("/lote/99/painel").status_code, 404)
-        self.assertIn("lote-painel", self.c.get(f"/lote/{bid}").text)
+        self.assertIn("lote-vista", self.c.get(f"/lote/{bid}").text)
 
 
 if __name__ == "__main__":

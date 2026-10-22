@@ -264,7 +264,8 @@ class Batches(RunsBase):
         with contextlib.closing(jq._connect(self.home)) as con, con:
             con.execute("UPDATE jobs SET state='done', run_rel=?, seconds=5 WHERE id=?", (rel, con_job["id"]))
         page = c.get(f"/lote/{bid}")
-        self.assertIn('hx-trigger="every 3s"', page.text)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('id="lote-vista"', page.text)
         frag = c.get(f"/lote/{bid}/progresso")
         self.assertNotIn("<html", frag.text)
         self.assertIn("Pausar", frag.text)

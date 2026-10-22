@@ -3,29 +3,31 @@
 {% block content %}
 <h1>Resultados</h1>
 
-{% include "_fila_estado.html" %}
-
-<section>
-  <h2>Lotes recentes</h2>
-  {% include "_resultados_lotes.html" %}
-</section>
-
-<section>
-  <h2>Execuções recentes</h2>
-  <form class="filtros" hx-get="/resultados/execucoes" hx-target="#execucoes-lista" hx-swap="outerHTML"
-        hx-trigger="input delay:300ms, change" hx-push-url="false" onsubmit="return false">
-    <input type="search" name="q" value="{{ q }}" placeholder="Filtrar por projeto ou bug" aria-label="Texto">
-    <select name="ferramenta" aria-label="Ferramenta">
-      <option value="">Todas as ferramentas</option>
-      {% for k, nome in kind_label.items() %}<option value="{{ k }}" {{ 'selected' if ferramenta == k }}>{{ nome }}</option>{% endfor %}
-    </select>
-    <select name="tom" aria-label="Status">
-      <option value="">Qualquer status</option>
-      <option value="ok" {{ 'selected' if tom_filtro == 'ok' }}>Concluídas</option>
-      <option value="alerta" {{ 'selected' if tom_filtro == 'alerta' }}>Com aviso</option>
-      <option value="erro" {{ 'selected' if tom_filtro == 'erro' }}>Com erro</option>
-    </select>
-  </form>
-  {% include "_resultados_execucoes.html" %}
+<section aria-label="Lotes">
+{% if lotes %}
+<table class="compacta lv-lotes">
+  <thead><tr><th scope="col">Lote</th><th scope="col">Data</th><th scope="col">Ferramentas</th><th scope="col">Bugs</th>
+    <th scope="col">Vereditos</th><th scope="col">Estado</th><th scope="col"><span class="rd-oculto">Ações</span></th></tr></thead>
+  <tbody>{% for l in lotes %}
+    <tr>
+      <td><a href="/lote/{{ l.id }}">#{{ l.id }}{% if l.name %} {{ l.name }}{% endif %}</a></td>
+      <td class="num">{{ l.data }}</td>
+      <td>{{ l.ferramentas }}</td>
+      <td class="num">{{ l.bugs }}</td>
+      <td class="chips">
+        {% if l.contagem %}
+          {% for code, n in l.contagem.items() if n %}<span class="lv-cont" title="{{ ver[code].label }}"><span class="vd vd-{{ code }}" aria-hidden="true">{{ ver[code].simbolo }}</span> {{ n }}<span class="rd-oculto"> {{ ver[code].label }}</span></span>{% endfor %}
+        {% else %}<span class="vazio">-</span>{% endif %}
+      </td>
+      <td>{{ l.estado }}{% if l.andamento %} <span class="vazio">({{ l.andamento }})</span>{% endif %}</td>
+      <td class="lv-lote-acoes"><a href="/lote/{{ l.id }}">Abrir</a>
+        {% if l.encerrado %}<button type="button" hx-post="/lote/{{ l.id }}/excluir" hx-swap="none"
+          hx-confirm="Excluir o lote #{{ l.id }} do histórico? As execuções gravadas ficam.">Excluir</button>{% endif %}</td>
+    </tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}
+<p class="vazio">Nenhum lote ainda. <a class="botao primario" href="/rodar">Rodar algo</a></p>
+{% endif %}
 </section>
 {% endblock %}

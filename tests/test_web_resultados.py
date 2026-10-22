@@ -22,53 +22,44 @@ class ResultadosWeb(WebFixture, unittest.TestCase):
         with contextlib.closing(sqlite3.connect(str(self.home.db_path))) as con, con:
             con.execute(q)
 
-    def fake_run(self, rel, status="ok", kind="jaguar2", seconds=75.0):
-        store._index(self.home, rel, {"kind": kind, "status": status, "started": "2026-01-02T10:00:00",
-                                      "seconds": seconds, "tests": {"total": 3}})
-
-    def test_empty_home_renders_with_calls_to_action(self):
+    def test_empty_home_renders_with_call_to_action(self):
         r = self.c.get("/resultados")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("Em andamento", r.text)
-        self.assertIn("Lotes recentes", r.text)
-        self.assertIn("Execuções recentes", r.text)
-        self.assertIn("Nenhuma execução ainda", r.text)
         self.assertIn("Nenhum lote ainda", r.text)
         self.assertIn("Rodar algo", r.text)
+        for removido in ("Execuções recentes", "Em andamento", "/resultados/execucoes"):
+            self.assertNotIn(removido, r.text)
+        self.assertEqual(self.c.get("/resultados/execucoes").status_code, 404)
 
-    def test_runs_batches_and_filters(self):
-        self.fake_run("b/proj/1/20260102-100000-jaguar2", "ok")
-        self.fake_run("b/proj/2/20260102-100001-jaguar2", "compilacao_falhou")
-        self.fake_run("b/outro/3/20260102-100002-jaguar1", "sem_teste_falhando", kind="jaguar1")
-        bid = jq.create_batch(self.home, "meu lote", [Bug("b", "proj", "1", {"dir": "/x"})], ["jaguar2"], {})
-        self.sql("UPDATE jobs SET state='done', run_rel='b/proj/1/20260102-100000-jaguar2' WHERE batch_id=%d" % bid)
-        r = self.c.get("/resultados")
-        self.assertIn("/run/b/proj/1/20260102-100000-jaguar2", r.text)
-        self.assertIn("erro de compilação", r.text)
-        self.assertIn("meu lote", r.text)
-        self.assertIn("1/1", r.text)
-        self.assertIn('href="/lote/%d"' % bid, r.text)
-        self.assertIn("1 ok", r.text)
-        f = self.c.get("/resultados/execucoes", params={"tom": "erro"})
-        self.assertIn("proj/2", f.text)
-        self.assertNotIn("proj/1", f.text)
-        f = self.c.get("/resultados/execucoes", params={"ferramenta": "jaguar1"})
-        self.assertIn("outro/3", f.text)
-        self.assertNotIn("proj/2", f.text)
-        f = self.c.get("/resultados/execucoes", params={"q": "OUTRO"})
-        self.assertIn("outro/3", f.text)
-        f = self.c.get("/resultados/execucoes", params={"q": "inexistente"})
-        self.assertIn("combina com o filtro", f.text)
+    def test_batches_listed_newest_first_with_state_and_delete(self):
+        a = jq.create_batch(self.home, "meu lote", [Bug("b", "proj", "1", {"dir": "/x"})], ["jaguar2"], {})
+        b = jq.create_batch(self.home, "outro", [Bug("b", "proj", str(i), {"dir": "/x"}) for i in (1, 2)],
+                            ["jaguar2", "maven"], {})
+        self.sql("UPDATE jobs SET state='done' WHERE batch_id=%d" % a)
+        self.sql("UPDATE batches SET state='done' WHERE id=%d" % a)
+        t = self.c.get("/resultados").text
+        self.assertIn('href="/lote/%d"' % a, t)
+        self.assertLess(t.index("#%d outro" % b), t.index("#%d meu lote" % a))
+        self.assertIn("Jaguar 2, Maven", t)
+        self.assertIn("terminado", t)
+        self.assertIn("rodando", t)
+        self.assertIn('hx-post="/lote/%d/excluir"' % a, t)         # encerrado: pode excluir
+        self.assertNotIn('hx-post="/lote/%d/excluir"' % b, t)      # em andamento: não
+        self.assertIn('<td class="num">2</td>', t)         # lote b: 2 bugs
 
-    def test_running_and_pending_cards_and_badge(self):
+    def test_only_recent_batches_get_verdict_counts(self):
+        ids = [jq.create_batch(self.home, f"l{i}", [Bug("b", "proj", "1", {"dir": "/x"})], ["maven"], {})
+               for i in range(22)]
+        t = self.c.get("/resultados").text
+        self.assertIn("sem dado</span>", t)          # os 20 mais recentes têm contagem
+        self.assertEqual(t.count('class="vd vd-sem_dado"'), 20)
+        self.assertEqual(len(ids), 22)
+
+    def test_badge_counts_running_and_pending(self):
         self.assertEqual(self.c.get("/fila/contagem").text, "")
         bid = jq.create_batch(self.home, "l", [Bug("local", "p", str(i), {"dir": "/x"}) for i in range(3)],
                               ["jaguar2"], {})
         self.sql("UPDATE jobs SET state='running' WHERE idx=0 AND batch_id=%d" % bid)
-        r = self.c.get("/resultados")
-        self.assertIn("/mini", r.text)
-        self.assertIn("/cancelar", r.text)
-        self.assertNotIn("Rodar algo", r.text.split("Lotes recentes")[0])
         self.assertIn(">3<", self.c.get("/fila/contagem").text)
 
     def test_nav_items_and_active_states(self):

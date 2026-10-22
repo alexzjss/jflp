@@ -199,6 +199,28 @@ def _code_classes(scores) -> dict[str, dict]:
             for c, ls in by_cls.items()}
 
 
+def _fonte_do_git(request: Request, rel: str, run: dict, cls: str) -> tuple[str, list[str], bool] | None:
+    """Fonte de um defeito do Bugs.jar lido do ramo dele no próprio repositório (`git show`), para execuções que
+    não arquivaram o checkout. O repositório vem do bug cadastrado na sessão ou do job que gravou a execução."""
+    chave = run.get("bug") or ""
+    if not chave.startswith("bugsjar/"):
+        return None
+    home = request.app.state.home
+    bug = request.app.state.local_bugs.get(chave)
+    extra = bug.extra if bug is not None else None
+    if not extra or not extra.get("repo"):
+        job = jobs_queue.job_of_run(home, rel)
+        extra = job["extra"] if job else None
+    if not extra or not extra.get("repo"):
+        return None
+    ramo = extra.get("buggy") or chave.split("/", 2)[2]
+    got = bugview.fonte_bugsjar(extra["repo"], ramo, cls)
+    if got is None:
+        return None
+    caminho, linhas = got
+    return f"{ramo}:{caminho}", linhas[:source.MAX_LINES], len(linhas) > source.MAX_LINES
+
+
 @router.get("/run/{rel:path}/codigo", response_class=HTMLResponse)
 def run_code(request: Request, rel: str, classe: str = ""):
     got = _load(request, rel)
@@ -213,22 +235,25 @@ def run_code(request: Request, rel: str, classe: str = ""):
             scores = compare.run_scores(request.app.state.home, rel)
         except (OSError, ValueError) as e:
             ctx["aviso"] = f"Não foi possível ler as pontuações: {e}"
-    if not scores:
+    if not scores and not classe:
         ctx["aviso"] = ctx["aviso"] or "Esta execução não tem pontuações por linha para mostrar no código."
         return _render(request, "codigo.html", ctx)
-    classes = _code_classes(scores)
+    classes: dict[str, dict] = _code_classes(scores) if scores else {}
     order = sorted(classes, key=lambda c: (-classes[c]["max"], c))
     ctx["classes"] = [{"cls": c, "max": classes[c]["max"], "n": classes[c]["n"]} for c in order]
     atual = outer(classe) if classe else order[0]
     ctx["atual"] = atual
     lines = classes.get(atual, {"lines": {}})["lines"]
     ctx["tabela"] = sorted(lines.values(), key=lambda s: (-s.susp, s.line))
-    gmax = max(c["max"] for c in classes.values())
+    gmax = max((c["max"] for c in classes.values()), default=0)
     try:
         membro, src, trunc = source.load_source(d, atual, run.get("module"))
     except source.SourceError as e:
-        ctx["aviso"] = str(e)
-        return _render(request, "codigo.html", ctx)
+        achou = _fonte_do_git(request, rel, run, atual) if source.checkout_file(d) is None else None
+        if achou is None:
+            ctx["aviso"] = str(e)
+            return _render(request, "codigo.html", ctx)
+        membro, src, trunc = achou
     top = ctx["tabela"][0].line if ctx["tabela"] else None
     ctx["rows"] = [{"n": i, "text": t, "s": lines.get(i),
                     "a": round(lines[i].susp / gmax, 3) if i in lines and gmax > 0 else 0}
@@ -745,14 +770,6 @@ def lote_acao(request: Request, bid: int, acao: str):
         return _msg(request, "lotes", "Ação desconhecida", acao, 400)
     fn(bid)
     return RedirectResponse(f"/lote/{bid}", status_code=303)
-
-
-@router.get("/lote/{bid}", response_class=HTMLResponse)
-def lote_page(request: Request, bid: int):
-    ctx = _batch_ctx(request, bid)
-    if ctx is None:
-        return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
-    return _render(request, "lote.html", {"page": "lotes", **ctx})
 
 
 # ----------------------------------------------------------------- receitas

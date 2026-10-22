@@ -1,0 +1,139 @@
+{# Detalhe de um bug do lote (spec §3.2): Maven | Jaguar 1 | Jaguar 2 em cartões, depois concordância e gabarito #}
+{% macro codigo(rel, cls, line) -%}
+{%- if rel and cls %}<a class="lv-cod" href="/run/{{ rel|q }}/codigo?classe={{ cls|q }}{% if line %}#L{{ line }}{% endif %}">ver no código</a>{% endif -%}
+{%- endmacro %}
+{% macro exec_falhou(b) -%}
+{%- if b.state == 'done' and b.status and b.tom != 'ok' %}
+  <p><span class="{{ 'erro' if b.tom == 'erro' else 'lv-alerta' }}"><strong>{{ b.label }}</strong></span></p>
+  {% if b.causa %}<p>{{ b.causa }}</p>{% endif %}
+{%- elif b.state == 'done' and not b.status %}
+  <p class="erro">{{ b.error or 'A execução terminou sem resultado.' }}</p>
+{%- elif b.state == 'cancelled' %}<p class="vazio">Cancelado.</p>
+{%- elif b.state in ('pending', 'running') %}<p class="vazio">{{ b.texto }}</p>
+{%- endif %}
+{%- endmacro %}
+{% macro detalhes(b) -%}
+{%- if b.rel %}<p class="lv-links"><a href="/run/{{ b.rel|q }}">Detalhes da execução</a></p>{% endif -%}
+{%- endmacro %}
+{% set nome = {'jaguar1': 'Jaguar 1', 'jaguar2': 'Jaguar 2'} %}
+<div class="lv-detalhe">
+  <div class="lv-cartoes">
+    {% if d.maven %}{% set m = d.maven %}
+    <article class="lv-card" aria-label="Maven">
+      <h3>Maven</h3>
+      {{ exec_falhou(m) }}
+      {% if m.status and (m.tom == 'ok' or m.status == 'sem_teste_falhando') %}
+        {% if m.falhas_lista %}
+        <p><strong>{{ m.n_falhas }} {{ 'testes falharam' if m.n_falhas != 1 else 'teste falhou' }}</strong></p>
+        <ul class="lv-falhas">
+          {% for f in m.falhas_lista %}
+          <li><code>{{ f.short }}{% if f.metodo %}#{{ f.metodo }}{% endif %}</code>
+            {% if f.tipo %}<span class="lv-tipo">{{ f.tipo }}</span>{% endif %}
+            {% if f.message %}<span class="lv-msg">{{ f.message|truncate(220) }}</span>{% endif %}
+            {% if f.frame_text %}<span class="lv-frame vazio">linha do erro: <code>{{ f.frame_text }}</code>
+              {{ codigo(codigo_rel, f.frame.cls, f.frame.line) }}</span>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}<p>Nenhum teste falhou.</p>{% endif %}
+        {% if m.esperado %}
+        <p class="lv-esperado">Falhou o esperado? <strong>{{ 'sim' if m.esperado.estado == 'iguais' else ('não' if m.esperado.estado == 'diferentes' else 'sem catálogo') }}</strong>
+          <span class="vazio">({{ m.esperado.texto }})</span></p>
+        {% endif %}
+      {% endif %}
+      {{ detalhes(m) }}
+    </article>
+    {% endif %}
+    {% for kind, j in d.jaguar.items() %}
+    <article class="lv-card" aria-label="{{ nome[kind] }}">
+      <h3>{{ nome[kind] }}
+        {% if j.status and j.tom == 'ok' %}<span class="vd vd-{{ j.veredito.code }}" title="{{ j.veredito.label }}">{{ j.veredito.simbolo }}</span>{% endif %}</h3>
+      {{ exec_falhou(j) }}
+      {% if j.status and j.tom == 'ok' %}
+        {% if j.posicao and j.posicao.melhor %}
+        <p>Defeito na <strong>{{ j.posicao.melhor.texto }}</strong> <span class="vazio">({{ j.posicao.melhor.faixa }})</span></p>
+        {% elif j.posicao %}<p class="vazio">O defeito não aparece no ranking.</p>
+        {% else %}<p class="vazio">Sem gabarito para comparar.</p>{% endif %}
+        {% if j.top %}
+        <table class="lv-top compacta" data-top>
+          <thead><tr><th scope="col"><span class="rd-oculto">Defeito</span></th><th scope="col">#</th><th scope="col">Classe</th><th scope="col">Linha</th><th scope="col">Susp.</th><th scope="col"><span class="rd-oculto">Código</span></th></tr></thead>
+          <tbody>
+          {% for r in j.top + j.mais %}
+            <tr class="{{ ['defeito' if r.defeito, 'comum' if r.comum, 'lv-extra' if loop.index > d.top_n]|select|join(' ') }}"{% if loop.index > d.top_n %} hidden{% endif %}>
+              <td class="lv-estrela">{% if r.defeito %}<span title="linha do defeito (patch)" aria-label="linha do defeito">★</span>{% endif %}</td>
+              <td class="num">{{ r.rank }}</td>
+              <td title="{{ r.cls }}">{{ r.short }}</td>
+              <td class="num">{{ r.line }}</td>
+              <td class="num">{{ '%.4f'|format(r.susp) }}</td>
+              <td>{{ codigo(j.rel, r.cls, r.line) }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% if j.tem_mais %}<button type="button" class="lv-mais" data-mais aria-expanded="false" data-rotulo="ver mais ({{ j.mais|length }})">ver mais ({{ j.mais|length }})</button>{% endif %}
+        <p class="lv-legenda vazio"><span aria-hidden="true">★</span> linha do defeito{% if d.concordancia %} · destaque azul: também está no top {{ d.top_n }} do outro Jaguar{% endif %}</p>
+        {% else %}<p class="vazio">Sem linhas suspeitas nesta execução.</p>{% endif %}
+      {% endif %}
+      {{ detalhes(j) }}
+    </article>
+    {% endfor %}
+  </div>
+
+  {% set c = d.concordancia %}
+  {% if c %}
+  <section class="lv-card lv-conc" aria-label="Concordância entre Jaguar 1 e Jaguar 2">
+    <h3>Concordância Jaguar 1 × Jaguar 2</h3>
+    <ul class="lv-lista">
+      <li><strong>{{ c.texto_comuns }}</strong> linhas em comum no top {{ c.top_n }}</li>
+      <li>Mesma classe no topo: <strong>{{ 'sim' if c.mesma_classe_topo else 'não' }}</strong>
+        <span class="vazio">({{ (c.classe_topo.jaguar1 or '-').rsplit('.', 1)[-1] }}{% if not c.mesma_classe_topo %} × {{ (c.classe_topo.jaguar2 or '-').rsplit('.', 1)[-1] }}{% endif %})</span></li>
+      <li>Posição do defeito: Jaguar 1 <strong>{{ c.pos.jaguar1 or 'fora do ranking' }}</strong> × Jaguar 2 <strong>{{ c.pos.jaguar2 or 'fora do ranking' }}</strong>
+        <span class="vazio">· {% if c.achou_antes == 'jaguar1' %}Jaguar 1 achou antes{% elif c.achou_antes == 'jaguar2' %}Jaguar 2 achou antes{% elif c.achou_antes == 'empate' %}empate{% else %}nenhum achou o defeito{% endif %}</span></li>
+    </ul>
+    {% if c.comuns %}
+    <table class="compacta lv-comuns">
+      <thead><tr><th scope="col">Classe</th><th scope="col">Linha</th><th scope="col">Susp. J1</th><th scope="col">Susp. J2</th><th scope="col">Diferença</th></tr></thead>
+      <tbody>{% for x in c.comuns %}
+        <tr><td title="{{ x.cls }}">{{ x.short }}</td><td class="num">{{ x.line }}</td><td class="num">{{ '%.4f'|format(x.susp1) }}</td>
+          <td class="num">{{ '%.4f'|format(x.susp2) }}</td><td class="num">{{ '%.4f'|format(x.dif) }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {% set g = d.catalogo %}
+  {% if g %}
+  <section class="lv-card lv-cat" aria-label="Gabarito do catálogo">
+    <h3>Gabarito (catálogo do Bugs.jar)
+      <span class="vd vd-{{ d.veredito.code }}" title="{{ d.veredito.label }}">{{ d.veredito.simbolo }}</span></h3>
+    <p><strong>{{ g.id }}</strong>{% if g.resumo %} · {{ g.resumo }}{% endif %}
+      · <a href="{{ g.jira }}" target="_blank" rel="noopener">abrir no JIRA</a></p>
+    {% if g.metodos %}
+    <p>Método{{ 's' if g.metodos|length != 1 }} do defeito:
+      {% for m in g.metodos %}<code>{{ m.short }}.{{ m.metodo }}</code> <span class="vazio">(linha{{ 's' if m.linhas|length != 1 }} {{ m.linhas|join(', ') }})</span>{{ ', ' if not loop.last }}{% endfor %}</p>
+    {% elif g.linhas %}<p class="vazio">Método do defeito não identificado.</p>{% endif %}
+    {% if g.linhas %}
+    <table class="compacta lv-defeito">
+      <thead><tr><th scope="col">Classe</th><th scope="col">Linha</th><th scope="col">Método</th>
+        {% for kind in d.jaguar %}<th scope="col">{{ nome[kind] }}</th>{% endfor %}<th scope="col"><span class="rd-oculto">Código</span></th></tr></thead>
+      <tbody>{% for l in g.linhas %}
+        <tr><td title="{{ l.cls }}">{{ l.short }}</td><td class="num">{{ l.line }}</td><td>{{ l.metodo or '-' }}</td>
+          {% for kind in d.jaguar %}{% set p = l.pos.get(kind) %}<td class="num"{% if p %} title="{{ p.faixa }}"{% endif %}>{{ p.texto if p else 'fora do ranking' }}</td>{% endfor %}
+          <td>{{ codigo(codigo_rel, l.cls, l.line) }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+    {% endif %}
+    {% if g.patch %}
+    <details class="lv-patch">
+      <summary>Trecho do patch do desenvolvedor</summary>
+      <pre class="diff">{% for p in g.patch %}<span class="{{ {'rem': 'menos', 'add': 'mais', 'hunk': 'lv-hunk', 'arquivo': 'lv-arq'}.get(p.tipo, '') }}">{{ p.texto }}</span>{% endfor %}</pre>
+    </details>
+    {% endif %}
+    {% if g.testes %}
+    <p class="lv-testes">Testes que falham no catálogo:
+      {% for t in g.testes %}<code title="{{ t }}">{{ t.rsplit('.', 1)[-1] }}</code>{{ ', ' if not loop.last }}{% endfor %}</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</div>

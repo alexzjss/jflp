@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Lote {{ bid }} - JFLP Studio{% endblock %}
+{% block content %}
+<div class="lv-pagina">
+<p class="vazio lv-voltar"><a href="/resultados">&larr; Resultados</a></p>
+<h1>Lote #{{ bid }}{% if lote.name %} <span class="vazio">{{ lote.name }}</span>{% endif %}</h1>
+{% include "_lote_vista.html" %}
+</div>
+<script src="/static/lote.js"></script>
+{% endblock %}

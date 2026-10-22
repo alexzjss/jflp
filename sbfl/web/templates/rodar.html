@@ -5,7 +5,22 @@
 <h1>Rodar bugs</h1>
 <p class="vazio rd-intro">Escolha a pasta do repositório (Bugs.jar ou um projeto Maven), marque o que rodar e pronto.</p>
 {% if erro %}<p class="aviso erro" role="alert">{{ erro }}</p>{% endif %}
+<div id="rd-resumo-box">{% if lote and v is defined %}{% include "_rodar_resumo.html" %}{% endif %}</div>
+<div id="rd-form"{% if lote and v is defined %} hidden{% endif %}>
 {% include "_rodar_pasta.html" %}
-<div id="fluxo" aria-live="polite"{% if pasta %} hx-get="/rodar/pasta?projeto={{ pasta|q }}" hx-trigger="load"{% endif %}></div>
+<div id="fluxo" aria-live="polite"{% if pasta %} hx-get="/rodar/pasta?projeto={{ pasta|q }}" hx-trigger="{{ 'carregar' if lote and v is defined else 'load' }}"{% endif %}></div>
 </div>
+<div id="rd-lote">{% if lote and v is defined %}{% include "_lote_vista.html" %}{% endif %}</div>
+</div>
+<script src="/static/lote.js"></script>
+<script>
+document.addEventListener("click", function (e) {
+  var b = e.target.closest ? e.target.closest(".rd-alterar") : null;
+  if (!b) return;
+  var f = document.getElementById("rd-form"), fl = document.getElementById("fluxo");
+  f.hidden = !f.hidden;
+  b.setAttribute("aria-expanded", String(!f.hidden));
+  if (!f.hidden && !fl.children.length) htmx.trigger(fl, "carregar");
+});
+</script>
 {% endblock %}

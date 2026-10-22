@@ -53,6 +53,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.state.home, app.state.settings, app.state.worker = home, settings, worker
     app.state.token, app.state.port = token, port
     app.state.local_bugs = {}     # bugs locais cadastrados nesta sessão: {key: Bug}
+    app.state.resumos = {}        # resumos do JIRA lidos do git: {(repositório, ramo): texto}
+    app.state.contagens = {}      # vereditos de lotes encerrados: {(id, assinatura): contagem}
     app.state.tasks = {}          # downloads e prefetch em andamento: {id: {...}}
     app.state.templates = Jinja2Templates(directory=str(_HERE / "templates"))
     app.state.templates.env.filters["q"] = lambda v: quote(str(v), safe="/")   # chaves em URLs
@@ -106,6 +108,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.include_router(bugs_router)
     from .routes_fila import router as fila_router     # antes de runs: /lote/{bid}/excluir vence /lote/{bid}/{acao}
     app.include_router(fila_router)
+    from .routes_lote import router as lote_router     # antes de runs: /lote/{bid}/parar vence /lote/{bid}/{acao}
+    app.include_router(lote_router)
     from .routes_runs import router as runs_router
     app.include_router(runs_router)
     from .routes_quick import router as quick_router

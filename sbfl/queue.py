@@ -109,6 +109,28 @@ def list_batches(home: Home, limit: int = 100) -> list[dict]:
             "FROM batches b ORDER BY b.id DESC LIMIT ?", (limit,))]
 
 
+def get_batch(home: Home, batch_id: int) -> dict | None:
+    """Um lote pelo id, com a contagem de jobs (como em `list_batches`); None se não existe."""
+    with contextlib.closing(_connect(home)) as con:
+        row = con.execute(
+            "SELECT b.id, b.name, b.created, b.kinds, b.state, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id) AS total, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id AND j.state='done') AS done "
+            "FROM batches b WHERE b.id=?", (batch_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def job_of_run(home: Home, run_rel: str) -> dict | None:
+    """O job que gravou a execução `run_rel` (com `extra` decodificado); None se nenhum."""
+    with contextlib.closing(_connect(home)) as con:
+        row = con.execute("SELECT * FROM jobs WHERE run_rel=? ORDER BY id DESC LIMIT 1", (run_rel,)).fetchone()
+    if row is None:
+        return None
+    job = dict(row)
+    job["extra"] = json.loads(job.get("bug_extra") or "{}")
+    return job
+
+
 def pending_jobs(home: Home) -> list[dict]:
     """Jobs pendentes de lotes ativos ou pausados, na ordem de execução (com nome e estado do lote)."""
     with contextlib.closing(_connect(home)) as con:

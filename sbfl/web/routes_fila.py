@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import time
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
+from .. import bugview
 from .. import queue as jobs_queue
-from .. import status as S
-from .. import store
 from ..progress import linha
 from .routes_bugs import KIND_LABEL
 from .routes_runs import _batch_ctx, _msg, _render
@@ -163,51 +163,43 @@ def fila_contagem(request: Request):
     return HTMLResponse(f'<span class="selo" title="{n} na fila">{n}</span>' if n else "")
 
 
-def _lotes_resumo(home, runs: list[dict], limite: int = 8) -> list[dict]:
-    """Lotes recentes com a contagem dos jobs concluídos por tom do status da execução (ok/alerta/erro)."""
-    tom_de = {r["path"]: S.tom(r.get("status") or "") for r in runs}
+LOTES_COM_CONTAGEM = 20      # só os lotes mais recentes têm a contagem de vereditos (ler as execuções custa)
+ESTADO_LOTE = {"active": "rodando", "paused": "pausado", "cancelled": "cancelado", "done": "terminado"}
+
+
+def _contagem(request: Request, bid: int) -> dict | None:
+    """Vereditos do lote; lotes encerrados não mudam, então o resultado fica guardado (por assinatura dos jobs)."""
+    st = request.app.state
+    home = st.home
+    sig = bugview.lote_sig(home, bid)
+    if (bid, sig) in st.contagens:
+        return st.contagens[(bid, sig)]
+    v = bugview.lote_view(home, bid)
+    if not v["pendente"]:
+        st.contagens[(bid, sig)] = v["contagem"]
+    return v["contagem"]
+
+
+def _lotes(request: Request) -> list[dict]:
+    """Lotes do mais recente ao mais antigo: nome, data, ferramentas, nº de bugs, vereditos e estado."""
+    home = request.app.state.home
     out = []
-    for b in jobs_queue.list_batches(home, limit=limite):
-        tons = {"ok": 0, "alerta": 0, "erro": 0}
-        for j in jobs_queue.batch_jobs(home, b["id"]):
-            if j["state"] == "done" and j["run_rel"]:
-                tons[tom_de.get(j["run_rel"], "erro")] += 1
-        out.append({**b, "tons": tons})
+    for i, b in enumerate(jobs_queue.list_batches(home, limit=200)):
+        try:
+            kinds = [KIND_LABEL.get(k, k) for k in json.loads(b["kinds"] or "[]")]
+        except ValueError:
+            kinds = []
+        out.append({**b, "data": (b["created"] or "")[:16].replace("T", " "), "ferramentas": ", ".join(kinds),
+                    "bugs": b["total"] // len(kinds) if kinds else b["total"],
+                    "estado": ESTADO_LOTE.get(b["state"], b["state"]),
+                    "andamento": f"{b['done']}/{b['total']}" if b["state"] in ("active", "paused") else "",
+                    "encerrado": b["state"] in ("done", "cancelled"),
+                    "contagem": _contagem(request, b["id"]) if i < LOTES_COM_CONTAGEM else None})
     return out
 
 
-def _execucoes(home, q: str = "", ferramenta: str = "", tom: str = "", limite: int = 40) -> tuple[list[dict], int]:
-    """Execuções recentes filtradas (texto no caminho, ferramenta, tom do status); devolve (linhas, total que casa)."""
-    q = q.strip().lower()
-    achadas = []
-    for r in store.list_runs(home):
-        status = r.get("status") or ""
-        if ferramenta and r.get("kind") != ferramenta:
-            continue
-        if tom in ("ok", "alerta", "erro") and S.tom(status) != tom:
-            continue
-        if q and q not in r["path"].lower():
-            continue
-        achadas.append({**r, "tom": S.tom(status), "rotulo": S.label(status),
-                        "duracao": _tempo(r["seconds"]) if r.get("seconds") is not None else ""})
-    return achadas[:limite], len(achadas)
-
-
-def _exec_ctx(request: Request, q: str, ferramenta: str, tom: str) -> dict:
-    linhas, total = _execucoes(request.app.state.home, q, ferramenta, tom)
-    return {"execs": linhas, "execs_total": total, "q": q, "ferramenta": ferramenta, "tom_filtro": tom,
-            "kind_label": KIND_LABEL, "filtrando": bool(q.strip() or ferramenta or tom)}
-
-
 @router.get("/resultados", response_class=HTMLResponse)
-def resultados(request: Request, q: str = "", ferramenta: str = "", tom: str = ""):
-    home = request.app.state.home
-    ctx = {"page": "resultados", **_fila_ctx(request, cta=True), **_exec_ctx(request, q, ferramenta, tom),
-           "lotes": _lotes_resumo(home, store.list_runs(home))}
-    return _render(request, "resultados.html", ctx)
-
-
-@router.get("/resultados/execucoes", response_class=HTMLResponse)
-def resultados_execucoes(request: Request, q: str = "", ferramenta: str = "", tom: str = ""):
-    """Só a tabela de execuções recentes (alvo dos filtros htmx)."""
-    return _render(request, "_resultados_execucoes.html", _exec_ctx(request, q, ferramenta, tom))
+def resultados(request: Request):
+    """Lotes (mais recentes primeiro) com a contagem de vereditos; abrir leva à vista do lote."""
+    ver = {c: bugview.veredito(c) for c in bugview.VEREDITOS}
+    return _render(request, "resultados.html", {"page": "resultados", "lotes": _lotes(request), "ver": ver})
