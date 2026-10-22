@@ -35,14 +35,15 @@ Licença: veja [LICENSE](LICENSE).
 
 Requisitos mínimos: **Python 3.11 ou mais novo** e **git**. JDK e Maven podem ser baixados pela própria ferramenta (tela Ambiente); eles ficam na pasta do JFLP e nada é alterado no sistema (PATH, registro, `~/.bashrc`). O Jaguar 2 vem do Maven Central como dependência do POM gerado.
 
-Os lançadores criam um `.venv` ao lado do script na primeira execução (com o Python ≥ 3.11 encontrado) e rodam `pip install -e .[full]`; se o extra falhar, instalam sem ele. O extra `full` traz `zstandard` (checkout arquivado em `.tar.zst`, senão `.zip`) e `pywebview` (janela própria). Sem argumentos, o lançador executa `jflp ui`. Se uma instalação falhar pela metade ou as dependências mudarem (por exemplo, depois de um `git pull`), apague a pasta `.venv` e rode o lançador de novo para reinstalar tudo.
+Os lançadores criam um `.venv` ao lado do script na primeira execução (com o Python ≥ 3.11 encontrado) e rodam `pip install -e .[full]`; se o extra falhar, instalam sem ele. O extra `full` traz `zstandard` (checkout arquivado em `.tar.zst`, senão `.zip`) e `pywebview` (janela própria). Sem argumentos (inclusive com duplo clique no `jflp.cmd`), o lançador do Windows cria o atalho **JFLP Studio** na Área de Trabalho e no Menu Iniciar se ele ainda não existir e abre a janela do app sem console (`jflp ui --app`); para ver a saída no terminal, use `.\jflp.ps1 ui`. No Linux, sem argumentos, o `jflp.sh` executa `jflp ui`. Se uma instalação falhar pela metade ou as dependências mudarem (por exemplo, depois de um `git pull`), apague a pasta `.venv` e rode o lançador de novo para reinstalar tudo.
 
 **Windows** (PowerShell ou cmd):
 
 ```powershell
 git clone <url-do-repositorio> jflp
 cd jflp
-.\jflp.ps1            # abre a interface (jflp ui)
+.\jflp.ps1            # 1ª vez: instala, cria o atalho e abre o app
+.\jflp.ps1 ui         # interface com a saída no terminal
 .\jflp.ps1 doctor     # qualquer comando da CLI
 jflp.cmd selftest     # mesmo lançador, para o cmd ou duplo clique
 ```
@@ -88,7 +89,7 @@ A lista **Recentes** guarda os últimos 10 projetos e tem "Executar de novo" com
 
 **Resultado no código** (`Ver no código`, nas execuções Jaguar 1/2). Mostra o arquivo-fonte, tirado do `checkout` arquivado na própria execução, com cada linha colorida pela suspeita do Jaguar. Na margem ficam a suspeita e `cef/cep` (o *tooltip* traz os quatro contadores). À esquerda, a lista das classes suspeitas. A página abre rolada na linha mais suspeita. Um `checkout.tar.zst` exige o pacote `zstandard`.
 
-**Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal:
+**Atalho no Windows/Linux.** Para abrir como um aplicativo, sem terminal: no Windows, procure **JFLP Studio** no Menu Iniciar (dá para fixar na barra de tarefas com o botão direito) ou use o ícone da Área de Trabalho. O lançador sem argumentos já cria o atalho; para criar ou remover à mão:
 
 ```text
 .\jflp.ps1 atalho            # cria "JFLP Studio" na Área de Trabalho e no Menu Iniciar
