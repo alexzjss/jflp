@@ -451,6 +451,27 @@ def _results_simple_names(text: str) -> list[str]:
     return sorted(out)
 
 
+def bugsjar_patch_text(diff: str, results: str | None = None, *, module_of=None, find_tests=None) -> dict:
+    """Núcleo de `bugsjar_patch` a partir de TEXTO (`developer-patch.diff` e `test-results.txt`), sem checkout.
+
+    `module_of(caminho)` acha o módulo de um arquivo alterado; `find_tests(nomes_simples)` resolve nomes simples
+    de classes de teste em FQCNs (usado só quando o `test-results.txt` não traz `- in <classe>`)."""
+    prod = parse_left_hunks(diff, lambda x: None if TEST_PATH_RE.search(x) or not x.endswith(".java") else x)
+    faults = faults_from_hunks(prod, fqcn_from_path)
+    paths = re.findall(r"^diff --git a/(\S+) b/", diff, flags=re.M)
+    changed_prod = sorted(x for x in paths if x.endswith(".java") and not TEST_PATH_RE.search(x))
+    module = module_of(changed_prod[0]) if changed_prod and module_of else None
+    patch_tests = sorted({c for c in (_test_fqcn(x) for x in paths if TEST_PATH_RE.search(x)) if c})
+    tests: list[str] = []
+    if results:
+        tests = _results_classes(results)
+        if not tests and find_tests:     # sem o `- in <classe>`: resolve os nomes simples pelos arquivos de teste
+            simples = set(_results_simple_names(results))
+            if simples:
+                tests = sorted(find_tests(simples))
+    return {"faults": faults, "module": module, "tests": tests or patch_tests}
+
+
 def bugsjar_patch(root: Path) -> dict | None:
     """Lê `.bugs-dot-jar/` de um repositório: `faults` (linhas do patch em código de produção), `module`
     (onde estão os arquivos alterados), `tests` (classes de teste que falham; senão, as alteradas no patch).
@@ -460,24 +481,20 @@ def bugsjar_patch(root: Path) -> dict | None:
     if not pf.is_file():
         return None
     diff = pf.read_text(encoding="utf-8", errors="replace")
-    prod = parse_left_hunks(diff, lambda x: None if TEST_PATH_RE.search(x) or not x.endswith(".java") else x)
-    faults = faults_from_hunks(prod, fqcn_from_path)
-    paths = re.findall(r"^diff --git a/(\S+) b/", diff, flags=re.M)
-    changed_prod = sorted(x for x in paths if x.endswith(".java") and not TEST_PATH_RE.search(x))
-    module = _path_dir_module(root, changed_prod[0]) if changed_prod else None
-    patch_tests = sorted({c for c in (_test_fqcn(x) for x in paths if TEST_PATH_RE.search(x)) if c})
-    tests: list[str] = []
     rf = root / BUGSJAR_DIR / "test-results.txt"
-    if rf.is_file():
-        text = rf.read_text(encoding="utf-8", errors="replace")
-        tests = _results_classes(text)
-        if not tests:       # sem o `- in <classe>`: resolve os nomes simples pelos arquivos de teste
-            simples = set(_results_simple_names(text))
-            if simples:
-                tests = sorted({c for f in root.rglob("*.java") if f.stem in simples and TEST_PATH_RE.search(
-                                f.relative_to(root).as_posix())
-                                for c in [_test_fqcn(f.relative_to(root).as_posix())] if c})
-    return {"faults": faults, "module": module, "tests": tests or patch_tests}
+    results = rf.read_text(encoding="utf-8", errors="replace") if rf.is_file() else None
+
+    def find_tests(simples: set[str]) -> set[str]:
+        out = set()
+        for f in root.rglob("*.java"):
+            rel = f.relative_to(root).as_posix()
+            if f.stem in simples and TEST_PATH_RE.search(rel):
+                c = _test_fqcn(rel)
+                if c:
+                    out.add(c)
+        return out
+
+    return bugsjar_patch_text(diff, results, module_of=lambda x: _path_dir_module(root, x), find_tests=find_tests)
 
 
 def _norm_module(module: str | None, base: Path | None) -> str | None:

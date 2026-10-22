@@ -17,14 +17,14 @@ from pathlib import Path
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response, StreamingResponse
 
-from .. import compare, dataset, recipes, source, store
+from .. import bugview, compare, dataset, recipes, source, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..adapters.base import Bug
 from ..autosearch import effective_jdk_maven
 from ..diagnose import SEM_INSTRUMENTACAO, applicable
 from ..diffgt import FaultLine, select_lines
-from ..outputs import (AVISO_LOG_INTERROMPIDO, jaguar1_counts, outer, parse_jaguar1_log, parse_surefire_failures,
+from ..outputs import (AVISO_LOG_INTERROMPIDO, jaguar1_counts, outer, parse_jaguar1_log,
                        ranking_csv, ranking_rows, reconcile_jaguar1, test_counts)
 from ..winpath import inside
 from ..run_maven import AttemptConfig
@@ -333,30 +333,9 @@ TOP_N = 10
 _RAW_OUTPUTS = ("jaguar2.csv", "jaguar2.xml", "jaguar1.xml")
 
 
-def _frame_text(f: dict | None) -> str:
-    if not f:
-        return ""
-    where = f"{f.get('file') or '?'}" + (f":{f['line']}" if f.get("line") else "")
-    return f"{f.get('cls')}.{f.get('method')} ({where})"
-
-
 def _failures_of(run: dict, d: Path) -> list[dict]:
     """Falhas gravadas na execução; nas antigas (sem `failures`), refaz a partir dos relatórios guardados."""
-    saved = run.get("failures")
-    if isinstance(saved, list):
-        items = [x for x in saved if isinstance(x, dict)]
-    else:
-        reports = d / "outputs" / "surefire-reports"
-        try:
-            items = parse_surefire_failures(reports) if reports.is_dir() else []
-        except OSError:
-            items = []
-    out = []
-    for x in items:
-        fr = x.get("frame") if isinstance(x.get("frame"), dict) else None
-        out.append({"test": x.get("test") or "?", "message": x.get("message"), "frame": fr,
-                    "frame_text": _frame_text(fr)})
-    return out
+    return bugview.falhas_da_execucao(run, d)
 
 
 def _raw_output(d: Path) -> Path | None:
