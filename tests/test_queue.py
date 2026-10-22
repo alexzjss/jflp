@@ -348,5 +348,49 @@ class CancelTests(Base):
         self.assertEqual([(j["batch_name"], j["batch_state"]) for j in pj], [("b", "paused")])
 
 
+class ProgressTests(Base):
+    def test_current_exposes_progress_fed_by_lines(self):
+        seen, release = threading.Event(), threading.Event()
+
+        def fake(home, settings, bug, kind, opts):
+            for ln in ("# jflp tentativa 1", "[INFO] --- maven-surefire-plugin:2.14.1:test (t) @ a ---",
+                       "[INFO] Tests run: 5, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.1 s - in a.BTest"):
+                opts.log_cb(ln)
+            seen.set()
+            release.wait(10)
+            return "rel/x"
+
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["maven"], {})
+        with mock.patch.object(jq, "execute", fake):
+            w = self.worker()
+            w.start()
+            self.assertTrue(seen.wait(10))
+            cur = w.current()
+            p = cur["progress"]
+            self.assertEqual((p["tentativa"], p["fase"], p["testes"]["rodados"], p["testes"]["falhas"]),
+                             (1, "rodando testes", 5, 1))
+            self.assertEqual(w.progress_of(cur["job_id"])["testes"]["rodados"], 5)
+            job_id = cur["job_id"]
+            release.set()
+            self.assertTrue(self.batch_done(bid))
+        self.assertTrue(wait_for(lambda: w.current() is None))
+        final = w.progress_of(job_id)           # o estado final fica disponível depois do job
+        self.assertEqual(final["etapa"], "fim")
+        self.assertIsNone(w.progress_of(job_id + 1))
+
+    def test_progress_resets_for_each_job(self):
+        def fake(home, settings, bug, kind, opts):
+            opts.log_cb("[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1 s - in a.T")
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["maven"], {})
+        with mock.patch.object(jq, "execute", fake):
+            w = self.worker()
+            w.start()
+            self.assertTrue(self.batch_done(bid))
+        ids = [j["id"] for j in jq.batch_jobs(self.home, bid)]
+        self.assertEqual(w.progress_of(ids[-1])["testes"]["rodados"], 3)   # não acumulou os 6
+
+
 if __name__ == "__main__":
     unittest.main()

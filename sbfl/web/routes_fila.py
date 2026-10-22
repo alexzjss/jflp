@@ -1,14 +1,16 @@
 """Fila global: ver o que roda e o que espera, cancelar o job em andamento, remover jobs e excluir lotes."""
 from __future__ import annotations
 
+import hashlib
 import time
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from .. import queue as jobs_queue
+from ..progress import linha
 from .routes_bugs import KIND_LABEL
-from .routes_runs import _msg, _render
+from .routes_runs import _batch_ctx, _msg, _render
 
 router = APIRouter()
 
@@ -34,6 +36,16 @@ def _tempo(seconds: float) -> str:
     return f"{h} h {m:02d} min" if h else f"{m} min {s:02d} s"
 
 
+def assinatura(*partes) -> str:
+    """Resumo curto de "o que está na tela": muda só quando a estrutura (jobs e estados) muda."""
+    return hashlib.blake2s("|".join(str(x) for x in partes).encode(), digest_size=4).hexdigest()
+
+
+def _sem_mudanca(sig: str, atual: str):
+    """204 (o htmx não troca nada) quando a tela do cliente ainda é a atual: os botões ficam onde estão."""
+    return Response(status_code=204) if sig and sig == atual else None
+
+
 def _fila_ctx(request: Request) -> dict:
     st = request.app.state
     cur = st.worker.current()
@@ -44,7 +56,9 @@ def _fila_ctx(request: Request) -> dict:
         started = cur.get("started") if cur.get("job_id") == j["id"] else None
         running.append({**j, "tempo": _tempo(time.time() - started) if started else None,
                         "batch_name": nomes.get(j["batch_id"], "")})
-    return {"running": running, "pending": jobs_queue.pending_jobs(st.home), "kind_label": KIND_LABEL}
+    pending = jobs_queue.pending_jobs(st.home)
+    sig = assinatura("r", *[j["id"] for j in running], "p", *[(j["id"], j.get("batch_state")) for j in pending])
+    return {"running": running, "pending": pending, "kind_label": KIND_LABEL, "sig": sig}
 
 
 @router.get("/fila", response_class=HTMLResponse)
@@ -53,8 +67,40 @@ def fila(request: Request):
 
 
 @router.get("/fila/estado", response_class=HTMLResponse)
-def fila_estado(request: Request):
-    return _render(request, "_fila_estado.html", _fila_ctx(request))
+def fila_estado(request: Request, sig: str = ""):
+    """A fila inteira; com `sig` igual ao atual responde 204 (nada a trocar, os botões não são recriados)."""
+    ctx = _fila_ctx(request)
+    return _sem_mudanca(sig, ctx["sig"]) or _render(request, "_fila_estado.html", ctx)
+
+
+@router.get("/job/{job_id}/mini", response_class=HTMLResponse)
+def job_mini(request: Request, job_id: int):
+    """Só o miolo do andamento de um job (texto e barra fina): é o que se atualiza a cada segundo."""
+    job = jobs_queue.get_job(request.app.state.home, job_id)
+    if job is None:
+        return HTMLResponse("", status_code=404)
+    texto, ativo = "", False
+    if job["state"] == "pending":
+        texto, ativo = "Na fila", True
+    elif job["state"] == "running":
+        prog = request.app.state.worker.progress_of(job_id)
+        texto, ativo = linha(prog if isinstance(prog, dict) else None), True
+    elif job["state"] == "done":
+        texto = "Concluído"
+    elif job["state"] == "cancelled":
+        texto = "Cancelado"
+    return _render(request, "_mini_progresso.html", {"texto": texto, "ativo": ativo})
+
+
+@router.get("/lote/{bid}/painel", response_class=HTMLResponse)
+def lote_painel(request: Request, bid: int, sig: str = ""):
+    """Painel do lote que só se refaz quando algum job muda de estado."""
+    ctx = _batch_ctx(request, bid)
+    if ctx is None:
+        return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
+    b = ctx["b"]
+    ctx["sig"] = assinatura(b["state"], *[(j["id"], j["state"], j["run_rel"]) for j in b["jobs"]])
+    return _sem_mudanca(sig, ctx["sig"]) or _render(request, "_lote_painel.html", ctx)
 
 
 @router.post("/fila/limpar")

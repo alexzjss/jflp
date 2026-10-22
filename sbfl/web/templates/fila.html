@@ -2,7 +2,5 @@
 {% block title %}Fila - JFLP Studio{% endblock %}
 {% block content %}
 <h1>Fila</h1>
-<div hx-get="/fila/estado" hx-trigger="every 2s" hx-swap="innerHTML">
 {% include "_fila_estado.html" %}
-</div>
 {% endblock %}

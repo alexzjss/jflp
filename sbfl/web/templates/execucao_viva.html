@@ -1,27 +1,210 @@
 {% extends "base.html" %}
 {% block title %}Execução ao vivo - JFLP Studio{% endblock %}
 {% block content %}
-<h1>Execução ao vivo</h1>
-<p>{{ job.bug_key }} ({{ job.kind }}), job {{ job.id }}</p>
-<p id="situacao" class="vazio">Conectando…</p>
-<pre class="log" id="log" style="max-height:70vh"></pre>
+{% set passos = [('preparar', 'Preparar'), ('compilar', 'Compilar'), ('testes', 'Testes')]
+   + ([('analise', 'Ranking')] if job.kind in ('jaguar1', 'jaguar2') else []) + [('gravar', 'Gravar')] %}
+<div class="av" id="av">
+  <header class="av-topo">
+    <div>
+      <h1>Execução ao vivo</h1>
+      <p class="av-sub"><code>{{ bug_nome }}</code> <span class="chip">{{ kind_nome }}</span>
+        <span class="chip chip-vivo" id="av-status">Conectando…</span></p>
+    </div>
+    <div class="av-relogio">
+      <div class="av-tempo" id="av-tempo" aria-label="Tempo decorrido">00:00</div>
+      <button type="button" id="av-cancelar" hx-post="/job/{{ job.id }}/cancelar"
+        hx-vals='{"proximo": "/job/{{ job.id }}/ao-vivo"}' hx-swap="none"
+        hx-confirm="Cancelar esta execução? O Maven é encerrado agora e o que já foi feito é descartado.">Cancelar</button>
+    </div>
+  </header>
+
+  <ol class="av-passos" id="av-passos" aria-label="Etapas da execução">
+    {% for chave, nome in passos %}
+    <li class="av-passo espera" data-passo="{{ chave }}"><span class="av-bola" aria-hidden="true"></span><span class="av-rotulo">{{ nome }}</span></li>
+    {% endfor %}
+  </ol>
+  <p class="av-fase" id="av-fase" aria-live="polite">Aguardando…</p>
+
+  <div class="av-cartoes">
+    <section class="av-cartao" id="c-testes">
+      <h2>Testes</h2>
+      <div class="av-numeros">
+        <div><b id="t-rod">0</b><span>rodados</span></div>
+        <div><b id="t-fal" class="n-erro">0</b><span>falhas</span></div>
+        <div><b id="t-err" class="n-erro">0</b><span>erros</span></div>
+      </div>
+      <div class="barra" id="t-barra" hidden><i id="t-barra-i"></i></div>
+      <p class="vazio av-peq" id="t-classe">Nenhum teste ainda.</p>
+    </section>
+    <section class="av-cartao" id="c-down" hidden>
+      <h2>Downloads</h2>
+      <div class="av-numeros"><div><b id="d-n">0</b><span>arquivos</span></div><div><b id="d-mb">0</b><span>MB</span></div></div>
+      <p class="vazio av-peq" id="d-vivo"></p>
+    </section>
+    <section class="av-cartao" id="c-mod" hidden>
+      <h2>Módulo</h2>
+      <div class="av-numeros"><div><b id="m-i">0</b><span id="m-n">de 0</span></div></div>
+      <div class="barra"><i id="m-barra"></i></div>
+      <p class="vazio av-peq" id="m-nome"></p>
+    </section>
+    <section class="av-cartao" id="c-comp" hidden>
+      <h2>Compilação</h2>
+      <div class="av-numeros"><div><b id="k-n">0</b><span>arquivos</span></div></div>
+    </section>
+  </div>
+
+  <section class="av-tentativas" id="av-tent" hidden>
+    <h2>Tentativas</h2>
+    <div class="chips" id="av-chips"></div>
+  </section>
+
+  <section class="av-erro" id="av-erro" hidden>
+    <h2>Último erro</h2>
+    <pre id="av-erro-txt"></pre>
+  </section>
+
+  <section class="av-resumo" id="av-resumo" hidden></section>
+
+  <details class="av-log">
+    <summary>Log completo</summary>
+    <label class="av-peq"><input type="checkbox" id="av-ocultar" checked> ocultar linhas de download</label>
+    <pre class="log sem-dl" id="log" style="max-height:60vh"></pre>
+  </details>
+</div>
 <script>
 (function () {
-  var log = document.getElementById("log"), sit = document.getElementById("situacao");
-  var es = new EventSource("/job/{{ job.id }}/stream");
-  es.onmessage = function (e) {
-    sit.textContent = "Em execução…";
-    var seguir = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
-    log.appendChild(document.createTextNode(e.data + "\n"));
+  var JOB = {{ job.id }};
+  var $ = function (id) { return document.getElementById(id); };
+  var ANSI = /\x1b\[[0-9;]*[A-Za-z]/g, DL = /^(\[INFO\] )?Download(ing|ed) from /;
+  var log = $("log"), ordem = [], recebido = 0, base = 0, fim = false, ultimo = null, statusFinal = "";
+  Array.prototype.forEach.call(document.querySelectorAll("#av-passos li"), function (li) { ordem.push(li.dataset.passo); });
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    var h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60, p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return (h ? h + ":" : "") + p(m) + ":" + p(x);
+  }
+  function status(txt, cls) { var e = $("av-status"); e.textContent = txt; e.className = "chip " + (cls || "chip-vivo"); }
+  function mostra(id, sim) { $(id).hidden = !sim; }
+  function plural(n, um, varios) { return n + " " + (n === 1 ? um : varios); }
+
+  setInterval(function () {
+    if (!fim && ultimo) $("av-tempo").textContent = fmt(base + (Date.now() - recebido) / 1000);
+  }, 500);
+
+  function passos(e, ok) {
+    var idx = Math.max(0, ordem.indexOf(e.passo));
+    Array.prototype.forEach.call(document.querySelectorAll("#av-passos li"), function (li, i) {
+      var c = "espera";
+      if (fim) {
+        if (ok === true) c = "feito";
+        else c = i < idx ? "feito" : (i === idx ? (ok === false ? "falha" : "feito") : "espera");
+      } else if (i < idx) c = "feito";
+      else if (i === idx) c = e.falhou ? "falha" : "atual";
+      li.className = "av-passo " + c;
+      li.querySelector(".av-bola").textContent = c === "feito" ? "✓" : (c === "falha" ? "✗" : "");
+    });
+  }
+
+  function estado(e, ok) {
+    ultimo = e;
+    base = e.decorrido; recebido = Date.now();
+    if (!fim) $("av-tempo").textContent = fmt(base);
+    passos(e, ok);
+    var fase = e.etapa === "preparando" ? "Preparando o projeto…" : e.etapa === "gravando" ? "Gravando o resultado…"
+      : e.etapa === "fim" ? "Concluindo…" : "Tentativa " + e.tentativa + " · " + e.fase;
+    $("av-fase").textContent = fim ? "" : fase;
+    // testes
+    var t = e.testes, est = e.estimativa && e.estimativa.testes;
+    $("t-rod").textContent = t.rodados; $("t-fal").textContent = t.falhas; $("t-err").textContent = t.erros;
+    $("t-fal").className = t.falhas ? "tem" : ""; $("t-err").className = t.erros ? "tem" : "";
+    $("t-classe").textContent = t.classe ? (fim ? "Última classe: " : "Agora: ") + t.classe :
+      "Nenhum teste ainda.";
+    mostra("t-barra", !!(est && t.rodados));
+    if (est) {
+      $("t-barra-i").style.width = Math.min(100, t.rodados * 100 / est) + "%";
+      $("t-barra").title = "Estimativa: " + est + " testes (da última execução)";
+    }
+    // downloads
+    var d = e.downloads;
+    mostra("c-down", d.n > 0 || d.baixando);
+    $("d-n").textContent = d.n; $("d-mb").textContent = (d.bytes / 1e6).toFixed(d.bytes < 1e7 ? 1 : 0);
+    $("d-vivo").textContent = d.baixando ? "baixando…" : "";
+    // módulo do reactor
+    var m = e.modulo;
+    mostra("c-mod", !!(m && m.n));
+    if (m && m.n) {
+      $("m-i").textContent = m.i; $("m-n").textContent = "de " + m.n; $("m-nome").textContent = m.nome;
+      $("m-barra").style.width = (m.i * 100 / m.n) + "%";
+    }
+    mostra("c-comp", e.compilacao != null);
+    if (e.compilacao != null) $("k-n").textContent = e.compilacao;
+    // tentativas
+    mostra("av-tent", e.tentativas.length > 0);
+    var box = $("av-chips"); box.textContent = "";
+    e.tentativas.forEach(function (a) {
+      var s = document.createElement("span"), ativa = !a.status && !fim && a.n === e.tentativa;
+      var okc = a.status === "ok" || a.status === "ok_testes_falhando";
+      s.className = "chip " + (ativa ? "chip-vivo" : !a.status ? "" : okc ? "ok" : a.status === "ignorada" ? "" : "erro");
+      s.textContent = "#" + a.n + " " + (a.status || (ativa ? "em andamento" : "—"));
+      if (fim && !a.status && a.n === e.tentativa && statusFinal) {   // sem marcador de fim de tentativa: usa o status da execução
+        s.textContent = "#" + a.n + " " + statusFinal; s.className = "chip " + (ok ? "ok" : "erro");
+      }
+      if (a.motivo) s.title = a.motivo;
+      box.appendChild(s);
+    });
+    mostra("av-erro", !!e.ultimo_erro && ok !== true);   // numa execução que deu certo o erro é só ruído
+    if (e.ultimo_erro) $("av-erro-txt").textContent = e.ultimo_erro;
+  }
+
+  function linha(txt) {
+    txt = txt.replace(ANSI, "");
+    var seguir = log.scrollTop + log.clientHeight >= log.scrollHeight - 20, no;
+    if (DL.test(txt)) { no = document.createElement("span"); no.className = "dl"; no.textContent = txt + "\n"; }
+    else no = document.createTextNode(txt + "\n");
+    log.appendChild(no);
+    while (log.childNodes.length > 4000) log.removeChild(log.firstChild);
     if (seguir) log.scrollTop = log.scrollHeight;
-  };
-  es.addEventListener("espera", function () { sit.textContent = "Na fila, aguardando o worker…"; });
-  es.addEventListener("fim", function (e) {
-    es.close();
-    if (e.data) { sit.textContent = "Concluído. Abrindo a execução…"; location.href = "/run/" + e.data; }
-    else { sit.textContent = "Concluído sem pasta de execução."; }
+  }
+  $("av-ocultar").addEventListener("change", function () { log.classList.toggle("sem-dl", this.checked); });
+
+  function terminou(rel) {
+    fim = true;
+    $("av-cancelar").hidden = true;
+    fetch("/job/" + JOB + "/resumo").then(function (r) { return r.text(); }).then(function (html) {
+      var box = $("av-resumo"); box.innerHTML = html; box.hidden = false;
+      var corpo = box.firstElementChild, ok = corpo.dataset.ok === "" ? null : corpo.dataset.ok === "1";
+      var cancelado = corpo.dataset.estado === "cancelled";
+      statusFinal = corpo.dataset.status || "";
+      status(cancelado ? "Cancelado" : ok === null ? "Terminou sem resultado" : ok ? "Concluído" : "Terminou com problema",
+             cancelado || ok === null ? "" : ok ? "ok" : "erro");
+      $("av-fase").textContent = "";
+      if (ultimo) estado(ultimo, ok === null ? (cancelado ? false : null) : ok);
+      else {    // job que já tinha terminado quando a página abriu: não há progresso, só o resultado
+        $("c-testes").hidden = true; $("av-tempo").hidden = true;
+        if (ok === true) passos({passo: "gravar", falhou: false}, true);
+      }
+      if (rel) {
+        var n = 3, aviso = $("av-redir"), tmr;
+        aviso.hidden = false;
+        tmr = setInterval(function () {
+          n -= 1; $("av-redir-n").textContent = n;
+          if (n <= 0) { clearInterval(tmr); location.href = "/run/" + rel; }
+        }, 1000);
+        $("av-ficar").onclick = function () { clearInterval(tmr); aviso.hidden = true; };
+      }
+    }).catch(function () { status("Concluído"); });
+  }
+
+  var es = new EventSource("/job/" + JOB + "/stream");
+  es.onmessage = function (e) { status("Rodando"); linha(e.data); };
+  es.addEventListener("estado", function (e) {
+    status("Rodando");
+    try { estado(JSON.parse(e.data), null); } catch (x) { /* evento truncado: o próximo corrige */ }
   });
-  es.onerror = function () { if (es.readyState === 2) sit.textContent = "Conexão encerrada."; };
+  es.addEventListener("espera", function () { status("Na fila", ""); $("av-fase").textContent = "Aguardando a vez na fila…"; });
+  es.addEventListener("fim", function (e) { es.close(); terminou(e.data); });
+  es.onerror = function () { if (es.readyState === 2 && !fim) status("Conexão encerrada", "erro"); };
 })();
 </script>
 {% endblock %}
