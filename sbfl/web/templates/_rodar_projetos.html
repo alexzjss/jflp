@@ -1,0 +1,14 @@
+<section id="s2" class="rd-passo">
+  <h2><span class="rd-num">2</span> Projeto</h2>
+  {% if salvo %}<p class="vazio rd-nota">Pasta salva como raiz do Bugs.jar.</p>{% endif %}
+  {% if projetos %}
+  <ul class="rd-projetos">
+    {% for p in projetos %}<li><button type="button" class="rd-projeto"
+      hx-get="/rodar/projeto?repo={{ p.caminho|q }}&raiz={{ pasta|q }}" hx-target="#detalhe" hx-swap="innerHTML">
+      <strong>{{ p.nome }}</strong>
+      <span class="vazio" hx-get="/rodar/contagem?repo={{ p.caminho|q }}" hx-trigger="load" hx-swap="innerHTML">…</span>
+    </button></li>{% endfor %}
+  </ul>
+  {% else %}<p class="vazio">Nenhum repositório do Bugs.jar encontrado dentro dessa pasta.</p>{% endif %}
+</section>
+<div id="detalhe"></div>

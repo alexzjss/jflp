@@ -4,6 +4,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from ..run_jaguar2 import prefetch_jaguar2
-from ..toolchain.detect import find_jdks, find_mavens, java_info, maven_info, wsl_status
+from ..proc import NO_WINDOW
+from ..toolchain.detect import clear_cache, find_jdks, find_mavens, java_info, maven_info, wsl_status
 from ..toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
 from ..toolchain.profiles import PROFILES, MissingTool, resolve
 
@@ -51,15 +53,29 @@ def _profiles(home, settings) -> list[dict]:
     return rows
 
 
+_GIT_CACHE: dict[str, tuple[float, str]] = {}    # exe -> (validade, texto)
+_GIT_TTL = 60.0
+
+
 def _git() -> str | None:
     exe = shutil.which("git")
     if not exe:
         return None
+    hit = _GIT_CACHE.get(exe)
+    if hit and time.monotonic() < hit[0]:
+        return hit[1]
     try:
-        out = subprocess.run([exe, "--version"], capture_output=True, timeout=20, text=True)
-        return out.stdout.strip() or exe
+        out = subprocess.run([exe, "--version"], capture_output=True, timeout=20, text=True,
+                             stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
+        txt = out.stdout.strip() or exe
     except (OSError, subprocess.SubprocessError):
-        return exe
+        return exe      # falha não fica guardada
+    _GIT_CACHE[exe] = (time.monotonic() + _GIT_TTL, txt)
+    return txt
+
+
+def clear_git_cache() -> None:
+    _GIT_CACHE.clear()
 
 
 def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) -> dict:
@@ -155,6 +171,8 @@ def baixar(request: Request, tipo: str = Form(...), v: str = Form("")):
         except Exception as e:   # a thread não pode morrer calada
             task["error"] = f"Erro inesperado: {e}"
         finally:
+            clear_cache()
+            clear_git_cache()
             task["done"] = True
 
     threading.Thread(target=work, name=f"jflp-dl-{tid}", daemon=True).start()
@@ -179,6 +197,7 @@ def prefetch(request: Request):
         except Exception as e:
             task["error"] = f"Erro inesperado: {e}"
         finally:
+            clear_cache()
             task["done"] = True
 
     threading.Thread(target=work, name=f"jflp-prefetch-{tid}", daemon=True).start()
@@ -237,4 +256,5 @@ def apontar(request: Request, kind: str = Form(...), path: str = Form(...)):
         msg = f"Tipo desconhecido: {kind}"
     if ok:
         settings.save()
+        clear_cache()
     return _render(request, "ambiente.html", _env_context(request, msg, ok), 200 if ok else 400)

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import re
 import os
 import subprocess
 import sys
 import tempfile
 import tomllib
+import xml.etree.ElementTree as ET
 import zipfile
 from html import escape
 from pathlib import Path
@@ -19,9 +21,11 @@ from .. import compare, dataset, recipes, source, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..adapters.base import Bug
-from ..diagnose import applicable
+from ..autosearch import effective_jdk_maven
+from ..diagnose import SEM_INSTRUMENTACAO, applicable
 from ..diffgt import FaultLine, select_lines
-from ..outputs import outer, test_counts
+from ..outputs import (AVISO_LOG_INTERROMPIDO, jaguar1_counts, outer, parse_jaguar1_log, parse_surefire_failures,
+                       ranking_csv, ranking_rows, reconcile_jaguar1, test_counts)
 from ..winpath import inside
 from ..run_maven import AttemptConfig
 from .routes_bugs import KIND_LABEL, KINDS, _find_bug
@@ -130,8 +134,13 @@ def _attempts(d: Path) -> list[dict]:
         if not isinstance(data, dict):
             continue
         cfg = data.get("config") if isinstance(data.get("config"), dict) else {}
+        toolenv = data.get("toolenv") if isinstance(data.get("toolenv"), dict) else None
+        # JDK/Maven efetivos (toolenv); sem eles (tentativas antigas ou ignoradas), usa a configuração
+        ejdk, emvn = effective_jdk_maven(toolenv)
         out.append({"n": a.parent.name, "status": data.get("status"), "skipped": data.get("skipped"),
-                    "fixes": cfg.get("fixes_on") or [], "jdk": cfg.get("jdk"), "maven": cfg.get("maven")})
+                    "fixes": cfg.get("fixes_on") or [],
+                    "jdk": ejdk if ejdk is not None else cfg.get("jdk"),
+                    "maven": emvn or cfg.get("maven")})
     return out
 
 
@@ -318,6 +327,192 @@ def run_open(request: Request, rel: str):
     return _open_reply(request, "bugs", "Pasta aberta", "Pasta aberta no explorador de arquivos.", 200)
 
 
+# ------------------------------------------------- resultado direto na página
+
+TOP_N = 10
+_RAW_OUTPUTS = ("jaguar2.csv", "jaguar2.xml", "jaguar1.xml")
+
+
+def _frame_text(f: dict | None) -> str:
+    if not f:
+        return ""
+    where = f"{f.get('file') or '?'}" + (f":{f['line']}" if f.get("line") else "")
+    return f"{f.get('cls')}.{f.get('method')} ({where})"
+
+
+def _failures_of(run: dict, d: Path) -> list[dict]:
+    """Falhas gravadas na execução; nas antigas (sem `failures`), refaz a partir dos relatórios guardados."""
+    saved = run.get("failures")
+    if isinstance(saved, list):
+        items = [x for x in saved if isinstance(x, dict)]
+    else:
+        reports = d / "outputs" / "surefire-reports"
+        try:
+            items = parse_surefire_failures(reports) if reports.is_dir() else []
+        except OSError:
+            items = []
+    out = []
+    for x in items:
+        fr = x.get("frame") if isinstance(x.get("frame"), dict) else None
+        out.append({"test": x.get("test") or "?", "message": x.get("message"), "frame": fr,
+                    "frame_text": _frame_text(fr)})
+    return out
+
+
+def _raw_output(d: Path) -> Path | None:
+    for name in _RAW_OUTPUTS:
+        if (d / "outputs" / name).is_file():
+            return d / "outputs" / name
+    return None
+
+
+def _log_cache_vazio(d: Path) -> bool:
+    for gz in (d / "outputs" / "jaguar1.log.gz", d / "attempts" / "1" / "log.txt.gz"):
+        try:
+            with gzip.open(gz, "rt", encoding="utf-8", errors="replace") as f:
+                if re.search(r"ClassFilesCache size = 0", f.read()):
+                    return True
+        except (OSError, EOFError):
+            continue
+    return False
+
+
+def _jaguar1_view(run: dict, d: Path) -> dict | None:
+    """Testes e contagem refeitos a partir do XML do Jaguar 1 (o log pode ter sido cortado por um teste).
+
+    None quando não é Jaguar 1 ou o XML não está guardado; nas execuções antigas reavalia o que foi gravado."""
+    xml = d / "outputs" / "jaguar1.xml"
+    if run.get("kind") != "jaguar1" or not xml.is_file():
+        return None
+    try:
+        counts = jaguar1_counts(xml)
+    except (ValueError, OSError, ET.ParseError):
+        return None
+    if counts is None:     # XML sem linhas: nada a reconciliar
+        return None
+    log = d / "outputs" / "jaguar1.log.gz"
+    try:
+        logged = parse_jaguar1_log(log) if log.is_file() else {}
+    except (OSError, EOFError):
+        logged = {}
+    known = [t for t in (run.get("relevant_tests") or []) if "#" in t]
+    tests, tcounts, truncated = reconcile_jaguar1(logged, counts, known)
+    return {"tests": tests, "counts": tcounts, "truncated": truncated}
+
+
+def _pos_texto(best: int, worst: int, tied: int, total: int) -> str:
+    """"posição 5 de 4984" sem empate; "posições 1–137 de 4984 (137 empatadas)" com empate."""
+    if tied <= 1:
+        return f"posição {best} de {total}"
+    return f"posições {best}–{worst} de {total} ({tied} empatadas)"
+
+
+def _truth_view(run: dict, scores) -> dict | None:
+    """Linhas do defeito (pelo patch) e, havendo ranking, a faixa de posições de cada uma (empates incluídos)."""
+    faults = select_lines([FaultLine(**t) for t in (run.get("truth") or [])])
+    if not faults:
+        return None
+    total = len(scores) if scores else None
+    pos: dict[tuple[str, int], dict] = {}
+    if scores:
+        for r in compare.fault_positions(scores, faults)["lines"]:
+            key = (outer(r["cls"]), r["line"])
+            if key not in pos or r["rank_best"] < pos[key]["rank_best"]:   # classe interna: vale a mais suspeita
+                pos[key] = r
+    rows = []
+    for f in dict.fromkeys(faults):
+        r = pos.get((f.cls, f.line))
+        row = {"cls": f.cls, "short": f.cls.rsplit(".", 1)[-1], "line": f.line, "best": None}
+        if r:
+            row.update(best=r["rank_best"], worst=r["rank_worst"], tied=r["tied"],
+                       expected=f"{r['expected']:g}", pos_text=_pos_texto(r["rank_best"], r["rank_worst"],
+                                                                         r["tied"], total))
+        rows.append(row)
+    rows.sort(key=lambda r: (r["best"] is None, r["best"] or 0, r["cls"], r["line"]))
+    best_text = None
+    ranked = [r for r in rows if r["best"] is not None]
+    if ranked:
+        b = min(ranked, key=lambda r: r["best"])
+        if b["tied"] > 1:
+            best_text = (f"melhor linha do defeito: posições {b['best']}–{b['worst']} (empate com {b['tied']} linhas)"
+                         f"; posição esperada {b['expected']}")
+        else:
+            best_text = f"melhor linha do defeito: posição {b['best']} de {total}"
+    return {"rows": rows, "total": total, "best_text": best_text, "ranked": scores is not None, "n": len(rows)}
+
+
+def _result_ctx(request: Request, rel: str, run: dict, d: Path, counts, view: dict | None = None) -> dict:
+    """Seção "Resultado": status em palavras, falhas com o provável erro, 10 linhas mais suspeitas e avisos."""
+    kind = run.get("kind") or ""
+    jaguar = kind in ("jaguar1", "jaguar2")
+    status = S.effective(run.get("status") or "", counts)
+    diag = run.get("diagnosis") or {}
+    if status == S.SEM_TESTE_FALHANDO:
+        cause = diag.get("cause") or S.CAUSA_SEM_TESTE_FALHANDO
+    else:     # reavaliado: a causa gravada ("nenhum teste falhou") não vale mais
+        cause = diag.get("cause") or "" if status == run.get("status") else ""
+    warnings = list(dict.fromkeys([*(run.get("warnings") or []), *(diag.get("warnings") or [])]))
+    if view and view["truncated"] and AVISO_LOG_INTERROMPIDO not in warnings:
+        warnings.append(AVISO_LOG_INTERROMPIDO)
+    top, scores, top_nota = [], None, None
+    if jaguar:
+        try:
+            scores = compare.run_scores(request.app.state.home, rel)
+        except (OSError, ValueError):
+            scores = None
+        if scores is not None:
+            wanted = {(f.cls, f.line) for f in select_lines([FaultLine(**t) for t in (run.get("truth") or [])])}
+            for c, ln, sc, rank in ranking_rows(scores)[:TOP_N]:
+                top.append({"cls": c, "line": ln, "susp": sc, "rank": rank, "defeito": (outer(c), ln) in wanted})
+            if top:     # a última do top 10 empatada com mais linhas do que as mostradas: a ordem é arbitrária
+                last = top[-1]["susp"]
+                empatadas = sum(1 for s in scores if s.susp == last)
+                if empatadas > sum(1 for t in top if t["susp"] == last):
+                    top_nota = (f"{empatadas} linhas empatadas com pontuação {last:.4f}; "
+                                "a ordem entre elas é arbitrária")
+            if not scores and SEM_INSTRUMENTACAO not in warnings:
+                warnings.append(SEM_INSTRUMENTACAO)
+        if kind == "jaguar1" and SEM_INSTRUMENTACAO not in warnings and _log_cache_vazio(d):
+            warnings.append(SEM_INSTRUMENTACAO)
+    raw = _raw_output(d)
+    failures = _failures_of(run, d)
+    if view and not failures:     # execução antiga: as falhas só existem no XML/log
+        failures = [{"test": t, "message": None, "frame": None, "frame_text": ""}
+                    for t, v in sorted(view["tests"].items()) if v in ("failed", "error")]
+    truth = _truth_view(run, scores) if (scores is not None or not jaguar) else None
+    return {"res_status": status, "res_label": S.label(status), "res_tom": S.tom(status), "res_cause": cause,
+            "res_ok": S.is_success(status), "res_failures": failures, "res_truth": truth,
+            "res_top": top, "res_top_nota": top_nota, "res_warnings": warnings, "res_scores": scores is not None,
+            "res_ranking": jaguar and bool(scores), "res_raw": raw.name if raw else None}
+
+
+@router.get("/run/{rel:path}/ranking.csv")
+def run_ranking_csv(request: Request, rel: str):
+    got = _load(request, rel)
+    if got is None:
+        return _no_run(request, rel)
+    try:
+        scores = compare.run_scores(request.app.state.home, rel)
+    except (OSError, ValueError) as e:
+        return _msg(request, "bugs", "Ranking indisponível", f"Não foi possível ler as pontuações: {e}", 400)
+    if not scores:
+        return _msg(request, "bugs", "Ranking indisponível", "Esta execução não tem ranking de linhas.", 404)
+    name = rel.replace("/", "_") + "-ranking.csv"
+    return Response(ranking_csv(scores), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@router.get("/run/{rel:path}/espectro")
+def run_spectrum(request: Request, rel: str):
+    got = _load(request, rel)
+    if got is None:
+        return _no_run(request, rel)
+    raw = _raw_output(got[1])
+    if raw is None:
+        return _msg(request, "bugs", "Saída indisponível", "Esta execução não tem saída do Jaguar para baixar.", 404)
+    return FileResponse(raw, filename=raw.name)
+
+
 # --------------------------------------------------- tentar de novo / receita
 
 def _detected_fixes(d: Path | None, run: dict) -> list[str] | None:
@@ -429,16 +624,23 @@ def run_page(request: Request, rel: str):
     except (OSError, ValueError):
         results = {}
     counts = run.get("tests") or (test_counts(results) if results else None)
+    view = _jaguar1_view(run, d)
+    if view:     # o XML é a fonte confiável da contagem; o log pode ter parado no meio
+        results, counts = view["tests"], view["counts"]
     failing = sorted(t for t, s in results.items() if s in ("failed", "error"))
     diag = dict(run.get("diagnosis") or {})
     if diag.get("suggestions"):
         diag["suggestions"] = applicable(run.get("kind") or "", diag["suggestions"])
     files = _files(d)
+    result = _result_ctx(request, rel, run, d, counts, view)
+    if result["res_status"] != run.get("status"):     # status reavaliado: a causa gravada não vale mais
+        diag["cause"] = result["res_cause"]
     ctx = {"page": "bugs", "rel": rel, "run": run, "diag": diag, "counts": counts,
            "failing": failing, "files": files[:MAX_FILES], "more_files": max(0, len(files) - MAX_FILES),
            "attempts": _attempts(d), "kind_label": KIND_LABEL,
            "can_recipe": _can_save_recipe(run), "cfg": _last_cfg(run),
            "has_scores": run.get("kind") in ("jaguar1", "jaguar2"),
+           **result,
            **_lines_ctx(request, rel, run, "susp", "desc", "", 1)}
     return _render(request, "execucao.html", ctx)
 

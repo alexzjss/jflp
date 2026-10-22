@@ -25,6 +25,7 @@ router = APIRouter()
 BENCHMARKS = (("bugsjar", "Bugs.jar"), ("d4j", "Defects4J"))
 KINDS = (("maven", "Maven"), ("jaguar2", "Jaguar 2"), ("jaguar1", "Jaguar 1"))
 KIND_LABEL = dict(KINDS)
+BUGSJAR_KINDS = ("jaguar1", "maven")   # padrão ao rodar defeitos do Bugs.jar: o que a pesquisa mais usa
 PENDING_POLL = 2.0     # job na fila: aviso a cada 2 s
 START_POLL = 0.5       # job running no banco, mas o worker ainda não o tem
 
@@ -36,7 +37,7 @@ def _render(request: Request, name: str, ctx: dict, status: int = 200):
 def _list_ctx(request: Request, **kw) -> dict:
     ctx = {"page": "bugs", "benchmarks": BENCHMARKS, "bench": "", "proj": "", "projects": [],
            "rows": None, "error": None, "pendentes": False, "kinds": KINDS,
-           "locais": list(request.app.state.local_bugs.values())}
+           "locais": [b for b in request.app.state.local_bugs.values() if b.benchmark == "local"]}
     ctx.update(kw)
     return ctx
 
@@ -108,6 +109,56 @@ def bugs(request: Request, bench: str = "", proj: str = "", pendentes: int = 0):
     elif bench:
         ctx["error"] = f"Benchmark desconhecido: {bench}"
     return _render(request, "bugs.html", ctx)
+
+
+def kinds_validos(kinds: list[str], padrao: tuple[str, ...] = BUGSJAR_KINDS) -> list[str]:
+    """Tipos reconhecidos na ordem de KINDS; sem nenhum válido, o padrão (Jaguar 1 e Maven)."""
+    ks = [k for k, _ in KINDS if k in kinds]
+    return ks or list(padrao)
+
+
+def criar_lote_bugs(request: Request, bugs: list[Bug], kinds: list[str], auto: bool, nome: str = "") -> int:
+    """Um lote com um job por bug e tipo (escopo: testes relevantes). Registra os bugs para que a tela de cada um
+    abra mesmo sem `bugsjar.root` configurado (a chave é a mesma que a lista da tela Bugs produz)."""
+    st = request.app.state
+    for b in bugs:
+        st.local_bugs.setdefault(b.key, b)
+    opts = {"test_scope": "relevant", "auto_search": bool(auto), "archive_checkout": False}
+    return jobs_queue.create_batch(st.home, nome or (f"{kinds[0]} {bugs[0].key}" if len(bugs) == 1
+                                                      else f"{len(bugs)} bugs"), bugs, kinds, opts)
+
+
+@router.post("/bugs/lote")
+def bugs_lote(request: Request, bench: str = Form(""), proj: str = Form(""), modo: str = Form("selecionados"),
+              sel: list[str] = Form([]), kinds: list[str] = Form([]), auto_search: str = Form("")):
+    """Cria o lote direto da lista: `selecionados` (caixas marcadas) ou `todos` (todos os bugs do projeto)."""
+    st = request.app.state
+    erro, found = None, []
+    ks = [k for k, _ in KINDS if k in kinds]
+    if bench not in dict(BENCHMARKS):
+        erro = f"Benchmark desconhecido: {bench}"
+    elif not ks:
+        erro = "Escolha pelo menos um tipo de execução."
+    elif modo == "todos":
+        try:
+            found = list_bugs(st.settings, bench, proj) if proj else []
+        except Exception as e:
+            erro = f"Não foi possível listar os bugs: {e}"
+        if not erro and not found:
+            erro = "Nenhum bug para rodar neste projeto."
+    else:
+        for k in dict.fromkeys(sel):
+            bug = _find_bug(request, k)
+            if bug is None:
+                erro = f"Bug não encontrado: {k}"
+                break
+            found.append(bug)
+        if not erro and not found:
+            erro = "Marque pelo menos um bug."
+    if erro:
+        return _render(request, "bugs.html", _list_ctx(request, bench=bench, proj=proj, error=erro), 400)
+    bid = criar_lote_bugs(request, found, ks, bool(auto_search), f"{proj}: {len(found)} bugs" if proj else "")
+    return RedirectResponse(f"/lote/{bid}", status_code=303)
 
 
 @router.post("/bugs/local")
@@ -248,6 +299,8 @@ def resumo(request: Request, job_id: int):
     ctx = {"job": job, "run": run, "rel": rel, "ok": None, "tests": None, "kind_nome": KIND_LABEL.get(job["kind"])}
     if run:
         ctx["ok"] = S.is_success(run.get("status") or "")
+        ctx["tom"] = S.tom(run.get("status") or "")
+        ctx["rotulo"] = S.label(run.get("status") or "")
         ctx["tests"] = run.get("tests")
     return _render(request, "_execucao_resumo.html", ctx)
 

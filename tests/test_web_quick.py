@@ -8,6 +8,7 @@ from unittest import mock
 
 from sbfl import queue as jq
 from sbfl.adapters.base import Bug
+from tests.bugsjar_fixture import make_bugsjar_git, make_bugsjar_repo, ramo_de
 from tests.test_execute import Base as ExecBase
 from tests.test_web_runs import RunsBase
 from tests.web_helpers import HAVE_WEB
@@ -230,6 +231,31 @@ class Guia(RunsBase):
         self.assertNotIn("module", job["extra"])
         self.assertEqual(Path(job["extra"]["path"]), (self.col / "maven").resolve())
 
+    def test_modulo_dentro_de_repo_bugsjar_acima_e_detectado(self):
+        repo = make_bugsjar_repo(self.tmp)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/bugs-dot-jar_MNG-5742_6ab41ee8" + chr(10))
+        r = self.post(projeto=str(repo / "apache-maven"))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn('guia-bugsjar', r.text)
+        self.assertIn("bugs-dot-jar_MNG-5742_6ab41ee8", r.text)       # ramo atual
+        self.assertIn("<code>maven</code>", r.text)                   # o repositório
+        self.assertIn("o bug está no módulo <code>maven-core</code>", r.text)
+        self.assertIn("o módulo apache-maven não tem código-fonte (empacotamento pom): "
+                      "o SBFL não terá linhas para apontar", r.text)
+        self.assertIn("Rodar mesmo assim", r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+        ok = self.post(projeto=str(repo / "apache-maven"), forcar="1")
+        self.assertEqual(ok.status_code, 303)
+
+    def test_ancestral_alem_do_git_nao_conta(self):
+        acima = self.tmp / "acima"
+        (acima / ".bugs-dot-jar").mkdir(parents=True)
+        (acima / "repo" / "m").mkdir(parents=True)
+        (acima / "repo" / ".git").mkdir()
+        (acima / "repo" / "m" / "pom.xml").write_text("<project/>")
+        r = self.post(projeto=str(acima / "repo" / "m"))
+        self.assertEqual(r.status_code, 303)
+
     def test_raiz_sem_pom_com_modulo_valido_sem_bugsjar_roda(self):
         plain = self.tmp / "plain2"
         (plain / "m").mkdir(parents=True)
@@ -316,6 +342,14 @@ class Cartoes(RunsBase):
         self.assertIn("hx-vals", frag.text)               # assinatura: o htmx só troca se algo mudou
         self.assertNotIn("<html", frag.text)
 
+    def test_sem_teste_falhando_aparece_em_ambar_e_nao_como_erro(self):
+        rel = self.make_run(bug=self.bug, status="sem_teste_falhando")
+        bid = self.batch(["maven"])
+        self.finish(bid, "maven", rel)
+        text = self.authed().get(f"/executar/{bid}/cartoes").text
+        self.assertIn('<strong class="alerta">concluída, mas nenhum teste falhou</strong>', text)
+        self.assertNotIn('class="erro">concluída', text)
+
     def test_tudo_terminado_nao_reagenda_e_mostra_top_linhas(self):
         csv = "".join(f"a/Cls{i},{i + 1},{i},0,1,5,{i / 20:.2f}\n" for i in range(15))
         rel = self.make_run(bug=self.bug, csv=csv, status="ok_testes_falhando")
@@ -326,7 +360,7 @@ class Cartoes(RunsBase):
         self.assertEqual(frag.status_code, 200)
         self.assertNotIn("hx-get", frag.text)
         self.assertNotIn("hx-trigger", frag.text)
-        self.assertIn("ok_testes_falhando", frag.text)
+        self.assertIn("concluída, com testes falhando", frag.text)
         self.assertIn("2 testes", frag.text)
         self.assertIn("1 com falha", frag.text)
         self.assertIn(f"/run/{rel}/codigo?classe=a.Cls14#L15", frag.text)     # maior susp primeiro
@@ -344,7 +378,7 @@ class Cartoes(RunsBase):
         bid = self.batch(["maven"])
         self.finish(bid, "maven", rel)
         text = self.authed().get(f"/executar/{bid}/cartoes").text
-        self.assertIn("compilacao_falhou", text)
+        self.assertIn("erro de compilação", text)
         self.assertIn("Falha ao compilar o projeto", text)
         self.assertIn("Tentar com JDK 8", text)
         self.assertNotIn("/codigo", text)               # Maven não tem linhas
@@ -403,3 +437,96 @@ class SoEstesTestes(ExecBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class GuiaBugsjarSeletor(RunsBase):
+    """Pasta dentro de um repositório do Bugs.jar: rodar o bug atual ou vários, sem `bugsjar.root`."""
+
+    def setUp(self):
+        super().setUp()
+        self.repo = make_bugsjar_git(self.tmp / "colecao", ("MNG-1", "MNG-2", "MNG-3"), atual="MNG-2")
+        self.col = self.repo.parent
+        self.c = self.authed()
+
+    def post(self, path="/executar", **kw):
+        data = {"projeto": str(self.repo / "maven-core"), "kinds": ["jaguar1", "maven"]}
+        data.update(kw)
+        return self.c.post(path, data=data, follow_redirects=False)
+
+    def test_guia_lista_bugs_e_oferece_o_atual(self):
+        r = self.post()
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Rodar o bug atual (MNG-2) como defeito do Bugs.jar", r.text)
+        for i in ("MNG-1", "MNG-2", "MNG-3"):
+            self.assertIn(f'value="{ramo_de(i)}"', r.text)
+        self.assertIn("selecionar todos", r.text)
+        self.assertIn("Rodar selecionados", r.text)
+        self.assertIn("Rodar mesmo assim como pasta local", r.text)
+        self.assertIn(f'name="raiz" value="{self.col}"', r.text)      # oferece salvar a raiz
+        self.assertFalse(self.settings.get("bugsjar", "root"))
+
+    def test_sem_oferta_de_raiz_quando_ja_configurada(self):
+        self.settings.set("bugsjar", "root", str(self.col))
+        self.assertNotIn('name="raiz"', self.post().text)
+
+    def test_ramo_master_nao_oferece_o_atual(self):
+        repo = make_bugsjar_git(self.tmp / "outra", ("MNG-9",))
+        r = self.post(projeto=str(repo / "maven-core"))
+        self.assertNotIn("Rodar o bug atual", r.text)
+        self.assertIn("não é um defeito do Bugs.jar", r.text)
+
+    def test_rodar_atual_cria_job_bugsjar_com_os_tipos(self):
+        r = self.post("/executar/bugsjar-rodar", modo="atual")
+        self.assertEqual(r.status_code, 303)
+        bid = int(r.headers["location"].rsplit("/", 1)[1])
+        self.assertTrue(r.headers["location"].startswith("/executar/"))
+        jobs = jq.batch_jobs(self.home, bid)
+        self.assertEqual([(j["bug_key"], j["kind"]) for j in jobs],
+                         [(f"bugsjar/maven/{ramo_de('MNG-2')}", "maven"),
+                          (f"bugsjar/maven/{ramo_de('MNG-2')}", "jaguar1")])
+        self.assertEqual(jobs[0]["extra"]["fixed"], ramo_de("MNG-2").rsplit("_", 1)[-1])
+        self.assertEqual(Path(jobs[0]["extra"]["repo"]), self.repo)
+        self.assertEqual(jq.list_batches(self.home)[0]["total"], 2)
+        # a chave também abre a tela do bug sem bugsjar.root
+        self.assertEqual(self.c.get("/bug/bugsjar/maven/" + ramo_de("MNG-2")).status_code, 200)
+
+    def test_sem_tipos_usa_jaguar1_e_maven(self):
+        r = self.post("/executar/bugsjar-rodar", modo="atual", kinds=[])
+        bid = int(r.headers["location"].rsplit("/", 1)[1])
+        self.assertEqual(sorted(j["kind"] for j in jq.batch_jobs(self.home, bid)), ["jaguar1", "maven"])
+
+    def test_rodar_selecionados_cria_um_lote(self):
+        r = self.post("/executar/bugsjar-rodar", modo="selecionados",
+                      ramos=[ramo_de("MNG-1"), ramo_de("MNG-3"), "bugs-dot-jar_X_invalido"])
+        self.assertEqual(r.status_code, 303)
+        self.assertTrue(r.headers["location"].startswith("/lote/"))
+        bid = int(r.headers["location"].rsplit("/", 1)[1])
+        keys = {j["bug_key"] for j in jq.batch_jobs(self.home, bid)}
+        self.assertEqual(keys, {f"bugsjar/maven/{ramo_de('MNG-1')}", f"bugsjar/maven/{ramo_de('MNG-3')}"})
+        self.assertEqual(len(jq.list_batches(self.home)), 1)
+
+    def test_selecionados_vazio_volta_ao_guia(self):
+        r = self.post("/executar/bugsjar-rodar", modo="selecionados")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Marque pelo menos um bug", r.text)
+        self.assertIn("Rodar selecionados", r.text)
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_pasta_fora_do_bugsjar_da_erro(self):
+        r = self.post("/executar/bugsjar-rodar", projeto=str(self.tmp))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(jq.list_batches(self.home), [])
+
+    def test_salvar_raiz_pela_pasta_mae(self):
+        r = self.post("/executar/bugsjar-root", raiz=str(self.col))
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(r.headers["location"], "/bugs?bench=bugsjar&proj=maven")
+        self.assertEqual(self.settings.get("bugsjar", "root"), str(self.col.resolve()))
+
+    def test_resumo_lazy_le_o_bug_report(self):
+        url = "/executar/bugsjar-resumo"
+        r = self.c.get(url, params={"repo": str(self.repo), "ramo": ramo_de("MNG-3")})
+        self.assertEqual(r.text, "resumo do MNG-3")
+        self.assertEqual(self.c.get(url, params={"repo": str(self.repo), "ramo": "master"}).text, "")
+        self.assertEqual(self.c.get(url, params={"repo": str(self.tmp), "ramo": ramo_de("MNG-3")}).text, "")

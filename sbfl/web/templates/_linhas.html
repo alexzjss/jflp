@@ -1,6 +1,7 @@
 <div id="linhas">
 {% if erro %}<p class="aviso erro">{{ erro }}</p>
 {% elif sem is defined %}<p class="vazio">Esta execução não tem pontuações por linha.</p>
+{% elif total == 0 and not filtro %}<p class="vazio">Nenhuma linha foi pontuada nesta execução.</p>
 {% else %}
 <table>
   <thead><tr>

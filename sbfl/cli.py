@@ -20,6 +20,7 @@ from .execute import RunOptions, execute
 from .home import Home, Settings, load_settings
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
+from .proc import NO_WINDOW
 from .queue import Worker, active_batch_ids, batch_status, create_batch, delete_batch
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
@@ -69,7 +70,8 @@ def cmd_doctor(home: Home, settings: Settings, args) -> int:
     for m in mavens:
         print(f"  [OK] Maven {_ver(m.version)} em {m.home} [{m.source}]")
     try:
-        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=20)
+        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=20,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         print(f"[OK] {r.stdout.strip()}" if r.returncode == 0 else "[XX] git não funcionou.")
     except (OSError, subprocess.SubprocessError):
         print("[XX] git não encontrado no PATH.")
@@ -153,7 +155,8 @@ def cmd_fetch(home: Home, settings: Settings, args) -> int:
             cmd = ["git", "-c", "core.longpaths=true", "clone", "-q",
                    template.format(project=proj), str(dest)]
             action = "clonado"
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         if r.returncode != 0:
             print(f"erro: {proj}: {r.stderr.strip()[:300]}", file=sys.stderr)
             return 1

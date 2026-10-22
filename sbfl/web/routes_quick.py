@@ -17,8 +17,10 @@ from .. import compare, store
 from .. import queue as jobs_queue
 from .. import status as S
 from ..diagnose import applicable
-from ..prepare import find_poms, is_bugsjar_collection, is_bugsjar_repo, local_bug
-from .routes_bugs import KIND_LABEL, KINDS
+from ..prepare import (bugsjar_label, bugsjar_patch, bugsjar_repo_bugs, bugsjar_summary, find_bugsjar_repo,
+                       find_poms, is_bugsjar_collection, is_bugsjar_repo, local_bug, module_without_code,
+                       modules_with_code, sem_codigo_texto)
+from .routes_bugs import BUGSJAR_KINDS, KIND_LABEL, KINDS, criar_lote_bugs, kinds_validos
 
 router = APIRouter()
 
@@ -143,11 +145,51 @@ def _guia(request: Request, spec: str, module: str, forcar: bool) -> dict | None
             g["texto"] = "O Jaguar 1/Maven precisa de um projeto Maven (uma pasta com pom.xml)."
         return g
     alvo = p / mod if mod and (p / mod).is_dir() else p
-    if is_bugsjar_repo(alvo) and not forcar:
-        g.update(bugsjar=True, pode_forcar=True, titulo=f"{alvo.name} parece um repositório do Bugs.jar",
-                 texto="")
+    repo = find_bugsjar_repo(alvo)       # a própria pasta ou um ancestral (até o .git): ex. um módulo do repositório
+    if repo and not forcar:
+        g.update(bugsjar=True, pode_forcar=True, titulo=f"{repo.name} parece um repositório do Bugs.jar",
+                 texto="", repo=repo.name, ramo=_ramo(repo))
+        try:
+            bj = bugsjar_patch(repo)
+        except OSError:
+            bj = None
+        g.update(_guia_bugsjar(request, repo))
+        escolhido = "/".join(alvo.relative_to(repo).parts) or "."
+        g["modulo_bug"] = (bj or {}).get("module") or ""
+        if module_without_code(repo, escolhido):
+            g["aviso_modulo"] = sem_codigo_texto(escolhido)
+            g["modulos_codigo"] = modules_with_code(repo)
         return g
     return None
+
+
+def _guia_bugsjar(request: Request, repo: Path) -> dict:
+    """Dados do seletor de defeitos do repositório: bugs (ramos `bugs-dot-jar_*`), o bug atual e a raiz sugerida."""
+    ramo = _ramo(repo)
+    bugs = [{"ramo": b.bug_id, "id": bugsjar_label(b.bug_id), "atual": b.bug_id == ramo}
+            for b in bugsjar_repo_bugs(repo)]
+    atual = next((b for b in bugs if b["atual"]), None)
+    pai = repo.parent
+    atual_raiz = str(request.app.state.settings.get("bugsjar", "root") or "")
+    sugerir = is_bugsjar_collection(pai) and not _mesma_pasta(atual_raiz, pai)
+    return {"bj_bugs": bugs, "bj_atual": atual, "repo_dir": str(repo),
+            "raiz_sugerida": str(pai) if sugerir else "", "kinds_bj": BUGSJAR_KINDS}
+
+
+def _mesma_pasta(a: str, b: Path) -> bool:
+    try:
+        return bool(a) and Path(a).expanduser().resolve() == Path(b).resolve()
+    except OSError:
+        return False
+
+
+def _ramo(repo: Path) -> str:
+    """Ramo atual do repositório (lê `.git/HEAD`); "" se não der para saber."""
+    try:
+        head = (repo / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return head[len("ref: refs/heads/"):] if head.startswith("ref: refs/heads/") else head[:8]
 
 
 def _form_ctx(request: Request, **kw) -> dict:
@@ -213,9 +255,9 @@ def executar_post(request: Request, projeto: str = Form(""), kinds: list[str] = 
 
 
 @router.post("/executar/bugsjar-root")
-def executar_bugsjar_root(request: Request, projeto: str = Form("")):
-    """Um clique: usa a pasta escolhida como `bugsjar.root` (raiz do Bugs.jar) e abre a tela Bugs."""
-    p = Path(projeto.strip().strip('"')).expanduser()
+def executar_bugsjar_root(request: Request, projeto: str = Form(""), raiz: str = Form("")):
+    """Um clique: usa a pasta (ou `raiz`, a pasta-mãe sugerida) como `bugsjar.root` e abre a tela Bugs."""
+    p = Path((raiz or projeto).strip().strip('"')).expanduser()
     if not p.is_dir() or not is_bugsjar_collection(p):
         return _render(request, "executar.html", _form_ctx(
             request, projeto=projeto, erro="Essa pasta não parece a raiz do Bugs.jar "
@@ -223,7 +265,61 @@ def executar_bugsjar_root(request: Request, projeto: str = Form("")):
     settings = request.app.state.settings
     settings.set("bugsjar", "root", str(p.resolve()))
     settings.save()
+    if raiz:        # veio do repositório: já abre a lista dele
+        repo = find_bugsjar_repo(Path(projeto.strip().strip('"')).expanduser())
+        return RedirectResponse(f"/bugs?bench=bugsjar&proj={quote(repo.name) if repo else ''}", status_code=303)
     return RedirectResponse("/bugs", status_code=303)
+
+
+@router.get("/executar/bugsjar-resumo", response_class=HTMLResponse)
+def executar_bugsjar_resumo(repo: str = "", ramo: str = ""):
+    """Resumo (texto) do defeito de um ramo, lido sob demanda pela lista de bugs do guia."""
+    r = Path(repo)
+    if not ramo.startswith("bugs-dot-jar_") or not r.is_dir() or not is_bugsjar_repo_ou_ramo(r):
+        return HTMLResponse("")
+    return HTMLResponse(escape(bugsjar_summary(r, ramo)))
+
+
+def is_bugsjar_repo_ou_ramo(r: Path) -> bool:
+    """Repositório git com ramos do Bugs.jar (o ramo atual pode nem ter `.bugs-dot-jar/`)."""
+    return (r / ".git").exists() and (is_bugsjar_repo(r) or bool(bugsjar_repo_bugs(r)))
+
+
+@router.post("/executar/bugsjar-rodar")
+def executar_bugsjar_rodar(request: Request, projeto: str = Form(""), module: str = Form(""),
+                           kinds: list[str] = Form([]), auto_search: str = Form(""), modo: str = Form("atual"),
+                           ramos: list[str] = Form([])):
+    """Roda defeitos do Bugs.jar como tal (worktree, verdade e testes relevantes): `atual` (ramo em uso) ou os
+    `ramos` marcados. A pasta pode ser o repositório ou qualquer subpasta dele; `bugsjar.root` não é preciso."""
+    spec = projeto.strip().strip('"')
+    p = Path(spec).expanduser()
+    mod = (module or "").strip().strip('"').replace("\\", "/").strip("/")
+    alvo = p / mod if mod and ".." not in mod.split("/") and (p / mod).is_dir() else p
+    repo = find_bugsjar_repo(alvo) if p.is_dir() else None
+    ks = kinds_validos(kinds)
+    erro, escolhidos = None, []
+    if repo is None:
+        erro = "Essa pasta não está num repositório do Bugs.jar."
+    else:
+        por_ramo = {b.bug_id: b for b in bugsjar_repo_bugs(repo)}
+        if modo == "atual":
+            ramo = _ramo(repo)
+            if ramo in por_ramo:
+                escolhidos = [por_ramo[ramo]]
+            else:
+                erro = (f"O ramo atual ({ramo or 'desconhecido'}) não é um defeito do Bugs.jar: "
+                        "escolha os bugs na lista.")
+        else:
+            escolhidos = [por_ramo[r] for r in dict.fromkeys(ramos) if r in por_ramo]
+            if not escolhidos:
+                erro = "Marque pelo menos um bug da lista."
+    if erro:
+        return _render(request, "executar.html", _form_ctx(
+            request, projeto=projeto, sel=ks, module=module, auto_search=bool(auto_search), erro=erro,
+            guia=_guia(request, projeto, module, False)), 400)
+    bid = criar_lote_bugs(request, escolhidos, ks, bool(auto_search),
+                          f"bugs.jar {repo.name}: {len(escolhidos)} bug(s)")
+    return RedirectResponse(f"/executar/{bid}" if len(escolhidos) == 1 else f"/lote/{bid}", status_code=303)
 
 
 @router.post("/executar/escolher", response_class=HTMLResponse)
@@ -284,6 +380,8 @@ def _cartao(request: Request, job: dict) -> dict:
         return c
     c["run"] = run
     c["ok"] = S.is_success(run.get("status") or "")
+    c["tom"] = S.tom(run.get("status") or "")
+    c["rotulo"] = S.label(run.get("status") or "")
     diag = dict(run.get("diagnosis") or {})
     c["suggestions"] = applicable(run.get("kind") or "", diag.get("suggestions") or [])
     c["cause"] = diag.get("cause") or ""

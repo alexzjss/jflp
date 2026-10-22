@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Resultados - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Resultados</h1>
+
+{% include "_fila_estado.html" %}
+
+<section>
+  <h2>Lotes recentes</h2>
+  {% include "_resultados_lotes.html" %}
+</section>
+
+<section>
+  <h2>Execuções recentes</h2>
+  <form class="filtros" hx-get="/resultados/execucoes" hx-target="#execucoes-lista" hx-swap="outerHTML"
+        hx-trigger="input delay:300ms, change" hx-push-url="false" onsubmit="return false">
+    <input type="search" name="q" value="{{ q }}" placeholder="Filtrar por projeto ou bug" aria-label="Texto">
+    <select name="ferramenta" aria-label="Ferramenta">
+      <option value="">Todas as ferramentas</option>
+      {% for k, nome in kind_label.items() %}<option value="{{ k }}" {{ 'selected' if ferramenta == k }}>{{ nome }}</option>{% endfor %}
+    </select>
+    <select name="tom" aria-label="Status">
+      <option value="">Qualquer status</option>
+      <option value="ok" {{ 'selected' if tom_filtro == 'ok' }}>Concluídas</option>
+      <option value="alerta" {{ 'selected' if tom_filtro == 'alerta' }}>Com aviso</option>
+      <option value="erro" {{ 'selected' if tom_filtro == 'erro' }}>Com erro</option>
+    </select>
+  </form>
+  {% include "_resultados_execucoes.html" %}
+</section>
+{% endblock %}

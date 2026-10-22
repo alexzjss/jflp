@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import shutil
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from . import proc
 from .adapters.base import Ctx, scan_tests
 from .home import Home, Settings
 from .jaguar import JaguarOptions, run_jaguar
-from .outputs import parse_jaguar1_log
+from .outputs import MARK, jaguar1_counts, parse_jaguar1_log, reconcile_jaguar1
 from .prepare import Prepared
 from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
                         reactor_failure, phase_record, SKIP_JACOCO, JACOCO_SKIP)
@@ -85,16 +86,38 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     if meta.get("status") == "ok" and xml.is_file():
         outputs["jaguar1_xml"] = xml
     tests: dict[str, str] = {}
-    if (out_dir / "jaguar.log").is_file():
+    jlog, tlog = out_dir / "jaguar.log", out_dir / "jaguar-tests.log"
+    if jlog.is_file():
         try:     # resultado de cada teste (última tentativa do JaguarRunner), como no Maven: classe#teste
-            tests = parse_jaguar1_log(out_dir / "jaguar.log")
+            tests = parse_jaguar1_log(jlog)
         except OSError:
             tests = {}
-    if (out_dir / "jaguar.log").is_file():   # junta o log do JaguarRunner ao log da tentativa
+    if tlog.is_file():   # o JaguarLogger gravado em arquivo é completo mesmo que um teste tenha trocado System.out
+        try:
+            tests.update(parse_jaguar1_log(tlog))
+        except OSError:
+            pass
+    if jlog.is_file():   # junta o log do JaguarRunner ao log da tentativa
         with open(log, "a", encoding="utf-8") as f:
-            f.write((out_dir / "jaguar.log").read_text(encoding="utf-8", errors="replace"))
+            f.write(jlog.read_text(encoding="utf-8", errors="replace"))
+    if tlog.is_file():   # e as linhas de teste do arquivo, que valem mais que as do stdout cortado
+        try:
+            segment = tlog.read_text(encoding="utf-8", errors="replace")
+            k = segment.rfind(MARK)
+            with open(log, "a", encoding="utf-8") as f:
+                f.write(segment[k:] if k >= 0 else segment)
+        except OSError:
+            pass
+    counts = None
+    if "jaguar1_xml" in outputs:
+        try:
+            counts = jaguar1_counts(outputs["jaguar1_xml"])
+        except (ValueError, OSError, ET.ParseError):
+            counts = None
+    known = [t for t in (prep.relevant_tests or []) if "#" in t]
+    tests, tcounts, truncated = reconcile_jaguar1(tests, counts, known)
     extra = {"excluded_classes": meta.get("excluded_classes", []), "meta_status": meta.get("status"),
-             "attempts": meta.get("attempts", 0)}
+             "attempts": meta.get("attempts", 0), "test_counts": tcounts, "log_truncado": truncated}
     ok = meta.get("status") == "ok"
     return AttemptResult(0 if ok else None, meta.get("status") == "jaguar_timeout", round(total, 1),
                          log, outputs, tests, cmd, desc, extra, phases)

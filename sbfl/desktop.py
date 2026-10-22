@@ -15,10 +15,10 @@ from typing import Callable, Mapping
 
 from .home import Home
 from .instance import pid_alive
+from .proc import NO_WINDOW
 
 NOME = "JFLP Studio"
 _LINUX_BROWSERS = ("chromium", "chromium-browser", "google-chrome", "microsoft-edge")
-_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def project_root() -> Path:
@@ -66,7 +66,7 @@ def _profile_in_use(profile_dir: Path | str) -> bool | None:
                   "ForEach-Object { $_.CommandLine }")
             out = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True,
                                  text=True, encoding="utf-8", errors="replace", timeout=20,
-                                 creationflags=_NO_WINDOW).stdout
+                                 creationflags=NO_WINDOW).stdout
             return any("--user-data-dir" in ln.lower() and needle in ln.lower() for ln in out.splitlines())
         for p in Path("/proc").iterdir():
             if p.name.isdigit() and p.name != str(os.getpid()):
@@ -226,7 +226,7 @@ def _run_ps(script: str) -> list[str]:
     enc = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", enc],
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-                       creationflags=_NO_WINDOW)
+                       creationflags=NO_WINDOW)
     if r.returncode != 0:
         raise OSError((r.stderr or r.stdout).strip() or "falha no PowerShell")
     return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]

@@ -6,7 +6,7 @@
 {% elif run %}
   <h2>Resultado</h2>
   <p class="av-linha-resumo">
-    <span class="chip {{ 'ok' if ok else 'erro' }}">{{ run.status }}</span>
+    <span class="chip {{ tom }}">{{ rotulo }}</span>
     {% if tests %}<span><strong>{{ tests.total }}</strong> testes · <strong>{{ (tests.failed or 0) + (tests.error or 0) }}</strong> com falha</span>{% endif %}
     {% if run.seconds is not none and run.seconds is defined %}<span>{{ run.seconds|round|int }} s</span>{% endif %}
     {% if run.attempts %}<span>{{ run.attempts }} {{ 'tentativa' if run.attempts == 1 else 'tentativas' }}</span>{% endif %}

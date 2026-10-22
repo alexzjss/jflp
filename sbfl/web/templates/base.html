@@ -12,13 +12,22 @@
 <body>
   <nav class="lateral">
     <div class="marca">JFLP Studio</div>
-    {% set itens = [("painel", "/", "Painel"), ("executar", "/executar", "Executar"), ("ambiente", "/ambiente", "Ambiente"),
-                    ("bugs", "/bugs", "Bugs"), ("lotes", "/lotes", "Lotes"), ("fila", "/fila", "Fila"),
-                    ("comparar", "/comparar", "Comparar"), ("receitas", "/receitas", "Receitas"),
-                    ("exportar", "/exportar", "Exportar")] %}
-    {% for chave, href, nome in itens %}
-    <a href="{{ href }}" class="{{ 'ativo' if page == chave else '' }}">{{ nome }}</a>
-    {% endfor %}
+    {# páginas internas que acendem um item principal #}
+    {% set destaque = {"painel": "resultados", "fila": "resultados", "lotes": "resultados",
+                       "executar": "rodar", "bugs": "rodar"}.get(page, page) %}
+    {% set mais = [("executar", "/executar", "Executar (pasta)"), ("bugs", "/bugs", "Bugs (lista completa)"),
+                   ("lotes", "/lotes", "Lotes"), ("fila", "/fila", "Fila"), ("comparar", "/comparar", "Comparar"),
+                   ("receitas", "/receitas", "Receitas"), ("exportar", "/exportar", "Exportar")] %}
+    <a href="/rodar" class="{{ 'ativo' if destaque == 'rodar' else '' }}">Rodar</a>
+    <a href="/resultados" class="{{ 'ativo' if destaque == 'resultados' else '' }}">Resultados
+      <span class="selo-vaga" hx-get="/fila/contagem" hx-trigger="load, every 4s" hx-swap="innerHTML"></span></a>
+    <a href="/ambiente" class="{{ 'ativo' if destaque == 'ambiente' else '' }}">Ambiente</a>
+    <details class="mais"{% if page in mais | map(attribute=0) | list %} open{% endif %}>
+      <summary>Mais</summary>
+      {% for chave, href, nome in mais %}
+      <a href="{{ href }}" class="{{ 'ativo' if page == chave else '' }}">{{ nome }}</a>
+      {% endfor %}
+    </details>
   </nav>
   <main>{% block content %}{% endblock %}</main>
   <script>

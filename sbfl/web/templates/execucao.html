@@ -6,15 +6,62 @@
 
 <section>
   <h2>Resultado</h2>
-  <p>Status: <strong class="{{ 'ok' if run.status in ('ok', 'ok_testes_falhando') else 'erro' }}">{{ run.status }}</strong>
+  <p><span class="chip {{ res_tom }}">{{ res_label }}</span>
+    <small class="vazio">({{ res_status }})</small>
     · tentativas: {{ run.attempts or 0 }}
     {% if run.seconds is not none %}· {{ run.seconds|round|int }} s{% endif %}
     {% if run.test_scope %}· testes: {{ 'relevantes' if run.test_scope == 'relevant' else 'todos' }}{% endif %}</p>
-  {% for w in run.warnings or [] %}<p class="aviso">{{ w }}</p>{% endfor %}
+  {% if res_cause %}<p><strong>{{ res_cause }}</strong></p>{% endif %}
+  {% for w in res_warnings %}<p class="aviso">{{ w }}</p>{% endfor %}
+
+  {% if res_failures %}
+  <h3>Testes que falharam e provável erro</h3>
+  <table class="provavel-erro">
+    <thead><tr><th>Teste</th><th>Mensagem</th><th>Onde (primeira linha do projeto na pilha)</th></tr></thead>
+    <tbody>{% for f in res_failures[:20] %}
+      <tr><td><code>{{ f.test }}</code></td><td>{{ f.message or '-' }}</td>
+        <td>{% if f.frame %}<code>{{ f.frame_text }}</code>{% if has_scores and res_scores and f.frame.line %} <a href="/run/{{ rel|q }}/codigo?classe={{ f.frame.cls|q }}#L{{ f.frame.line }}">ver no código</a>{% endif %}{% else %}<span class="vazio">sem pilha disponível</span>{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% if res_failures|length > 20 %}<p class="vazio">… e mais {{ res_failures|length - 20 }}.</p>{% endif %}
+  {% endif %}
+
+  {% if has_scores %}
+  <h3>10 linhas mais suspeitas</h3>
+  {% if res_top %}
+  <table class="topo-suspeitas">
+    <thead><tr><th>#</th><th>Classe:linha</th><th>Suspeita</th><th></th></tr></thead>
+    <tbody>{% for t in res_top %}
+      <tr {% if t.defeito %}class="defeito"{% endif %}><td>{{ t.rank }}</td>
+        <td><a href="/run/{{ rel|q }}/codigo?classe={{ t.cls|q }}#L{{ t.line }}">{{ t.cls }}:{{ t.line }}</a></td>
+        <td>{{ '%.4f'|format(t.susp) }}</td><td>{% if t.defeito %}linha do defeito{% endif %}</td></tr>
+    {% endfor %}</tbody>
+  </table>
+  {% if res_top_nota %}<p class="vazio">{{ res_top_nota }}</p>{% endif %}
+  {% else %}<p class="vazio">Nenhuma linha foi pontuada nesta execução.</p>{% endif %}
+  {% endif %}
+
+  {% if res_truth %}
+  <h3>Linhas do defeito (pelo patch)</h3>
+  {% if res_truth.ranked %}
+  <p>{% if res_truth.best_text %}<strong>{{ res_truth.best_text }}</strong>{% else %}nenhuma linha do defeito foi coberta pelos testes{% endif %}</p>
+  {% endif %}
+  <table class="linhas-defeito">
+    <thead><tr><th>Classe:linha</th>{% if res_truth.ranked %}<th>No ranking</th>{% endif %}</tr></thead>
+    <tbody>{% for t in res_truth.rows[:30] %}
+      <tr class="defeito"><td>{% if has_scores %}<a href="/run/{{ rel|q }}/codigo?classe={{ t.cls|q }}#L{{ t.line }}">{{ t.short }}:{{ t.line }}</a>{% else %}<code>{{ t.short }}:{{ t.line }}</code>{% endif %} <small class="vazio">{{ t.cls }}</small></td>
+      {% if res_truth.ranked %}<td>{% if t.best is not none %}{{ t.pos_text }}{% if t.tied > 1 %}, posição esperada {{ t.expected }}{% endif %}{% else %}<span class="vazio">não coberta</span>{% endif %}</td>{% endif %}</tr>
+    {% endfor %}</tbody>
+  </table>
+  {% if res_truth.n > 30 %}<p class="vazio">… e mais {{ res_truth.n - 30 }}.</p>{% endif %}
+  {% endif %}
+
   <div class="botoes">
     <form method="post" action="/run/{{ rel|q }}/abrir" hx-post="/run/{{ rel|q }}/abrir" hx-target="#abrir-ret"><button type="submit">Abrir pasta</button></form>
     <a class="botao" href="/run/{{ rel|q }}/zip">Exportar zip</a>
     {% if has_scores and total %}<a class="botao" href="/run/{{ rel|q }}/codigo">Ver no código</a>{% endif %}
+    {% if res_ranking %}<a class="botao" href="/run/{{ rel|q }}/ranking.csv">Baixar ranking (CSV)</a>{% endif %}
+    {% if res_raw %}<a class="botao" href="/run/{{ rel|q }}/espectro">Baixar saída bruta ({{ res_raw }})</a>{% endif %}
   </div>
   <span id="abrir-ret"></span>
 </section>

@@ -27,14 +27,22 @@
 <section>
   <h2>{{ proj }} ({{ rows|length }})</h2>
   {% if rows %}
-  {# A tela de novo lote (Tarefa 19) lê ?bugs=<chaves separadas por vírgula>. #}
-  <form method="get" action="/lotes">
+  {# "Rodar selecionados…" abre a tela de lotes (?bugs=<chaves separadas por vírgula>); os botões "com …" criam o lote direto. #}
+  <form method="post" action="/bugs/lote" id="form-bugs">
+    <input type="hidden" name="bench" value="{{ bench }}">
+    <input type="hidden" name="proj" value="{{ proj }}">
+    <p class="linha">
+      <input type="search" id="bugs-filtro" placeholder="Filtrar bugs…" autocomplete="off"
+             oninput="var q=this.value.toLowerCase();document.querySelectorAll('#form-bugs tbody tr').forEach(function(t){t.hidden=t.textContent.toLowerCase().indexOf(q)<0})">
+    </p>
     <table>
-      <thead><tr><th></th><th>Bug</th>{% for k, nome in kinds %}<th>{{ nome }}</th>{% endfor %}</tr></thead>
+      <thead><tr><th><input type="checkbox" id="bugs-todos" title="Selecionar todos os visíveis"
+            onchange="var c=this.checked;document.querySelectorAll('#form-bugs tbody tr:not([hidden]) .sel').forEach(function(x){x.checked=c})"></th>
+        <th>Bug</th>{% for k, nome in kinds %}<th>{{ nome }}</th>{% endfor %}</tr></thead>
       <tbody>
       {% for r in rows %}
         <tr>
-          <td><input type="checkbox" class="sel" value="{{ r.bug.key }}"></td>
+          <td><input type="checkbox" class="sel" name="sel" value="{{ r.bug.key }}"></td>
           <td><a href="/bug/{{ r.bug.key|q }}">{{ r.bug.bug_id }}</a></td>
           {% for k, nome in kinds %}
           {% set run = r.last.get(k) %}
@@ -45,7 +53,18 @@
       </tbody>
     </table>
     <input type="hidden" name="bugs" id="bugs-sel">
-    <p><button type="submit" onclick="document.getElementById('bugs-sel').value=[...document.querySelectorAll('.sel:checked')].map(c=>c.value).join(',')">Rodar selecionados…</button></p>
+    <p class="exe-campo"><strong>Rodar com</strong></p>
+    <div class="linha">
+      {% for k, nome in kinds %}<label><input type="checkbox" name="kinds" value="{{ k }}" {{ 'checked' if k in ('jaguar1', 'maven') else '' }}> {{ nome }}</label>{% endfor %}
+      <label><input type="checkbox" name="auto_search" value="1" checked> busca automática</label>
+    </div>
+    <div class="botoes" style="margin-top:10px">
+      <button type="submit" name="modo" value="selecionados">Rodar selecionados com os tipos marcados</button>
+      <button type="submit" name="modo" value="todos" formnovalidate
+              onclick="return confirm('Rodar todos os {{ rows|length }} bugs de {{ proj }} com os tipos marcados?')">Rodar todos de {{ proj }}</button>
+      <button type="submit" formaction="/lotes" formmethod="get" name="abrir" value="1"
+              onclick="document.getElementById('bugs-sel').value=[...document.querySelectorAll('.sel:checked')].map(c=>c.value).join(',')">Rodar selecionados… (mais opções)</button>
+    </div>
   </form>
   {% else %}
   <p class="vazio">Nenhum bug para mostrar.</p>

@@ -87,6 +87,11 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
         from .routes_assistente import deve_abrir_assistente
         if deve_abrir_assistente(home, app.state.settings):
             return RedirectResponse("/bem-vindo", status_code=303)
+        from .routes_rodar import rodar_pagina       # a página inicial é a Rodar; o Painel segue em /painel
+        return rodar_pagina(request)
+
+    @app.get("/painel", response_class=HTMLResponse)
+    def painel_antigo(request: Request):
         return app.state.templates.TemplateResponse(request, "painel.html", {"page": "painel", **estado()})
 
     @app.get("/painel/estado", response_class=HTMLResponse)
@@ -105,6 +110,8 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
     app.include_router(runs_router)
     from .routes_quick import router as quick_router
     app.include_router(quick_router)
+    from .routes_rodar import router as rodar_router
+    app.include_router(rodar_router)
     return app
 
 

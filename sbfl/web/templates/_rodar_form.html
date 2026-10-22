@@ -1,0 +1,98 @@
+<form id="rodar-form" method="post" action="/rodar" data-modo="{{ modo }}">
+  <input type="hidden" name="modo" value="{{ modo }}">
+  <input type="hidden" name="pasta" value="{{ pasta }}">
+  {% if modo == 'bugsjar' %}
+  <input type="hidden" name="repo" value="{{ repo }}">
+  <section id="s3" class="rd-passo">
+    <h2><span class="rd-num">3</span> Bugs de {{ nome }}</h2>
+    {% if bugs %}
+    <div class="rd-barra">
+      <button type="button" id="rd-todos">Todos ({{ bugs|length }})</button>
+      <button type="button" id="rd-nenhum">Nenhum</button>
+      <label for="rd-filtro" class="rd-oculto">Filtrar bugs</label>
+      <input type="search" id="rd-filtro" placeholder="Filtrar por id ou resumo" autocomplete="off">
+      <span id="rd-contagem" class="rd-contagem" role="status">0 selecionados</span>
+    </div>
+    <div class="rd-tabela">
+      <table>
+        <caption class="rd-oculto">Bugs do projeto</caption>
+        <thead><tr><th scope="col"><span class="rd-oculto">Marcar</span></th><th scope="col">Bug</th><th scope="col">Resumo</th><th scope="col">Último resultado</th></tr></thead>
+        <tbody>
+        {% for b in bugs %}
+          <tr class="rd-bug">
+            <td><input type="checkbox" class="rd-sel" name="sel" value="{{ b.branch }}" id="b{{ loop.index }}"
+                       aria-label="Selecionar {{ b.id }}" {{ 'checked' if b.marcado else '' }}></td>
+            <td><label for="b{{ loop.index }}"><strong>{{ b.id }}</strong></label></td>
+            <td class="rd-resumo" hx-get="/executar/bugsjar-resumo?repo={{ repo|q }}&ramo={{ b.branch|q }}"
+                hx-trigger="revealed" hx-swap="innerHTML"><span class="vazio">…</span></td>
+            <td>{% if b.ult %}<span class="chip {{ b.ult.tom }}">{{ b.ult.label }}</span>{% else %}<span class="vazio">-</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}<p class="vazio">Nenhum bug (ramo bugs-dot-jar_*) neste repositório.</p>{% endif %}
+  </section>
+  {% else %}
+  <section id="s3" class="rd-passo">
+    <h2><span class="rd-num">3</span> Módulo</h2>
+    {% if modulos %}
+    <label for="module" class="rd-rotulo">Módulo a executar</label>
+    <select id="module" name="module">
+      {% if raiz_pom %}<option value="">Projeto inteiro (raiz)</option>{% endif %}
+      {% for m in modulos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+    </select>
+    {% else %}<p class="vazio">Projeto Maven com um único pom.xml na raiz.</p>
+    <input type="hidden" name="module" value="">{% endif %}
+  </section>
+  {% endif %}
+  <section id="s4" class="rd-passo">
+    <h2><span class="rd-num">4</span> Ferramentas e opções</h2>
+    <div class="linha rd-ferramentas" role="group" aria-label="Ferramentas">
+      {% for k, nome_k in kinds %}<label class="rd-ferr"><input type="checkbox" name="kinds" value="{{ k }}" {{ 'checked' if k in sel else '' }}> {{ nome_k }}</label>{% endfor %}
+    </div>
+    <details class="rd-avancado">
+      <summary>Opções avançadas</summary>
+      <p><label><input type="checkbox" name="auto_search" value="1" checked> busca automática de correções</label></p>
+      {% if modo == 'bugsjar' %}
+      <p><label for="escopo">Testes a rodar</label>
+        <select id="escopo" name="escopo">
+          <option value="relevant">só os testes relevantes ao bug</option>
+          <option value="all">todos os testes</option>
+        </select></p>
+      {% endif %}
+    </details>
+    <p class="rd-acao"><button type="submit" id="rd-botao" class="primario rd-rodar">Rodar</button></p>
+  </section>
+</form>
+<script>
+(function () {
+  var f = document.getElementById("rodar-form");
+  if (!f) return;
+  var maven = f.dataset.modo === "maven";
+  var botao = document.getElementById("rd-botao"), cont = document.getElementById("rd-contagem");
+  var filtro = document.getElementById("rd-filtro");
+  function sels() { return f.querySelectorAll(".rd-sel"); }
+  function plural(n, um, varios) { return n + " " + (n === 1 ? um : varios); }
+  function atualiza() {
+    var n = maven ? 1 : f.querySelectorAll(".rd-sel:checked").length;
+    var k = f.querySelectorAll("input[name=kinds]:checked").length;
+    if (cont) cont.textContent = plural(n, "selecionado", "selecionados");
+    botao.textContent = "Rodar " + (maven ? "o projeto" : plural(n, "bug", "bugs")) + " × " + plural(k, "ferramenta", "ferramentas");
+    botao.disabled = n === 0 || k === 0;
+  }
+  function marca(valor) {
+    sels().forEach(function (c) { if (!c.closest("tr").hidden) c.checked = valor; });
+    atualiza();
+  }
+  var todos = document.getElementById("rd-todos"), nenhum = document.getElementById("rd-nenhum");
+  if (todos) todos.addEventListener("click", function () { marca(true); });
+  if (nenhum) nenhum.addEventListener("click", function () { marca(false); });
+  if (filtro) filtro.addEventListener("input", function () {
+    var q = filtro.value.toLowerCase().trim();
+    f.querySelectorAll("tr.rd-bug").forEach(function (tr) { tr.hidden = q && tr.textContent.toLowerCase().indexOf(q) < 0; });
+  });
+  f.addEventListener("change", atualiza);
+  atualiza();
+})();
+</script>

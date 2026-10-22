@@ -11,6 +11,10 @@ import time
 from typing import Callable
 
 
+# Processo-filho de console não abre janela (o app roda sem console, via pythonw).
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
 class Aborted(Exception):
     """A thread foi interrompida (fechamento do app): nenhum processo novo pode começar."""
 
@@ -61,7 +65,8 @@ atexit.register(kill_all)
 def kill_tree(p: subprocess.Popen) -> None:
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         else:
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
     except Exception:
@@ -94,7 +99,8 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
         p = subprocess.Popen(
             [str(c) for c in cmd], cwd=cwd, env=env, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-            bufsize=1, start_new_session=(os.name != "nt"),
+            bufsize=1, start_new_session=(os.name != "nt"), stdin=subprocess.DEVNULL,
+            creationflags=NO_WINDOW,
         )
         _LIVE.add(p)
         _OWNER[p] = threading.get_ident()

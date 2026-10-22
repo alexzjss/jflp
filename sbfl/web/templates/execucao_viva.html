@@ -93,16 +93,16 @@
   }, 500);
 
   function passos(e, ok) {
-    var idx = Math.max(0, ordem.indexOf(e.passo));
+    var idx = Math.max(0, ordem.indexOf(e.passo)), ruim = e.aviso ? "alerta" : "falha";
     Array.prototype.forEach.call(document.querySelectorAll("#av-passos li"), function (li, i) {
       var c = "espera";
       if (fim) {
         if (ok === true) c = "feito";
-        else c = i < idx ? "feito" : (i === idx ? (ok === false ? "falha" : "feito") : "espera");
+        else c = i < idx ? "feito" : (i === idx ? (ok === false ? ruim : "feito") : "espera");
       } else if (i < idx) c = "feito";
-      else if (i === idx) c = e.falhou ? "falha" : "atual";
+      else if (i === idx) c = e.falhou ? ruim : "atual";
       li.className = "av-passo " + c;
-      li.querySelector(".av-bola").textContent = c === "feito" ? "✓" : (c === "falha" ? "✗" : "");
+      li.querySelector(".av-bola").textContent = c === "feito" ? "✓" : (c === "falha" ? "✗" : (c === "alerta" ? "!" : ""));
     });
   }
 
@@ -144,9 +144,9 @@
     var box = $("av-chips"); box.textContent = "";
     e.tentativas.forEach(function (a) {
       var s = document.createElement("span"), ativa = !a.status && !fim && a.n === e.tentativa;
-      var okc = a.status === "ok" || a.status === "ok_testes_falhando";
-      s.className = "chip " + (ativa ? "chip-vivo" : !a.status ? "" : okc ? "ok" : a.status === "ignorada" ? "" : "erro");
-      s.textContent = "#" + a.n + " " + (a.status || (ativa ? "em andamento" : "—"));
+      var okc = a.status === "ok" || a.status === "ok_testes_falhando", avs = a.status === "sem_teste_falhando";
+      s.className = "chip " + (ativa ? "chip-vivo" : !a.status ? "" : okc ? "ok" : avs ? "alerta" : a.status === "ignorada" ? "" : "erro");
+      s.textContent = "#" + a.n + " " + (a.rotulo || a.status || (ativa ? "em andamento" : "—"));
       if (fim && !a.status && a.n === e.tentativa && statusFinal) {   // sem marcador de fim de tentativa: usa o status da execução
         s.textContent = "#" + a.n + " " + statusFinal; s.className = "chip " + (ok ? "ok" : "erro");
       }
@@ -176,8 +176,10 @@
       var corpo = box.firstElementChild, ok = corpo.dataset.ok === "" ? null : corpo.dataset.ok === "1";
       var cancelado = corpo.dataset.estado === "cancelled";
       statusFinal = corpo.dataset.status || "";
-      status(cancelado ? "Cancelado" : ok === null ? "Terminou sem resultado" : ok ? "Concluído" : "Terminou com problema",
-             cancelado || ok === null ? "" : ok ? "ok" : "erro");
+      var aviso = statusFinal === "sem_teste_falhando";
+      status(cancelado ? "Cancelado" : ok === null ? "Terminou sem resultado" : ok ? "Concluído"
+             : aviso ? "Terminou sem teste falhando" : "Terminou com problema",
+             cancelado || ok === null ? "" : ok ? "ok" : aviso ? "alerta" : "erro");
       $("av-fase").textContent = "";
       if (ultimo) estado(ultimo, ok === null ? (cancelado ? false : null) : ok);
       else {    // job que já tinha terminado quando a página abriu: não há progresso, só o resultado

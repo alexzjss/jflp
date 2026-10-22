@@ -8,6 +8,8 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from .. import queue as jobs_queue
+from .. import status as S
+from .. import store
 from ..progress import linha
 from .routes_bugs import KIND_LABEL
 from .routes_runs import _batch_ctx, _msg, _render
@@ -46,7 +48,7 @@ def _sem_mudanca(sig: str, atual: str):
     return Response(status_code=204) if sig and sig == atual else None
 
 
-def _fila_ctx(request: Request) -> dict:
+def _fila_ctx(request: Request, cta: bool = False) -> dict:
     st = request.app.state
     cur = st.worker.current()
     cur = cur if isinstance(cur, dict) else {}
@@ -58,7 +60,7 @@ def _fila_ctx(request: Request) -> dict:
                         "batch_name": nomes.get(j["batch_id"], "")})
     pending = jobs_queue.pending_jobs(st.home)
     sig = assinatura("r", *[j["id"] for j in running], "p", *[(j["id"], j.get("batch_state")) for j in pending])
-    return {"running": running, "pending": pending, "kind_label": KIND_LABEL, "sig": sig}
+    return {"running": running, "pending": pending, "kind_label": KIND_LABEL, "sig": sig, "cta": cta}
 
 
 @router.get("/fila", response_class=HTMLResponse)
@@ -67,9 +69,9 @@ def fila(request: Request):
 
 
 @router.get("/fila/estado", response_class=HTMLResponse)
-def fila_estado(request: Request, sig: str = ""):
+def fila_estado(request: Request, sig: str = "", cta: int = 0):
     """A fila inteira; com `sig` igual ao atual responde 204 (nada a trocar, os botões não são recriados)."""
-    ctx = _fila_ctx(request)
+    ctx = _fila_ctx(request, bool(cta))
     return _sem_mudanca(sig, ctx["sig"]) or _render(request, "_fila_estado.html", ctx)
 
 
@@ -148,3 +150,64 @@ def lote_excluir(request: Request, bid: int):
             return _msg(request, "lotes", "Lote não encontrado", f"Não existe o lote {bid}.", 404)
         return _recusa(request, str(e))
     return _voltar(request, "/lotes")
+
+
+# ------------------------------------------------------------ resultados (painel + fila + lotes)
+
+
+@router.get("/fila/contagem", response_class=HTMLResponse)
+def fila_contagem(request: Request):
+    """Selo da barra lateral: jobs em andamento + esperando (vazio quando não há nenhum)."""
+    home = request.app.state.home
+    n = len(jobs_queue.list_jobs(home, state="running", limit=1000)) + len(jobs_queue.pending_jobs(home))
+    return HTMLResponse(f'<span class="selo" title="{n} na fila">{n}</span>' if n else "")
+
+
+def _lotes_resumo(home, runs: list[dict], limite: int = 8) -> list[dict]:
+    """Lotes recentes com a contagem dos jobs concluídos por tom do status da execução (ok/alerta/erro)."""
+    tom_de = {r["path"]: S.tom(r.get("status") or "") for r in runs}
+    out = []
+    for b in jobs_queue.list_batches(home, limit=limite):
+        tons = {"ok": 0, "alerta": 0, "erro": 0}
+        for j in jobs_queue.batch_jobs(home, b["id"]):
+            if j["state"] == "done" and j["run_rel"]:
+                tons[tom_de.get(j["run_rel"], "erro")] += 1
+        out.append({**b, "tons": tons})
+    return out
+
+
+def _execucoes(home, q: str = "", ferramenta: str = "", tom: str = "", limite: int = 40) -> tuple[list[dict], int]:
+    """Execuções recentes filtradas (texto no caminho, ferramenta, tom do status); devolve (linhas, total que casa)."""
+    q = q.strip().lower()
+    achadas = []
+    for r in store.list_runs(home):
+        status = r.get("status") or ""
+        if ferramenta and r.get("kind") != ferramenta:
+            continue
+        if tom in ("ok", "alerta", "erro") and S.tom(status) != tom:
+            continue
+        if q and q not in r["path"].lower():
+            continue
+        achadas.append({**r, "tom": S.tom(status), "rotulo": S.label(status),
+                        "duracao": _tempo(r["seconds"]) if r.get("seconds") is not None else ""})
+    return achadas[:limite], len(achadas)
+
+
+def _exec_ctx(request: Request, q: str, ferramenta: str, tom: str) -> dict:
+    linhas, total = _execucoes(request.app.state.home, q, ferramenta, tom)
+    return {"execs": linhas, "execs_total": total, "q": q, "ferramenta": ferramenta, "tom_filtro": tom,
+            "kind_label": KIND_LABEL, "filtrando": bool(q.strip() or ferramenta or tom)}
+
+
+@router.get("/resultados", response_class=HTMLResponse)
+def resultados(request: Request, q: str = "", ferramenta: str = "", tom: str = ""):
+    home = request.app.state.home
+    ctx = {"page": "resultados", **_fila_ctx(request, cta=True), **_exec_ctx(request, q, ferramenta, tom),
+           "lotes": _lotes_resumo(home, store.list_runs(home))}
+    return _render(request, "resultados.html", ctx)
+
+
+@router.get("/resultados/execucoes", response_class=HTMLResponse)
+def resultados_execucoes(request: Request, q: str = "", ferramenta: str = "", tom: str = ""):
+    """Só a tabela de execuções recentes (alvo dos filtros htmx)."""
+    return _render(request, "_resultados_execucoes.html", _exec_ctx(request, q, ferramenta, tom))

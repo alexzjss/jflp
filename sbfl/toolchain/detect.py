@@ -5,11 +5,14 @@ import re
 import shlex
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..envcheck import java_major, maven_version
 from ..home import Home, Settings
+from ..proc import NO_WINDOW
 
 TIMEOUT = 20
 _WIN_JAVA_VENDORS = ("Java", "Eclipse Adoptium", "Zulu", "Microsoft", "Amazon Corretto")
@@ -56,11 +59,36 @@ def _run(cmd: list[str], env: dict | None = None, merge: bool = True) -> tuple[i
 
     Com merge=True a saída é stdout+stderr; senão, só stdout."""
     try:
-        p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT, env=env)
+        p = subprocess.run(cmd, capture_output=True, timeout=TIMEOUT, env=env,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     err = decode_console(p.stderr or b"") if merge else ""
     return p.returncode, decode_console(p.stdout or b"") + err
+
+
+# Cache em processo: cada sonda sobe uma JVM (1-2 s) e as telas repetem a detecção a cada troca de aba.
+# A chave inclui mtime e tamanho do executável: uma instalação trocada falha o cache sozinha.
+_CACHE_LOCK = threading.Lock()
+_PROBES: dict[tuple, object] = {}
+_WSL: dict[tuple, tuple[float, "WslStatus"]] = {}
+WSL_TTL = 60.0          # WSL instalado
+WSL_TTL_FALHA = 10.0    # ausente/quebrado: reavalia logo
+
+
+def clear_cache() -> None:
+    """Esquece as sondas (chamar depois de instalar ou apontar uma ferramenta)."""
+    with _CACHE_LOCK:
+        _PROBES.clear()
+        _WSL.clear()
+
+
+def _stat_key(exe: Path) -> tuple | None:
+    try:
+        st = exe.stat()
+    except OSError:
+        return None
+    return str(exe), st.st_mtime_ns, st.st_size
 
 
 def _exe(home: Path, name: str) -> Path:
@@ -80,14 +108,22 @@ def java_info(java_home: Path) -> tuple[int, str] | None:
     exe = _exe(Path(java_home), "java")
     if not exe.exists():
         return None
+    sk = _stat_key(exe)
+    key = ("java", sk)
+    if sk is not None:
+        with _CACHE_LOCK:
+            if key in _PROBES:
+                return _PROBES[key]
     res = _run([str(exe), "-version"])
-    if res is None:
+    if res is None:     # falha ao executar (timeout etc.): não guarda
         return None
     major = java_major(res[1])
-    if major is None:
-        return None
     m = re.search(r'version "([^"]+)"', res[1])
-    return major, m.group(1) if m else str(major)
+    out = (major, m.group(1) if m else str(major)) if major is not None else None
+    if sk is not None:
+        with _CACHE_LOCK:
+            _PROBES[key] = out
+    return out
 
 
 def _system_java_homes() -> list[Path]:
@@ -159,11 +195,23 @@ def maven_info(maven_home: Path, java_home: Path | None = None) -> tuple[int, in
     exe = _exe(Path(maven_home), "mvn")
     if not exe.exists():
         return None
+    sk = _stat_key(exe)
+    key = ("mvn", sk, str(java_home) if java_home is not None else None)
+    if sk is not None:
+        with _CACHE_LOCK:
+            if key in _PROBES:
+                return _PROBES[key]
     env = dict(os.environ)
     if java_home is not None:
         env["JAVA_HOME"] = str(java_home)
     res = _run([str(exe), "-v"], env=env)
-    return maven_version(res[1]) if res else None
+    if res is None:
+        return None
+    out = maven_version(res[1])
+    if sk is not None:
+        with _CACHE_LOCK:
+            _PROBES[key] = out
+    return out
 
 
 def _system_maven_homes() -> list[Path]:
@@ -205,6 +253,18 @@ def wsl_status(settings: Settings) -> WslStatus:
     """Situação do WSL e do Defects4J dentro dele (só no Windows)."""
     if not _is_windows():
         return WslStatus(False, [], None, "não se aplica")
+    key = (settings.get("defects4j", "wsl_distro"), settings.get("defects4j", "home"))
+    with _CACHE_LOCK:
+        hit = _WSL.get(key)
+    if hit and time.monotonic() < hit[0]:
+        return hit[1]
+    st = _wsl_probe(settings)
+    with _CACHE_LOCK:
+        _WSL[key] = (time.monotonic() + (WSL_TTL if st.installed else WSL_TTL_FALHA), st)
+    return st
+
+
+def _wsl_probe(settings: Settings) -> WslStatus:
     res = _run(["wsl.exe", "-l", "-q"])
     if res is None:
         return WslStatus(False, [], None, "WSL não encontrado neste computador.")

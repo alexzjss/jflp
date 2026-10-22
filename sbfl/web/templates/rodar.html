@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Rodar - JFLP Studio{% endblock %}
+{% block content %}
+<div class="rd">
+<h1>Rodar bugs</h1>
+<p class="vazio rd-intro">Escolha a pasta do repositório (Bugs.jar ou um projeto Maven), marque o que rodar e pronto.</p>
+{% if erro %}<p class="aviso erro" role="alert">{{ erro }}</p>{% endif %}
+{% include "_rodar_pasta.html" %}
+<div id="fluxo" aria-live="polite"{% if pasta %} hx-get="/rodar/pasta?projeto={{ pasta|q }}" hx-trigger="load"{% endif %}></div>
+</div>
+{% endblock %}

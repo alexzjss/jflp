@@ -33,6 +33,17 @@ def fed(lines, kind="maven") -> Progress:
     return p
 
 
+class TomTest(unittest.TestCase):
+    def test_estilo_por_status(self):
+        from sbfl import status as st
+        self.assertEqual(st.tom("ok"), "ok")
+        self.assertEqual(st.tom("ok_testes_falhando"), "ok")
+        self.assertEqual(st.tom("sem_teste_falhando"), "alerta")
+        self.assertEqual(st.tom("timeout"), "erro")
+        self.assertEqual(st.tom(""), "erro")
+        self.assertFalse(st.is_success("sem_teste_falhando"))
+
+
 class ParseGoalTest(unittest.TestCase):
     def test_forms(self):
         self.assertEqual(parse_goal("--- maven-compiler-plugin:3.8.0:compile (default-compile) @ x ---"),
@@ -158,6 +169,17 @@ class AttemptsTest(unittest.TestCase):
     def test_failed_attempt_marks_step_failed(self):
         d = fed(["# jflp tentativa 1", "# jflp tentativa 1: compilacao_falhou"]).to_dict()
         self.assertTrue(d["falhou"])
+
+    def test_sem_teste_falhando_is_aviso_not_failure_nor_success(self):
+        p = fed(["# jflp tentativa 1", "# jflp tentativa 1: sem_teste_falhando"])
+        d = p.to_dict()
+        self.assertTrue(d["aviso"])
+        self.assertFalse(d["falhou"])                     # não pinta o passo de vermelho
+        self.assertEqual((d["etapa"], d["passo"]), ("tentativa", "preparar"))   # não avança para gravar
+        self.assertEqual(d["tentativas"][0]["rotulo"], "concluída, mas nenhum teste falhou")
+        p.finish("sem_teste_falhando")
+        self.assertTrue(p.to_dict()["aviso"])
+        self.assertFalse(p.to_dict()["falhou"])
 
     def test_success_moves_to_recording(self):
         d = fed(["# jflp tentativa 1", "# jflp tentativa 1: ok"]).to_dict()

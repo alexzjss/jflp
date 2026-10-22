@@ -17,7 +17,7 @@
   {% elif c.state == 'cancelled' %}
   <p class="vazio">Cancelado.</p>
   {% elif c.run %}
-  <p>Status: <strong class="{{ 'ok' if c.ok else 'erro' }}">{{ c.run.status }}</strong>
+  <p>Status: <strong class="{{ c.tom }}">{{ c.rotulo }}</strong>
     {% if c.run.attempts %}· tentativas: {{ c.run.attempts }}{% endif %}
     {% if c.run.seconds is not none and c.run.seconds is defined %}· {{ c.run.seconds|round|int }} s{% endif %}</p>
   {% if c.cause %}<p>{{ c.cause }}</p>{% endif %}

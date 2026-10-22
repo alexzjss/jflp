@@ -349,3 +349,54 @@ class WebBugs(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class BugsLoteDireto(unittest.TestCase):
+    """Tela Bugs: seleção múltipla e "Rodar todos" criam o lote direto, com a mesma chave da lista."""
+
+    def setUp(self):
+        WebBugs.setUp(self)      # mesma home/app/cliente, sem herdar os testes
+        from tests.bugsjar_fixture import make_bugsjar_git
+        self.repo = make_bugsjar_git(self.tmp / "col", ("A-1", "A-2", "A-3"))
+        self.settings.set("bugsjar", "root", str(self.repo.parent))
+
+    def ramo(self, i):
+        from tests.bugsjar_fixture import ramo_de
+        return ramo_de(i)
+
+    def test_lista_tem_selecao_filtro_e_botoes(self):
+        r = self.c.get("/bugs?bench=bugsjar&proj=maven")
+        self.assertEqual(r.status_code, 200)
+        for t in ("bugs-todos", "bugs-filtro", "Rodar selecionados com os tipos marcados", "Rodar todos de maven",
+                  'action="/bugs/lote"', 'name="sel"'):
+            self.assertIn(t, r.text)
+        self.assertIn(f"/bug/bugsjar/maven/{self.ramo('A-1')}", r.text)
+
+    def test_selecionados_cria_lote_com_jaguar1_e_maven(self):
+        keys = [f"bugsjar/maven/{self.ramo(i)}" for i in ("A-1", "A-3")]
+        r = self.c.post("/bugs/lote", data={"bench": "bugsjar", "proj": "maven", "modo": "selecionados",
+                                            "sel": keys, "kinds": ["jaguar1", "maven"]}, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        bid = int(r.headers["location"].rsplit("/", 1)[1])
+        self.assertTrue(r.headers["location"].startswith("/lote/"))
+        jobs = jq.batch_jobs(self.home, bid)
+        self.assertEqual(sorted({j["bug_key"] for j in jobs}), sorted(keys))
+        self.assertEqual(len(jobs), 4)
+
+    def test_todos_do_repositorio(self):
+        r = self.c.post("/bugs/lote", data={"bench": "bugsjar", "proj": "maven", "modo": "todos",
+                                            "kinds": ["maven"]}, follow_redirects=False)
+        bid = int(r.headers["location"].rsplit("/", 1)[1])
+        self.assertEqual(len(jq.batch_jobs(self.home, bid)), 3)
+
+    def test_erros_nao_criam_lote(self):
+        base = {"bench": "bugsjar", "proj": "maven", "modo": "selecionados"}
+        for data, msg in (({**base, "kinds": ["maven"]}, "Marque pelo menos um bug"),
+                          ({**base, "sel": ["bugsjar/maven/x"]}, "Escolha pelo menos um tipo"),
+                          ({**base, "sel": ["bugsjar/maven/x"], "kinds": ["maven"]}, "Bug não encontrado"),
+                          ({"bench": "zzz", "kinds": ["maven"]}, "Benchmark desconhecido")):
+            r = self.c.post("/bugs/lote", data=data)
+            self.assertEqual(r.status_code, 400)
+            self.assertIn(msg, r.text)
+        self.assertEqual(jq.list_batches(self.home), [])

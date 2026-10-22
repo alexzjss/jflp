@@ -11,6 +11,7 @@ from sbfl.adapters.base import Bug
 from sbfl.errors import StageError
 from sbfl.home import Home, load_settings
 from sbfl.toolchain.detect import WslStatus
+from tests.bugsjar_fixture import make_bugsjar_repo
 
 
 def _git(repo, *a):
@@ -53,6 +54,44 @@ class Base(unittest.TestCase):
 
 
 class PrepareTests(Base):
+    def _submodulo(self):
+        root = self.root / "repo"
+        (root / "sub").mkdir(parents=True)
+        (root / "pom.xml").write_text("<project><groupId>g</groupId><artifactId>pai</artifactId>"
+                                      "<version>1</version></project>")
+        (root / "sub" / "pom.xml").write_text(
+            "<project><parent><groupId>g</groupId><artifactId>pai</artifactId><version>1</version>"
+            "</parent><artifactId>sub</artifactId></project>")
+        return root
+
+    def test_local_submodulo_sobe_para_a_raiz_do_pai(self):
+        root = self._submodulo()
+        bug = P.local_bug(str(root / "sub"))
+        self.assertEqual(bug.extra["path"], str(root.resolve()))
+        self.assertEqual(bug.extra["module"], "sub")
+        self.assertEqual(bug.project, "repo")
+
+    def test_local_submodulo_com_modulo_informado(self):
+        root = self._submodulo()
+        (root / "sub" / "inner").mkdir()
+        (root / "sub" / "inner" / "pom.xml").write_text("<project/>")
+        bug = P.local_bug(str(root / "sub"), "inner")
+        self.assertEqual(bug.extra["module"], "sub/inner")
+
+    def test_local_submodulo_pasta_grande_nao_sobe(self):
+        root = self._submodulo()
+        with mock.patch.object(P, "folder_too_big", return_value="mais de 1 arquivos"):
+            bug = P.local_bug(str(root / "sub"))
+        self.assertEqual(bug.extra["path"], str((root / "sub").resolve()))
+        self.assertNotIn("module", bug.extra)
+
+    def test_local_sem_pai_no_disco_mantem_a_pasta(self):
+        src = self.root / "solto"
+        src.mkdir()
+        (src / "pom.xml").write_text("<project/>")
+        bug = P.local_bug(str(src))
+        self.assertEqual(bug.extra, {"path": str(src.resolve())})
+
     def test_local_dir_copy_does_not_touch_source(self):
         src = self.root / "meu proj"
         (src / "target").mkdir(parents=True)
@@ -392,3 +431,119 @@ class PrepareTests(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BugsjarLocal(Base):
+    """Pasta local dentro de um repositório do Bugs.jar: verdade, módulo e testes vêm de `.bugs-dot-jar`."""
+
+    def prep(self, escolha="apache-maven", repo=None):
+        repo = repo or make_bugsjar_repo(self.root)
+        bug = P.local_bug(str(repo / escolha) if escolha else str(repo))
+        return repo, bug, P.prepare(self.home, self.settings, bug, self.log)
+
+    def test_sobe_a_raiz_e_usa_o_modulo_do_patch(self):
+        repo, bug, prep = self.prep()
+        self.assertEqual(Path(bug.extra["path"]), repo.resolve())
+        self.assertEqual(bug.extra["module"], "apache-maven")      # escolha do usuário, antes do prepare
+        self.assertEqual(prep.module, "maven-core")
+        w = prep.info["warnings"]
+        self.assertTrue(any("apache-maven" in t and "não tem código-fonte (empacotamento pom)" in t for t in w))
+        self.assertTrue(any("maven-core" in t for t in w))
+
+    def test_verdade_so_com_codigo_de_producao(self):
+        _, _, prep = self.prep()
+        got = {(f.cls, f.line, f.kind) for f in prep.truth}
+        self.assertEqual({c for c, _, _ in got}, {"org.x.Foo"})
+        self.assertIn(("org.x.Foo", 4, "removed"), got)
+        self.assertIn(("org.x.Foo", 10, "anchor"), got)
+
+    def test_testes_relevantes_vem_do_test_results(self):
+        _, _, prep = self.prep()
+        self.assertEqual(prep.relevant_tests, ["org.x.BoomTest", "org.x.FooTest"])
+
+    def test_sem_test_results_usa_testes_do_patch(self):
+        repo = make_bugsjar_repo(self.root, results=None)
+        _, _, prep = self.prep(repo=repo)
+        self.assertEqual(prep.relevant_tests, ["org.x.FooTest"])
+
+    def test_test_results_so_com_secoes_resolve_pelo_nome_simples(self):
+        res = "Results :\n\nFailed tests: \n  FooTest.testA:340 expected\n\nTests run: 1, Failures: 1\n"
+        repo = make_bugsjar_repo(self.root, results=res)
+        _, _, prep = self.prep(repo=repo)
+        self.assertEqual(prep.relevant_tests, ["org.x.FooTest"])
+
+    def test_modulo_certo_do_usuario_nao_gera_aviso(self):
+        _, _, prep = self.prep(escolha="maven-core")
+        self.assertEqual(prep.module, "maven-core")
+        self.assertEqual(prep.info.get("warnings", []), [])
+
+    def test_avisos_sobrevivem_ao_marcador(self):
+        _, bug, prep = self.prep()
+        again = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertEqual(again.info["warnings"], prep.info["warnings"])
+        self.assertEqual(again.module, "maven-core")
+        self.assertEqual(again.truth, prep.truth)
+        self.assertEqual(again.relevant_tests, prep.relevant_tests)
+
+    def test_patch_ilegivel_nao_derruba_a_preparacao(self):
+        repo = make_bugsjar_repo(self.root, patch="lixo\n")
+        _, _, prep = self.prep(repo=repo)
+        self.assertEqual(prep.truth, [])
+        self.assertEqual(prep.module, "apache-maven")
+
+    def test_sem_bugs_dot_jar_nada_muda(self):
+        src = self.root / "plain"
+        (src / "src/main/java").mkdir(parents=True)
+        (src / "pom.xml").write_text("<project/>")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        self.assertEqual(prep.truth, [])
+        self.assertIsNone(prep.relevant_tests)
+        self.assertEqual(prep.module, ".")
+        self.assertNotIn("warnings", prep.info)
+
+    def test_modulo_sem_codigo_avisa_mesmo_sem_bugsjar(self):
+        src = self.root / "dist"
+        src.mkdir()
+        (src / "pom.xml").write_text("<project><packaging>pom</packaging></project>")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        self.assertTrue(any("não tem código-fonte (empacotamento pom)" in t for t in prep.info["warnings"]))
+
+    def test_helpers(self):
+        repo = make_bugsjar_repo(self.root)
+        self.assertEqual(P.find_bugsjar_repo(repo / "apache-maven"), repo)
+        self.assertEqual(P.find_bugsjar_repo(repo), repo)
+        self.assertIsNone(P.find_bugsjar_repo(self.root))
+        self.assertEqual(P.modules_with_code(repo), ["maven-core"])
+        self.assertTrue(P.module_without_code(repo, "apache-maven"))
+        self.assertFalse(P.module_without_code(repo, "maven-core"))
+
+
+class BugsjarRepoBugs(unittest.TestCase):
+    """Listagem de bugs de um repositório do Bugs.jar (git de verdade) e resumo do bug-report.yml."""
+
+    def test_lista_resumo_e_rotulo(self):
+        import shutil
+        import tempfile
+        from sbfl.prepare import bugsjar_label, bugsjar_repo_bugs, bugsjar_summary
+        from tests.bugsjar_fixture import make_bugsjar_git, ramo_de
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        repo = make_bugsjar_git(tmp, ("MNG-1", "MNG-2"))
+        bugs = bugsjar_repo_bugs(repo)
+        self.assertEqual([b.bug_id for b in bugs], sorted([ramo_de("MNG-1"), ramo_de("MNG-2")]))
+        self.assertEqual(bugs[0].key, f"bugsjar/maven/{bugs[0].bug_id}")
+        self.assertEqual(bugs[0].extra["fixed"], bugs[0].bug_id.rsplit("_", 1)[-1])
+        self.assertEqual(bugsjar_label(ramo_de("MNG-2")), "MNG-2")
+        self.assertEqual(bugsjar_summary(repo, ramo_de("MNG-2")), "resumo do MNG-2")
+        self.assertEqual(bugsjar_summary(repo, "master"), "")
+        (repo / ".bugs-dot-jar" / "bug-report.yml").write_text(
+            "BugID: X\nSummary: 'uma frase longa\n  continua aqui'\nDescription: d\n", encoding="utf-8")
+        for args in (("add", "-A"), ("commit", "-q", "-m", "m")):
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                           check=True, capture_output=True)
+        self.assertEqual(bugsjar_summary(repo, "HEAD"), "uma frase longa continua aqui")
+
+    def test_sem_git_lista_vazia(self):
+        import tempfile
+        from sbfl.prepare import bugsjar_repo_bugs
+        self.assertEqual(bugsjar_repo_bugs(Path(tempfile.gettempdir()) / "nao-existe-bj"), [])

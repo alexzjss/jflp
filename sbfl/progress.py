@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 import time
 
+from .status import AVISO, label
+
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _PREFIX = re.compile(r"^\[(INFO|ERROR|WARNING|WARN|DEBUG)\]\s?")
 _GOAL = re.compile(r"^--- (\S+?) \(([^)]*)\)(?: @ (\S+))? ---")
@@ -30,7 +32,7 @@ _TEST_REPORT = ("Tests run:", "There are test failures", "Failures:", "Errors:",
 
 STEPS = ("preparar", "compilar", "testes", "analise", "gravar")   # ordem da linha do tempo
 _STEP_ORDER = {s: i for i, s in enumerate(STEPS)}
-SUCCESS = ("ok", "ok_testes_falhando")
+SUCCESS = ("ok", "ok_testes_falhando")   # AVISO (sem_teste_falhando) não entra aqui: não é sucesso
 
 PHASE_LABEL = {"reactor": "preparando o reactor", "pom": "gerando o POM", "maven": "executando o Maven",
                "jaguar2": "executando o Jaguar 2", "jaguar1": "executando o Jaguar 1"}
@@ -103,6 +105,12 @@ class Progress:
         self.passo = "preparar"
         self.fase = "preparando"
         self.falhou = False
+        self.aviso = False
+
+    def _set_status(self, status: str) -> None:
+        """Sucesso não marca falha; aviso (âmbar) não é falha nem sucesso."""
+        self.aviso = status in AVISO
+        self.falhou = status not in SUCCESS and not self.aviso
 
     # ---------------------------------------------------------------- entrada
     def feed(self, line) -> None:
@@ -169,8 +177,9 @@ class Progress:
             elif m.group(4):                                # fim da tentativa, com status
                 a = self._attempt(n)
                 a["status"] = m.group(4)
-                self.falhou = m.group(4) not in SUCCESS
-                if not self.falhou:
+                a["rotulo"] = label(m.group(4))
+                self._set_status(m.group(4))
+                if not self.falhou and not self.aviso:
                     self.etapa, self.passo, self.fase = "gravando", "gravar", "gravando o resultado"
             else:                                           # início da tentativa
                 self.n_tentativa = n
@@ -278,7 +287,7 @@ class Progress:
         self.etapa = "fim"
         self._fim = self._clock()
         if status:
-            self.falhou = status not in SUCCESS
+            self._set_status(status)
 
     @property
     def steps(self) -> list[str]:
@@ -291,7 +300,7 @@ class Progress:
         t["classes_falhas"] = list(t["classes_falhas"][-5:])
         return {
             "etapa": self.etapa, "tentativa": self.n_tentativa, "fase": self.fase, "passo": self.passo,
-            "passos": self.steps, "falhou": self.falhou, "kind": self.kind,
+            "passos": self.steps, "falhou": self.falhou, "aviso": self.aviso, "kind": self.kind,
             "modulo": dict(self.modulo) if self.modulo else None,
             "downloads": dict(self.downloads), "testes": t, "compilacao": self.compilacao,
             "tentativas": [dict(a) for a in self.tentativas], "ultimo_erro": self.ultimo_erro,

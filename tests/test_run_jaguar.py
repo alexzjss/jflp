@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import xml.etree.ElementTree as ET
 from unittest import mock
 from pathlib import Path
 
@@ -366,6 +367,57 @@ class Jaguar1Test(Base):
         self.assertIsNone(r.rc)
         self.assertEqual(r.extra["fase"], "jaguar1_lib")
         self.assertIn("Jaguar 1", r.extra["erro"])
+
+    def test_logback_proprio_grava_o_jaguarlogger_em_arquivo(self):
+        from sbfl.jaguar import build_cmd, write_logback
+        ctx = Ctx(self.tmp, "c", "t", [], [], [])
+        cfg = self.tmp / "lb.xml"
+        write_logback(cfg, self.tmp / "tests & log.log")
+        txt = cfg.read_text(encoding="utf-8")
+        self.assertIn('<logger name="JaguarLogger" level="DEBUG">', txt)
+        self.assertIn("tests &amp; log.log", txt)
+        self.assertEqual(ET.fromstring(txt).tag, "configuration")
+        opts = JaguarOptions(lib=self.tmp, java="java")
+        flag = f"-Dlogback.configurationFile={cfg.resolve().as_posix()}"
+        cmd = build_cmd(opts, ctx, self.tmp / "tf", "o", "Ochiai", cfg)
+        self.assertIn(flag, cmd)
+        self.assertLess(cmd.index(flag), cmd.index("-cp"))
+        self.assertFalse(any("logback" in c for c in build_cmd(opts, ctx, self.tmp / "tf", "o", "Ochiai")))
+
+    def test_run_jaguar1_stdout_cortado_usa_arquivo_e_xml(self):
+        """Um teste troca System.out: o stdout para no 1º teste, mas o arquivo do JaguarLogger e o XML têm tudo."""
+        script = self.tmp / "cortado.py"
+        script.write_text(textwrap.dedent('''\
+            import sys, os
+            a = sys.argv
+            out = a[a.index("-o") + 1]
+            lb = [x for x in a if x.startswith("-Dlogback.configurationFile=")]
+            assert lb, a
+            cfg = open(lb[0].split("=", 1)[1], encoding="utf-8").read()
+            f = cfg.split("<file>")[1].split("</file>")[0]
+            print("10:00:00.000 [main] DEBUG JaguarLogger - Test t1(x.AllTest) : Passed", flush=True)
+            with open(f, "a", encoding="utf-8") as lf:
+                for n, st in (("t1", "Passed"), ("t2", "Failed"), ("t3", "Passed")):
+                    lf.write("Test %s(x.AllTest) : %s\\n" % (n, st))
+            os.makedirs(".jaguar", exist_ok=True)
+            p = os.path.abspath(f".jaguar/{out}.xml")
+            open(p, "w").write('<F><requirements location="5" cef="1" cep="0" cnf="0" cnp="2" name="a.B" suspicious-value="1.0"/></F>')
+            '''))
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        (lib / "jacocoagent.jar").write_bytes(b"jar")
+        self.settings.set("jaguar1", "lib", str(lib))
+        te = self.toolenv(8, FakeEnv)
+        te.fake_java = str(_wrapper(self.tmp / "fakejava2", script))
+        work = self.tmp / "w2"
+        work.mkdir()
+        prep = Prepared(Bug("local", "p", "1"), work, ".", ["x.AllTest"], [], {})
+        r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(), self.tmp / "j2.log", toolenv=te)
+        self.assertEqual(r.rc, 0, r.extra)
+        self.assertEqual(r.tests, {"x.AllTest#t1": "passed", "x.AllTest#t2": "failed", "x.AllTest#t3": "passed"})
+        self.assertEqual(r.extra["test_counts"], {"total": 3, "passed": 2, "failed": 1, "error": 0, "skipped": 0})
+        self.assertFalse(r.extra["log_truncado"])     # o arquivo do JaguarLogger completa o que o stdout perdeu
+        self.assertIn("Test t3(x.AllTest) : Passed", r.log.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

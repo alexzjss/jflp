@@ -116,6 +116,8 @@ button[disabled] { opacity: .5; cursor: not-allowed; }
   border: 1px solid var(--line); background: var(--bg); font-size: .85em; white-space: nowrap; }
 .chip.ok { color: var(--ok); border-color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .chip.erro { color: var(--err); border-color: var(--err); background: color-mix(in srgb, var(--err) 12%, transparent); }
+.chip.alerta { color: #8a5a00; border-color: #c98a00; background: rgba(201,138,0,.14); }
+@media (prefers-color-scheme: dark) { .chip.alerta { color: #f2c14e; } }
 .chip-vivo { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .chip-vivo::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
   animation: av-pulso 1.3s ease-in-out infinite; }
@@ -133,6 +135,8 @@ button[disabled] { opacity: .5; cursor: not-allowed; }
 .av-passo:first-child::before { display: none; }
 .av-passo.feito::before, .av-passo.atual::before { background: var(--ok); }
 .av-passo.falha::before { background: var(--err); }
+.av-passo.alerta::before { background: #c98a00; }
+.av-passo.alerta .av-bola { background: #c98a00; border-color: #c98a00; color: var(--panel); }
 .av-bola { position: relative; z-index: 1; width: 32px; height: 32px; border-radius: 50%; display: grid;
   place-items: center; background: var(--panel); border: 3px solid var(--line); font-weight: 700; font-size: .95rem; }
 .av-passo.feito .av-bola { background: var(--ok); border-color: var(--ok); color: var(--panel); }
@@ -183,3 +187,71 @@ a.botao.primario { background: var(--accent); border-color: var(--accent); color
   .av-numeros b { font-size: 1.9rem; }
   .mini { min-width: 0; }
 }
+
+/* Executar: seletor de defeitos do Bugs.jar */
+.bj-lista { margin: 10px 0; }
+.bj-itens { list-style: none; padding: 0; margin: 0 0 10px; max-height: 320px; overflow: auto; }
+.bj-linha { padding: 3px 0; border-bottom: 1px solid rgba(128, 128, 128, .2); }
+.bj-linha[hidden] { display: none; }
+.bj-resumo { display: block; margin-left: 24px; font-size: .9em; }
+button.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* resultados e navegação */
+.lateral a { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 20px; }
+.lateral details.mais { margin-top: 8px; border-top: 1px solid rgba(255,255,255,.12); }
+.lateral details.mais summary { cursor: pointer; padding: 8px 20px; color: var(--side-text); opacity: .7; font-size: .9em; }
+.lateral details.mais summary:hover, .lateral details.mais[open] summary { opacity: 1; }
+.lateral details.mais a { padding-left: 32px; font-size: .92em; }
+.selo { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent);
+  color: #fff; font-size: .75rem; font-weight: 700; text-align: center; line-height: 20px; }
+.selo-vaga:empty { display: none; }
+main section { padding: 10px 16px 12px; margin-bottom: 14px; }
+main section > h2 { margin-top: 2px; }
+table.compacta th, table.compacta td { padding: 5px 8px; vertical-align: middle; }
+table.compacta thead th { font-size: .82rem; text-transform: uppercase; letter-spacing: .03em; }
+table.compacta tbody tr:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+td.num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+td.chips { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 0; }
+.chip { font-size: .82rem; white-space: nowrap; }
+form.filtros { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+form.filtros input[type=search] { flex: 1 1 220px; min-width: 160px; }
+@media (max-width: 760px) { .lateral details.mais a { padding-left: 24px; } }
+
+/* rodar */
+.rd { max-width: 900px; }
+.rd-intro { margin-top: -6px; }
+.rd-passo { padding: 16px 22px 20px; margin-bottom: 16px; }
+.rd-passo h2 { display: flex; align-items: center; gap: 10px; font-size: 1.1rem; margin: 0 0 10px; }
+.rd-num { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+  border-radius: 50%; background: var(--accent); color: #fff; font-size: .9rem; font-weight: 700; flex-shrink: 0; }
+.rd-num.rd-feito { background: var(--ok); }
+.rd-fechado { padding-bottom: 12px; }
+.rd-fechado h2 { margin-bottom: 2px; }
+.rd-linha { margin: 0 0 0 36px; }
+.rd-trocar { margin-left: 10px; }
+.rd-rotulo { display: block; font-weight: 600; margin-bottom: 6px; }
+.rd-pasta .linha input[type=text] { flex: 1; min-width: 260px; }
+.rd-recentes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.rd-chip { border-radius: 999px; padding: 3px 12px; font-size: .9em; }
+.rd-nota { margin: 0 0 10px; }
+.rd-projetos { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.rd-projeto { width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  padding: 12px 14px; text-align: left; }
+.rd-barra { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rd-barra input[type=search] { flex: 1; min-width: 180px; }
+.rd-contagem { margin-left: auto; font-weight: 600; }
+.rd-tabela { max-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.rd-tabela thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.rd-tabela tr[hidden] { display: none; }
+.rd-resumo { color: var(--muted); font-size: .92em; }
+.rd-oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.rd-ferramentas { gap: 22px; margin-bottom: 8px; }
+.rd-ferr { display: inline-flex; align-items: center; gap: 6px; font-size: 1.02rem; }
+.rd-avancado { margin-top: 6px; }
+.rd-avancado summary { cursor: pointer; color: var(--muted); }
+.rd-acao { margin: 18px 0 0; }
+.rd-rodar { font-size: 1.1rem; padding: 12px 26px; font-weight: 600; }
+.rd-rodar:disabled { opacity: .5; cursor: not-allowed; }
+.rd button:focus-visible, .rd input:focus-visible, .rd select:focus-visible, .rd summary:focus-visible,
+.rd a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

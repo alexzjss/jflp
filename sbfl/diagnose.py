@@ -5,17 +5,21 @@ Falha de teste causada pelo bug é DADO (`ok_testes_falhando`), nunca erro e nun
 from __future__ import annotations
 
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import status as st
-from .outputs import parse_jaguar2_csv
+from .outputs import AVISO_LOG_INTERROMPIDO, jaguar1_scores, parse_jaguar2_csv
 from .pomgen.pom import junit_declared, junit_is_old
 from .run_maven import AttemptResult
 
 MAX_LOG_BYTES = 400_000
 MAX_EVIDENCE = 8
 MAX_LINE = 300
+SEM_INSTRUMENTACAO = ("nenhuma classe do código foi instrumentada "
+                      "(módulo sem código-fonte ou classes fora de target/classes)")
+_CACHE_VAZIO = re.compile(r"ClassFilesCache size = 0")
 
 
 @dataclass
@@ -75,6 +79,12 @@ RULES: list[Rule] = [
          r"Could not find the selected project in the reactor",
          "O Maven não achou um pom.xml onde foi executado (ou o módulo informado não existe no reactor): "
          "escolha a pasta que contém o pom.xml ou informe o módulo", only_errors=True),
+    Rule(st.PROJETO_INVALIDO,
+         r"Non-resolvable parent POM.*(?:relativePath|points at wrong local POM)|"
+         r"(?:relativePath|points at wrong local POM).*Non-resolvable parent POM",
+         "O pom.xml herda de um pom pai que não está na pasta escolhida (nem em repositório remoto): "
+         "escolha a pasta raiz do projeto, que contém o pom pai, e informe esta subpasta como módulo",
+         only_errors=True),
     Rule(st.JDK_INCOMPATIVEL,
          r"Failed to extract descriptors|Failed to execute goal.*Index \d+ out of bounds for length \d+|"
          r"Unsupported class file major version|"
@@ -265,6 +275,12 @@ def _classify(kind: str, res: AttemptResult) -> Diagnosis:
     if _success(kind, res):
         failed = any(v in ("failed", "error") for v in res.tests.values())
         warnings: list[str] = []
+        if kind == "jaguar1":     # o XML manda: o log do Jaguar pode ter sido cortado por um teste
+            tc = (res.extra or {}).get("test_counts") or {}
+            failed = failed or (tc.get("failed") or 0) > 0 or (tc.get("error") or 0) > 0
+            if (res.extra or {}).get("log_truncado"):
+                warnings.append(AVISO_LOG_INTERROMPIDO)
+        scores = None
         if kind == "jaguar2":
             try:
                 scores = parse_jaguar2_csv(Path(res.outputs["jaguar2_csv"]))
@@ -273,9 +289,18 @@ def _classify(kind: str, res: AttemptResult) -> Diagnosis:
             if not scores and failed:   # §8.5.5: sucesso exige relatório não vazio quando há falhas
                 return Diagnosis(st.JAGUAR_SEM_SAIDA,
                                  "testes falharam mas o relatório do Jaguar 2 está vazio "
-                                 "(cobertura/classesDirs não ligados)", suggestions=[_junit4_suggestion()])
-            if not scores:
-                warnings.append("nenhum teste falhou: relatório vazio (defeito não reproduzido)")
+                                 "(cobertura/classesDirs não ligados)", suggestions=[_junit4_suggestion()],
+                                 warnings=[SEM_INSTRUMENTACAO])
+        elif kind == "jaguar1":
+            try:
+                scores = jaguar1_scores(Path(res.outputs["jaguar1_xml"]))
+            except (ValueError, OSError, KeyError, ET.ParseError):
+                scores = None
+        if (scores is not None and not scores) or (kind == "jaguar1" and _CACHE_VAZIO.search(_read_tail(res.log))):
+            warnings.append(SEM_INSTRUMENTACAO)
+        if not failed and (res.tests or (res.extra or {}).get("test_counts", {}).get("total") or (kind != "maven" and scores is not None and not scores)):
+            # rodou, mas nenhum teste falhou: não há o que localizar, e isso não pode parecer sucesso
+            return Diagnosis(st.SEM_TESTE_FALHANDO, st.CAUSA_SEM_TESTE_FALHANDO, warnings=warnings)
         return Diagnosis(st.OK_TEST_FAIL if failed else st.OK, warnings=warnings)
 
     text = _read_tail(res.log)

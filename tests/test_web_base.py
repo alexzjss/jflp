@@ -37,7 +37,7 @@ class WebBase(WebFixture, unittest.TestCase):
         self.assertIn("SameSite=strict", cookie)
         page = self.client.get("/")   # o cliente guardou o cookie
         self.assertEqual(page.status_code, 200)
-        self.assertIn("Painel", page.text)
+        self.assertIn("Rodar", page.text)
 
     def test_bad_host_rejected(self):
         c = self.authed()
@@ -55,7 +55,7 @@ class WebBase(WebFixture, unittest.TestCase):
         self.worker.status.return_value = {"alive": True, "last_error": "RuntimeError('boom')",
                                            "current": None}
         jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "7")], ["maven"], {})
-        r = self.authed().get("/")
+        r = self.authed().get("/painel")
         self.assertEqual(r.status_code, 200)
         self.assertIn("bugsjar/commons-lang/7", r.text)
         self.assertIn("boom", r.text)
@@ -215,7 +215,7 @@ class WebBase(WebFixture, unittest.TestCase):
 
     def test_painel_auto_refresh_fragment(self):
         c = self.authed()
-        self.assertIn('hx-trigger="every 3s"', c.get("/").text)
+        self.assertIn('hx-trigger="every 3s"', c.get("/painel").text)
         jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "9")], ["maven"], {})
         frag = c.get("/painel/estado")
         self.assertEqual(frag.status_code, 200)

@@ -13,12 +13,14 @@ from pathlib import Path
 from typing import Callable
 
 from . import proc, recipes
+from .proc import NO_WINDOW
 from . import status as st
 from .adapters.base import Bug
 from .autosearch import candidates, deep_merge, effective_jdk_maven, effective_key
 from .diagnose import Diagnosis, _read_tail, classify
 from .errors import StageError
 from .home import Home, Settings
+from .outputs import parse_surefire_failures
 from .pomgen import generate as pom_generate
 from .prepare import _rmtree, prepare, working_copy
 from .winpath import long_path
@@ -68,14 +70,17 @@ def _first_config(settings: Settings, recipe, opts: RunOptions) -> AttemptConfig
         opts.test_scope or (recipe.test_scope if recipe else None) or settings.get("run", "test_scope", "relevant"))
 
 
-def _count_tests(tests: dict) -> dict:
+def _count_tests(tests: dict, counts: dict | None = None) -> dict:
+    if counts:     # contagem do XML do Jaguar 1, mais confiável que o log
+        return {k: int(counts.get(k) or 0) for k in ("total", "passed", "failed", "error", "skipped")}
     vals = list(tests.values())
     return {"total": len(vals), **{k: vals.count(k) for k in ("passed", "failed", "error", "skipped")}}
 
 
 def _git_out(*args: str) -> str | None:
     try:
-        r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout.strip() if r.returncode == 0 else None
@@ -118,6 +123,22 @@ def _copy_outputs(w: RunWriter, kind: str, res: AttemptResult, last: int) -> Non
         w.write_text("pom/jaguar2-pom.diff", diff + "\n")
 
 
+def _prep_warnings(prep) -> list[str]:
+    """Avisos que o `prepare` deixou em `info["warnings"]` (ex.: verdade-terreno não achada)."""
+    raw = (getattr(prep, "info", None) or {}).get("warnings") or []
+    return list(dict.fromkeys(str(x) for x in raw if x))
+
+
+def _failures(res: AttemptResult) -> list[dict]:
+    """Testes que falharam, com a mensagem e o primeiro quadro da pilha que é do projeto (se há relatório)."""
+    sf = res.outputs.get("surefire")
+    out = parse_surefire_failures(Path(sf)) if sf and Path(sf).is_dir() else []
+    seen = {f["test"] for f in out}
+    out += [{"test": t, "message": None, "type": None, "frame": None}
+            for t, v in sorted(res.tests.items()) if v in ("failed", "error") and t not in seen]
+    return out
+
+
 def _write_attempt(w: RunWriter, n: int, cfg: AttemptConfig, diag: Diagnosis,
                    res: AttemptResult, log: Path) -> None:
     if log.exists():
@@ -139,6 +160,8 @@ def phase_rank(kind: str, diag: Diagnosis, res: AttemptResult) -> int:
     s = diag.status
     if st.is_success(s):
         return 6
+    if s == st.SEM_TESTE_FALHANDO:
+        return 5
     if s == st.CHECKOUT_FALHOU:
         return 0
     fase = (res.extra or {}).get("fase")
@@ -185,7 +208,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
             w.write_json("env.json", _env_info(prep, None))
             w.write_text("command.txt", "")
             _stopped(w, st.DESCONHECIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
-                     attempts=0, test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
+                     attempts=0, warnings=_prep_warnings(prep), test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
                      relevant_tests=prep.relevant_tests, truth=[f.to_dict() for f in prep.truth])
             return w.rel
 
@@ -276,19 +299,19 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     aborted = True
                     break
                 stop = (st.is_success(d.status) or not opts.auto_search or n >= max_attempts
-                        or d.status in (st.TIMEOUT, st.PROJETO_INVALIDO))
+                        or d.status in (st.TIMEOUT, st.PROJETO_INVALIDO, st.SEM_TESTE_FALHANDO))
                 if n == 1 and not stop:
                     queue = candidates(first, d, kind, settings, _detected(prep, settings, kind, r), r.toolenv)
                 cfg = None if stop or not queue else queue.pop(0)
 
             if aborted:
                 _stopped(w, st.INTERROMPIDO, "execução interrompida: o aplicativo foi fechado",
-                         attempts=real_n, attempt_configs=[c.to_dict() for c in configs], **base)
+                         warnings=_prep_warnings(prep), attempts=real_n, attempt_configs=[c.to_dict() for c in configs], **base)
             elif missing is not None:
                 status = st.JDK_INCOMPATIVEL if missing.kind == "jdk" else st.DESCONHECIDO
                 w.write_json("env.json", _env_info(prep, None))
                 w.write_text("command.txt", "")
-                _stopped(w, status, missing.message, attempts=1,
+                _stopped(w, status, missing.message, attempts=1, warnings=_prep_warnings(prep),
                          attempt_configs=[c.to_dict() for c in configs], **base)
             else:
                 _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base, skipped, outcomes)
@@ -327,11 +350,12 @@ def _finalize(settings, w: RunWriter, kind, prep, opts, res: AttemptResult, diag
     w.write_json("env.json", _env_info(prep, res))
     w.write_text("command.txt", format_commands(res.phases) if res.phases else (
         _quote(res.command) + "\n" if res.command else ""))
-    warnings = list(diag.warnings) + list(skipped or [])
+    warnings = _prep_warnings(prep) + [x for x in diag.warnings if x not in _prep_warnings(prep)]
+    warnings += list(skipped or [])
     # as outras tentativas, para não esconder o que aconteceu (o status acima é o da que foi mais longe)
     warnings += [text for n, text in (outcomes or []) if n != real_n]
     run = {"status": diag.status, "diagnosis": diag.to_dict(), "warnings": warnings,
-           "tests": _count_tests(res.tests), "attempts": len(configs),
+           "tests": _count_tests(res.tests, (res.extra or {}).get("test_counts")), "failures": _failures(res), "attempts": len(configs),
            "attempt_configs": [c.to_dict() for c in configs], **base}
     archive = (opts.archive_checkout if opts.archive_checkout is not None
                else settings.get("run", "archive_checkout", True))

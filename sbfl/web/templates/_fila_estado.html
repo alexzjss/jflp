@@ -1,5 +1,5 @@
 {# Trocado inteiro só quando a estrutura da fila muda (204 caso contrário); o andamento de cada job vem de /job/N/mini. #}
-<div id="fila-estado" hx-get="/fila/estado" hx-vals='{"sig": "{{ sig }}"}' hx-trigger="every 2s" hx-swap="outerHTML">
+<div id="fila-estado" hx-get="/fila/estado{{ '?cta=1' if cta }}" hx-vals='{"sig": "{{ sig }}"}' hx-trigger="every 2s" hx-swap="outerHTML">
 <section>
   <h2>Em andamento</h2>
   {% if running %}
@@ -33,6 +33,9 @@
   </table>
   {% else %}<p class="vazio">A fila está vazia.</p>{% endif %}
 </section>
+{% if cta and not running and not pending %}
+<p><a class="botao primario" href="/rodar">Rodar algo</a></p>
+{% endif %}
 {% if running or pending %}
 <div class="botoes">
   {% if pending %}
