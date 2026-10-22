@@ -8,9 +8,10 @@ from . import proc
 from .adapters.base import Ctx, scan_tests
 from .home import Home, Settings
 from .jaguar import JaguarOptions, run_jaguar
+from .outputs import parse_jaguar1_log
 from .prepare import Prepared
 from .run_maven import (AttemptConfig, AttemptResult, install_reactor, log_phase, module_dir, settings_args,
-                        reactor_failure, phase_record)
+                        reactor_failure, phase_record, SKIP_JACOCO, JACOCO_SKIP)
 from .toolchain.profiles import ToolEnv, resolve
 
 
@@ -31,6 +32,8 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     te = toolenv or resolve("jaguar1", home, settings, pom_dir=mod, jdk=cfg.jdk, maven=cfg.maven)
     desc = te.describe()
     skip = list(settings.get("run", "skip_flags", []) or [])
+    if SKIP_JACOCO in cfg.fixes_on:      # JaCoCo do POM do projeto atrapalhando o build
+        skip.append(JACOCO_SKIP)
     timeout = settings.get("run", "timeout_s")
     total = 0.0
 
@@ -81,6 +84,12 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
     xml = out_dir / f"jaguar_{opts.heuristic}.xml"
     if meta.get("status") == "ok" and xml.is_file():
         outputs["jaguar1_xml"] = xml
+    tests: dict[str, str] = {}
+    if (out_dir / "jaguar.log").is_file():
+        try:     # resultado de cada teste (última tentativa do JaguarRunner), como no Maven: classe#teste
+            tests = parse_jaguar1_log(out_dir / "jaguar.log")
+        except OSError:
+            tests = {}
     if (out_dir / "jaguar.log").is_file():   # junta o log do JaguarRunner ao log da tentativa
         with open(log, "a", encoding="utf-8") as f:
             f.write((out_dir / "jaguar.log").read_text(encoding="utf-8", errors="replace"))
@@ -88,4 +97,4 @@ def run_jaguar1(home: Home, settings: Settings, prep: Prepared, workdir: Path, c
              "attempts": meta.get("attempts", 0)}
     ok = meta.get("status") == "ok"
     return AttemptResult(0 if ok else None, meta.get("status") == "jaguar_timeout", round(total, 1),
-                         log, outputs, {}, cmd, desc, extra, phases)
+                         log, outputs, tests, cmd, desc, extra, phases)

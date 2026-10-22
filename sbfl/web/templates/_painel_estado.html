@@ -1,3 +1,8 @@
+{% if redirecionado %}
+<p class="aviso erro">O JFLP foi aberto de dentro de outro aplicativo (ex.: o terminal do Claude) e o Windows grava
+  os dados em <code>{{ redirecionado }}</code>, não na pasta normal. Abra pelo atalho JFLP Studio para usar a
+  pasta normal.</p>
+{% endif %}
 {% if status.last_error %}
 <p class="aviso erro">Erro no processador da fila: <code>{{ status.last_error }}</code></p>
 {% endif %}

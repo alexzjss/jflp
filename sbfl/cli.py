@@ -29,11 +29,20 @@ from .toolchain.profiles import PROFILES, MissingTool, resolve
 KINDS = ("maven", "jaguar2", "jaguar1")
 
 
-def parse_bug(settings: Settings, spec: str) -> Bug:
-    """`local:<pasta>`, `local:<url>@<commit>` ou uma chave `benchmark/projeto/id`."""
+def parse_bug(settings: Settings, spec: str, module: str | None = None) -> Bug:
+    """`local:<pasta>`, `local:<url>@<commit>`, uma pasta existente, `URL@commit` ou uma chave
+    `benchmark/projeto/id`. `module` (opcional) vale só para pastas/URL locais."""
     if spec.startswith("local:"):
-        return local_bug(spec[len("local:"):])
-    return bug_from_key(settings, spec)
+        return local_bug(spec[len("local:"):], module)
+    if Path(spec.strip('"')).expanduser().is_dir():
+        return local_bug(spec.strip('"'), module)
+    try:
+        return bug_from_key(settings, spec)
+    except ValueError as e:
+        try:                     # não é uma chave conhecida: talvez URL@commit
+            return local_bug(spec, module)
+        except ValueError:
+            raise e from None
 
 
 def _mb(n) -> str:
@@ -48,6 +57,10 @@ def _ver(v) -> str:
 
 def cmd_doctor(home: Home, settings: Settings, args) -> int:
     print(f"Pasta do JFLP: {home.root}")
+    real = home.virtualized_root()
+    if real:
+        print(f"[!!] O JFLP foi aberto de dentro de outro aplicativo (ex.: terminal do Claude) e o Windows grava "
+              f"os dados em {real}. Abra pelo atalho JFLP Studio para usar a pasta normal.")
     jdks, mavens = find_jdks(home, settings), find_mavens(home, settings)
     print("JDKs:" if jdks else "[!!] Nenhum JDK encontrado.")
     for j in jdks:
@@ -203,7 +216,11 @@ def _unexpected_error(home: Home, bug: Bug, exc: Exception, before: set[str]) ->
 
 
 def cmd_run(home: Home, settings: Settings, args) -> int:
-    bug = parse_bug(settings, args.bug)
+    try:
+        bug = parse_bug(settings, args.bug, getattr(args, "module", None))
+    except ValueError as e:
+        print(f"erro: {e}", file=sys.stderr)
+        return 2
     lock = WorkerLock(home)      # a mesma trava do worker: nunca duas fontes de execução ao mesmo tempo
     if not lock.acquire():
         print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
@@ -477,9 +494,10 @@ def _parser() -> argparse.ArgumentParser:
     p = add("prepare", cmd_prepare, "prepara (faz o checkout de) um bug")
     p.add_argument("bug")
     p.add_argument("--refresh", action="store_true", help="refaz a cópia pristine do zero")
-    p = add("run", cmd_run, "executa um bug")
+    p = add("run", cmd_run, "executa um bug (chave, pasta local ou URL@commit)")
     p.add_argument("kind", choices=KINDS)
-    p.add_argument("bug")
+    p.add_argument("bug", help="chave benchmark/projeto/id, pasta local ou URL@commit")
+    p.add_argument("--module", help="subpasta com pom.xml (pasta local ou URL@commit)")
     p.add_argument("--all-tests", action="store_true", help="roda todos os testes (padrão: relevantes)")
     p.add_argument("--fix", action="append", default=[], metavar="ID",
                    help="acrescenta uma correção às detectadas (repita para várias)")

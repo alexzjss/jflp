@@ -244,11 +244,15 @@ As regras de diagnóstico (regex sobre o log, só em linhas de erro quando neces
 **Busca automática** (só para falhas de infraestrutura; nunca altera testes nem código-fonte). Depois da 1ª tentativa falhar, tenta, nesta ordem e sem repetir configurações:
 
 1. as sugestões do diagnóstico;
-2. JDK `8` → `17` → `11` (o padrão do perfil é descartado como duplicata; plugins de build antigos costumam falhar com classes de JDKs novos, por isso o JDK vem antes de variar plugins);
+2. JDK `8` → `17` → `11` (a comparação é pela configuração *efetiva*: o JDK/Maven "padrão" vira o número que o perfil de fato resolveu, então uma candidata igual a uma tentativa já feita é descartada; plugins de build antigos costumam falhar com classes de JDKs novos, por isso o JDK vem antes de variar plugins);
 3. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
 4. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`.
 
 Se uma tentativa com outro JDK chegou até os testes (sucesso ou `jaguar_sem_saida`), as candidatas seguintes sem JDK próprio herdam esse JDK.
+
+O **status final** é o da tentativa que foi mais longe (checkout < pom < reactor < compilação < testes < Jaguar sem saída < sucesso; empatando, a mais recente); saídas e checkout arquivados são dessa tentativa e as demais aparecem em `warnings` (ex.: `tentativa 4 (JDK 11): compilacao_falhou`). Cada tentativa termina com a linha `# jflp tentativa N: <status>` no log.
+
+No Maven puro o JFLP acrescenta `-Djacoco.skip=true` (cobertura não serve para nada ali, e o JaCoCo antigo de alguns POMs derruba a JVM de teste com `processing of -javaagent failed`). No Jaguar 1, esse sintoma gera a sugestão `skip-jacoco`. No Jaguar 1 o resultado de cada teste vem do log do JaguarRunner (`Test m(Classe) : Passed|Failed`), então falhas de teste dão `ok_testes_falhando`.
 
 Para no primeiro sucesso e respeita `run.max_attempts` (padrão 6, contando a primeira). Cada tentativa é gravada em `attempts/<n>/`. Desligue com `--no-search` (CLI) ou na tela.
 
@@ -317,13 +321,13 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 |---|---|
 | `jflp ui [--port N] [--no-browser] [--window] [--app]` | abre a interface web (`--app`: janela de app do Edge/Chrome) |
 | `jflp atalho [--remover]` | cria (ou remove) o atalho JFLP Studio na Área de Trabalho e no Menu Iniciar |
-| `jflp doctor` | JDKs, Mavens, git, WSL/Defects4J e o perfil resolvido de cada tipo; sai com 1 se faltar ferramenta |
+| `jflp doctor` | JDKs, Mavens, git, WSL/Defects4J e o perfil resolvido de cada tipo; avisa quando o Windows redireciona a pasta do JFLP (app aberto de dentro de outro app, ex.: terminal do Claude); sai com 1 se faltar ferramenta |
 | `jflp tools list` | ferramentas encontradas (JDK, Maven, Jaguar 1) |
 | `jflp tools get {jdk\|maven\|jaguar1} [valor] [--yes]` | baixa uma ferramenta (`valor` = versão do JDK ou do Maven); pergunta antes, salvo `--yes` |
 | `jflp fetch [projeto]` | clona/atualiza os projetos do Bugs.jar (`bugsjar.root`, `bugsjar.projects`) |
 | `jflp bugs {d4j\|bugsjar} [projeto]` | lista os bugs de um benchmark |
 | `jflp prepare <bug> [--refresh]` | faz o checkout e mostra módulo e linhas defeituosas conhecidas; `--refresh` refaz a cópia pristine do zero |
-| `jflp run {maven\|jaguar2\|jaguar1} <bug> [opções]` | executa; sai com 0 se o status for `ok`/`ok_testes_falhando` |
+| `jflp run {maven\|jaguar2\|jaguar1} <bug> [opções]` | `<bug>` é uma chave `benchmark/projeto/id`, uma pasta local ou `URL@commit` (com `--module M` para escolher a subpasta com `pom.xml`); executa; sai com 0 se o status for `ok`/`ok_testes_falhando` |
 | `jflp runs [bug]` | lista execuções gravadas |
 | `jflp compare <execução-A> <execução-B>` | compara duas execuções (caminhos relativos a `runs/`, como em `jflp runs`) |
 | `jflp batch create <nome> <tipos> <bug>...` | cria um lote; `tipos` separados por vírgula (`maven,jaguar2`) |

@@ -78,7 +78,7 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
 
     def estado() -> dict:
         st = worker.status()
-        return {"status": st, "current": st["current"],
+        return {"status": st, "current": st["current"], "redirecionado": home.virtualized_root(),
                 "pending": jobs_queue.list_jobs(home, state="pending", limit=50),
                 "runs": store.list_runs(home)[:10]}
 

@@ -62,6 +62,9 @@ def _compiler(version: str) -> Suggestion:
                       label=f"Usar o maven-compiler-plugin {version}")
 
 
+_SKIP_JACOCO = Suggestion(fix="skip-jacoco", label="Desligar o JaCoCo do projeto (-Djacoco.skip=true)")
+_JAVAAGENT = re.compile(r"processing of -javaagent failed|FATAL ERROR in native method|"
+                        r"Error opening zip file or JAR manifest missing", re.I)
 _UNBLOCK_HTTP = Suggestion(fix="unblock-http", label="Liberar repositórios http:// (settings do JFLP)")
 _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositórios http)")
 
@@ -223,7 +226,10 @@ def _success(kind: str, res: AttemptResult) -> bool:
 
 
 def _keep(kind: str, fix: str | None, maven: str | None) -> bool:
-    """Correções do POM só valem para o Jaguar 2 (unblock-http vale para todos); o Jaguar 2 exige Maven >= 3.9.9."""
+    """Correções do POM só valem para o Jaguar 2 (unblock-http vale para todos; skip-jacoco só para o Jaguar 1:
+    o Maven puro já roda com -Djacoco.skip e o Jaguar 2 precisa do próprio JaCoCo); o Jaguar 2 exige Maven >= 3.9.9."""
+    if fix == "skip-jacoco":
+        return kind == "jaguar1"
     if fix and kind != "jaguar2" and fix != "unblock-http":
         return False
     return not (maven and kind == "jaguar2")
@@ -273,6 +279,10 @@ def _classify(kind: str, res: AttemptResult) -> Diagnosis:
         return Diagnosis(st.OK_TEST_FAIL if failed else st.OK, warnings=warnings)
 
     text = _read_tail(res.log)
+    if kind == "jaguar1" and text and _JAVAAGENT.search(text) and "jacoco" in text.lower():
+        m = _JAVAAGENT.search(text)
+        return Diagnosis(st.PLUGIN_INCOMPATIVEL, "o agente do JaCoCo do projeto derrubou a JVM de teste",
+                         _evidence(text, m.start()), [_SKIP_JACOCO])
     found = _match_rules(text) if text else None
     d, from_err = found if found else (None, False)
     if fase == "pom":

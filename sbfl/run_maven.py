@@ -95,6 +95,8 @@ def test_selection_args(prep: Prepared, scope: str, workdir: Path) -> list[str]:
 
 
 UNBLOCK_HTTP = "unblock-http"
+SKIP_JACOCO = "skip-jacoco"
+JACOCO_SKIP = "-Djacoco.skip=true"
 _UNBLOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <settings>
   <mirrors>
@@ -136,7 +138,8 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
             failed.phases = phases
             return failed
         log_phase(log, "maven", on_line)
-    cmd = te.mvn(*sargs, "clean", "test", *(settings.get("run", "skip_flags", []) or []),
+    # Maven puro não precisa de cobertura: o JaCoCo antigo do POM derruba a JVM de teste (javaagent)
+    cmd = te.mvn(*sargs, "clean", "test", *(settings.get("run", "skip_flags", []) or []), JACOCO_SKIP,
                  "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                  "-Dsurefire.failIfNoSpecifiedTests=false",
                  *test_selection_args(prep, cfg.test_scope, workdir))

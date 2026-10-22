@@ -293,8 +293,14 @@ def _bugsjar_prepare(bug: Bug, dest: Path) -> Prepared:
 _NAO_PROJETO = {"target", "node_modules", "src", "build", "out"}
 
 
-def find_poms(folder: Path, depth: int = 2, limit: int = 30) -> list[str]:
-    """Subpastas (até `depth` níveis, sem ocultas) com pom.xml, como caminhos relativos com `/`."""
+class PomList(list):
+    """Lista de projetos achados; `mais` = quantos passaram do limite (a tela mostra "e mais N")."""
+    mais = 0
+
+
+def find_poms(folder: Path, depth: int = 2, limit: int = 50) -> list[str]:
+    """Projetos (pastas com pom.xml, até `depth` níveis, sem ocultas) como caminhos relativos com `/`.
+    Não desce numa pasta que já tem pom.xml: os filhos dela são módulos, não projetos."""
     out: list[str] = []
 
     def walk(d: Path, rel: str, level: int) -> None:
@@ -303,16 +309,19 @@ def find_poms(folder: Path, depth: int = 2, limit: int = 30) -> list[str]:
         except OSError:
             return
         for x in subs:
-            if x.name.startswith(".") or x.name in _NAO_PROJETO or len(out) >= limit:
+            if x.name.startswith(".") or x.name in _NAO_PROJETO:
                 continue
             r = f"{rel}/{x.name}" if rel else x.name
             if (x / "pom.xml").is_file():
                 out.append(r)
-            if level < depth:
+            elif level < depth:
                 walk(x, r, level + 1)
 
     walk(Path(folder), "", 1)
-    return sorted(out)[:limit]
+    out.sort()
+    res = PomList(out[:limit])
+    res.mais = max(0, len(out) - limit)
+    return res
 
 
 def is_bugsjar_repo(folder: Path) -> bool:

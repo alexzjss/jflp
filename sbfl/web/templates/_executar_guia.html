@@ -7,6 +7,7 @@
   <p class="botoes">
     {% for c in guia.candidatos %}<button type="button" class="guia-modulo" data-modulo="{{ c }}"
       onclick="var m=document.getElementById('module');m.value=this.dataset.modulo;m.focus()">{{ c }}</button>{% endfor %}
+    {% if guia.candidatos.mais %}<span class="vazio">e mais {{ guia.candidatos.mais }}</span>{% endif %}
   </p>
   <p class="vazio">Clicar preenche o campo Módulo; depois é só Executar.</p>
   {% endif %}

@@ -290,6 +290,7 @@ class Jaguar1Test(Base):
         self.assertEqual(r.extra["excluded_classes"], ["x.CrashTest"])
         self.assertEqual(r.extra["meta_status"], "ok")
         self.assertGreaterEqual(r.extra["attempts"], 2)
+        self.assertEqual(r.tests, {"x.OkTest#t": "passed", "x.FailTest#t": "failed"})   # só a última rodada
         argvs = [c["argv"] for c in self.read_calls()]
         self.assertIn("test-compile", argvs[0])
         self.assertIn("dependency:copy-dependencies", argvs[1])
