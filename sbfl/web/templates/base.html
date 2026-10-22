@@ -12,14 +12,20 @@
 <body>
   <nav class="lateral">
     <div class="marca">JFLP Studio</div>
-    {% set itens = [("painel", "/", "Painel"), ("executar", "/executar", "Executar"), ("ambiente", "/ambiente", "Ambiente"),
-                    ("bugs", "/bugs", "Bugs"), ("lotes", "/lotes", "Lotes"),
-                    ("comparar", "/comparar", "Comparar"), ("receitas", "/receitas", "Receitas"),
-                    ("exportar", "/exportar", "Exportar")] %}
-    {% for chave, href, nome in itens %}
-    <a href="{{ href }}" class="{{ 'ativo' if page == chave else '' }}">{{ nome }}</a>
-    {% endfor %}
+    {# páginas internas que acendem um item principal #}
+    {% set destaque = {"bugs": "resultados", "lote": "resultados", "job": "rodar"}.get(page, page) %}
+    <a href="/rodar" class="{{ 'ativo' if destaque == 'rodar' else '' }}">Rodar</a>
+    <a href="/resultados" class="{{ 'ativo' if destaque == 'resultados' else '' }}">Resultados
+      <span class="selo-vaga" hx-get="/fila/contagem" hx-trigger="load, every 4s" hx-swap="innerHTML"></span></a>
+    <a href="/ambiente" class="{{ 'ativo' if destaque == 'ambiente' else '' }}">Ambiente</a>
   </nav>
   <main>{% block content %}{% endblock %}</main>
+  <script>
+    // recusas das ações da fila (htmx) chegam como texto simples: mostra num alerta
+    document.body.addEventListener("htmx:responseError", function (e) {
+      var t = e.detail.xhr.responseText || "";
+      if (t && t.charAt(0) !== "<") { alert(t.slice(0, 300)); }
+    });
+  </script>
 </body>
 </html>

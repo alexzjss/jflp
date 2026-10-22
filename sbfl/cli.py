@@ -20,7 +20,8 @@ from .execute import RunOptions, execute
 from .home import Home, Settings, load_settings
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
-from .queue import Worker, active_batch_ids, batch_status, create_batch
+from .proc import NO_WINDOW
+from .queue import Worker, active_batch_ids, batch_status, create_batch, delete_batch
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
 from .toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
@@ -29,11 +30,20 @@ from .toolchain.profiles import PROFILES, MissingTool, resolve
 KINDS = ("maven", "jaguar2", "jaguar1")
 
 
-def parse_bug(settings: Settings, spec: str) -> Bug:
-    """`local:<pasta>`, `local:<url>@<commit>` ou uma chave `benchmark/projeto/id`."""
+def parse_bug(settings: Settings, spec: str, module: str | None = None) -> Bug:
+    """`local:<pasta>`, `local:<url>@<commit>`, uma pasta existente, `URL@commit` ou uma chave
+    `benchmark/projeto/id`. `module` (opcional) vale só para pastas/URL locais."""
     if spec.startswith("local:"):
-        return local_bug(spec[len("local:"):])
-    return bug_from_key(settings, spec)
+        return local_bug(spec[len("local:"):], module)
+    if Path(spec.strip('"')).expanduser().is_dir():
+        return local_bug(spec.strip('"'), module)
+    try:
+        return bug_from_key(settings, spec)
+    except ValueError as e:
+        try:                     # não é uma chave conhecida: talvez URL@commit
+            return local_bug(spec, module)
+        except ValueError:
+            raise e from None
 
 
 def _mb(n) -> str:
@@ -48,6 +58,10 @@ def _ver(v) -> str:
 
 def cmd_doctor(home: Home, settings: Settings, args) -> int:
     print(f"Pasta do JFLP: {home.root}")
+    real = home.virtualized_root()
+    if real:
+        print(f"[!!] O JFLP foi aberto de dentro de outro aplicativo (ex.: terminal do Claude) e o Windows grava "
+              f"os dados em {real}. Abra pelo atalho JFLP Studio para usar a pasta normal.")
     jdks, mavens = find_jdks(home, settings), find_mavens(home, settings)
     print("JDKs:" if jdks else "[!!] Nenhum JDK encontrado.")
     for j in jdks:
@@ -56,7 +70,8 @@ def cmd_doctor(home: Home, settings: Settings, args) -> int:
     for m in mavens:
         print(f"  [OK] Maven {_ver(m.version)} em {m.home} [{m.source}]")
     try:
-        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=20)
+        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=20,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         print(f"[OK] {r.stdout.strip()}" if r.returncode == 0 else "[XX] git não funcionou.")
     except (OSError, subprocess.SubprocessError):
         print("[XX] git não encontrado no PATH.")
@@ -140,7 +155,8 @@ def cmd_fetch(home: Home, settings: Settings, args) -> int:
             cmd = ["git", "-c", "core.longpaths=true", "clone", "-q",
                    template.format(project=proj), str(dest)]
             action = "clonado"
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         if r.returncode != 0:
             print(f"erro: {proj}: {r.stderr.strip()[:300]}", file=sys.stderr)
             return 1
@@ -203,7 +219,11 @@ def _unexpected_error(home: Home, bug: Bug, exc: Exception, before: set[str]) ->
 
 
 def cmd_run(home: Home, settings: Settings, args) -> int:
-    bug = parse_bug(settings, args.bug)
+    try:
+        bug = parse_bug(settings, args.bug, getattr(args, "module", None))
+    except ValueError as e:
+        print(f"erro: {e}", file=sys.stderr)
+        return 2
     lock = WorkerLock(home)      # a mesma trava do worker: nunca duas fontes de execução ao mesmo tempo
     if not lock.acquire():
         print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
@@ -300,6 +320,19 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
         return 0
     if args.action == "status":
         _print_batch(batch_status(home, args.id))
+        return 0
+    if args.action == "cancel":     # só tira os jobs pendentes; o job em andamento se cancela na interface
+        batch_status(home, args.id)
+        Worker(home, settings).cancel(args.id)
+        print(f"[OK] jobs pendentes do lote {args.id} cancelados")
+        return 0
+    if args.action == "delete":
+        try:
+            delete_batch(home, args.id)
+        except ValueError as e:
+            print(f"erro: {e}", file=sys.stderr)
+            return 1
+        print(f"[OK] lote {args.id} excluído do histórico (as execuções gravadas ficam)")
         return 0
     # run: worker em primeiro plano até a fila esvaziar
     lock = WorkerLock(home)
@@ -464,9 +497,10 @@ def _parser() -> argparse.ArgumentParser:
     p = add("prepare", cmd_prepare, "prepara (faz o checkout de) um bug")
     p.add_argument("bug")
     p.add_argument("--refresh", action="store_true", help="refaz a cópia pristine do zero")
-    p = add("run", cmd_run, "executa um bug")
+    p = add("run", cmd_run, "executa um bug (chave, pasta local ou URL@commit)")
     p.add_argument("kind", choices=KINDS)
-    p.add_argument("bug")
+    p.add_argument("bug", help="chave benchmark/projeto/id, pasta local ou URL@commit")
+    p.add_argument("--module", help="subpasta com pom.xml (pasta local ou URL@commit)")
     p.add_argument("--all-tests", action="store_true", help="roda todos os testes (padrão: relevantes)")
     p.add_argument("--fix", action="append", default=[], metavar="ID",
                    help="acrescenta uma correção às detectadas (repita para várias)")
@@ -481,7 +515,7 @@ def _parser() -> argparse.ArgumentParser:
     p = add("compare", cmd_compare, "compara duas execuções")
     p.add_argument("rel_a")
     p.add_argument("rel_b")
-    p = add("batch", cmd_batch, "lotes: create, run, status")
+    p = add("batch", cmd_batch, "lotes: create, run, status, cancel, delete")
     bs = p.add_subparsers(dest="action", required=True, metavar="ação")
     c = bs.add_parser("create", help="cria um lote")
     c.add_argument("name")
@@ -489,6 +523,10 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("bugs", nargs="+")
     bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
     s = bs.add_parser("status", help="situação de um lote")
+    s.add_argument("id", type=int)
+    s = bs.add_parser("cancel", help="cancela os jobs pendentes de um lote")
+    s.add_argument("id", type=int)
+    s = bs.add_parser("delete", help="exclui um lote encerrado do histórico")
     s.add_argument("id", type=int)
     p = add("export", cmd_export, "exporta um dataset")
     p.add_argument("name")

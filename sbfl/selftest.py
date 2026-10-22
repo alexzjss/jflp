@@ -6,6 +6,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from .proc import NO_WINDOW
+
 
 DATA = Path(__file__).parent / "selftest_data"
 CALC = "src/main/java/demo/Calc.java"
@@ -21,7 +23,7 @@ def build_repo(repo: Path) -> tuple[str, str]:
     """Repositório git local com o commit corrigido e, depois, o commit com defeito. -> (buggy, fixed)."""
     shutil.copytree(DATA / "fixed", repo)
     g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True,
-                                  text=True).stdout.strip()
+                                  text=True, stdin=subprocess.DEVNULL, creationflags=NO_WINDOW).stdout.strip()
     g("init", "-q"); g("config", "user.email", "selftest@local"); g("config", "user.name", "selftest")
     g("add", "."); g("commit", "-qm", "fixed")
     fixed = g("rev-parse", "HEAD")

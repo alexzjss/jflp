@@ -1,0 +1,124 @@
+<form id="rodar-form" method="post" action="/rodar" data-modo="{{ modo }}"
+      hx-post="/rodar" hx-target="#rd-lote" hx-swap="innerHTML" hx-disabled-elt="#rd-botao" hx-disinherit="*"
+      hx-on::after-request="if (event.target === this && event.detail.successful) { document.getElementById('rd-form').hidden = true; }">
+  <input type="hidden" name="modo" value="{{ modo }}">
+  <input type="hidden" name="pasta" value="{{ pasta }}">
+  {% if modo == 'bugsjar' %}
+  <section id="s2" class="rd-passo">
+    <h2><span class="rd-num">2</span> {{ 'Projetos e bugs' if colecao else 'Bugs de ' ~ projetos[0].nome }}</h2>
+    {% if salvo %}<p class="vazio rd-nota">Pasta salva como raiz do Bugs.jar.</p>{% endif %}
+    {% if projetos %}
+    <div class="rd-barra">
+      <button type="button" id="rd-todos">Marcar visíveis</button>
+      <button type="button" id="rd-nenhum">Desmarcar visíveis</button>
+      {% if colecao %}<button type="button" id="rd-abrir">Abrir todos os projetos</button>{% endif %}
+      <span id="rd-contagem" class="rd-contagem" role="status">0 bugs em 0 projetos</span>
+    </div>
+    <div class="rd-barra">
+      <label for="rd-filtro" class="rd-oculto">Buscar bugs</label>
+      <input type="search" id="rd-filtro" placeholder="Buscar por id ou resumo (ex.: LANG-7)" autocomplete="off">
+      <label for="rd-status" class="rd-oculto">Filtrar pelo último resultado</label>
+      <select id="rd-status">
+        <option value="">Todos</option>
+        <option value="nunca">Nunca rodados</option>
+        <option value="falha">Com falha</option>
+        <option value="ok">OK</option>
+      </select>
+    </div>
+    <div class="rd-projs">
+      {% for p in projetos %}
+      <details class="rd-proj" data-pi="{{ p.pi }}"{% if p.bugs is not none and not colecao %} open{% endif %}
+        {% if p.bugs is none %}hx-get="/rodar/bugs?repo={{ p.caminho|q }}&pi={{ p.pi }}" hx-trigger="toggle once"
+        hx-target="find .rd-proj-corpo" hx-swap="innerHTML"{% endif %}>
+        <summary><strong>{{ p.nome }}</strong>
+          <span class="vazio" {% if p.bugs is none %}hx-get="/rodar/contagem?repo={{ p.caminho|q }}" hx-trigger="load" hx-target="this" hx-swap="innerHTML"{% endif %}>
+            {%- if p.bugs is not none %}{{ p.bugs|length }} bug{{ 's' if p.bugs|length != 1 }}{% else %}…{% endif %}</span>
+          <span class="rd-proj-sel"></span></summary>
+        <div class="rd-proj-corpo">{% if p.bugs is not none %}{% with repo=p.repo, pi=p.pi, bugs=p.bugs %}{% include "_rodar_bugs.html" %}{% endwith %}{% endif %}</div>
+      </details>
+      {% endfor %}
+    </div>
+    {% else %}<p class="vazio">Nenhum repositório do Bugs.jar encontrado dentro dessa pasta.</p>{% endif %}
+  </section>
+  {% else %}
+  <section id="s2" class="rd-passo">
+    <h2><span class="rd-num">2</span> Módulo</h2>
+    {% if modulos %}
+    <label for="module" class="rd-rotulo">Módulo a executar</label>
+    <select id="module" name="module">
+      {% if raiz_pom %}<option value="">Projeto inteiro (raiz)</option>{% endif %}
+      {% for m in modulos %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+    </select>
+    {% else %}<p class="vazio">Projeto Maven com um único pom.xml na raiz.</p>
+    <input type="hidden" name="module" value="">{% endif %}
+  </section>
+  {% endif %}
+  <section id="s3" class="rd-passo">
+    <h2><span class="rd-num">3</span> Ferramentas</h2>
+    <div class="linha rd-ferramentas" role="group" aria-label="Ferramentas">
+      {% for k, nome_k in kinds %}<label class="rd-ferr"><input type="checkbox" name="kinds" value="{{ k }}" {{ 'checked' if k in sel else '' }}> {{ nome_k }}</label>{% endfor %}
+    </div>
+    {% if modo == 'bugsjar' %}
+    <fieldset class="rd-escopo">
+      <legend>Testes a rodar</legend>
+      <label><input type="radio" name="escopo" value="relevant" checked> relevantes do catálogo</label>
+      <label><input type="radio" name="escopo" value="all"> todos</label>
+    </fieldset>
+    {% endif %}
+    <details class="rd-avancado">
+      <summary>Opções</summary>
+      <p><label><input type="checkbox" name="auto_search" value="1" checked> busca automática de correções</label></p>
+    </details>
+    <div id="rd-erro" aria-live="assertive"></div>
+    <p class="rd-acao"><button type="submit" id="rd-botao" class="primario rd-rodar">Rodar</button></p>
+  </section>
+</form>
+<script>
+(function () {
+  var f = document.getElementById("rodar-form");
+  if (!f) return;
+  var maven = f.dataset.modo === "maven";
+  var botao = document.getElementById("rd-botao"), cont = document.getElementById("rd-contagem");
+  var filtro = document.getElementById("rd-filtro"), status = document.getElementById("rd-status");
+  function plural(n, um, varios) { return n + " " + (n === 1 ? um : varios); }
+  function atualiza() {
+    var marc = f.querySelectorAll(".rd-sel:checked"), proj = {}, n = maven ? 1 : marc.length;
+    marc.forEach(function (c) { proj[c.dataset.proj] = 1; });
+    var m = Object.keys(proj).length;
+    var k = f.querySelectorAll("input[name=kinds]:checked").length;
+    if (cont) cont.textContent = plural(n, "bug", "bugs") + " em " + plural(m, "projeto", "projetos");
+    f.querySelectorAll("details.rd-proj").forEach(function (d) {
+      var s = d.querySelector(".rd-proj-sel"), c = d.querySelectorAll(".rd-sel:checked").length;
+      if (s) s.textContent = c ? "· " + plural(c, "marcado", "marcados") : "";
+    });
+    botao.textContent = "Rodar " + (maven ? "o projeto" : plural(n, "bug", "bugs")) + " × " + plural(k, "ferramenta", "ferramentas");
+    botao.disabled = n === 0 || k === 0;
+  }
+  function filtra() {
+    var q = filtro ? filtro.value.toLowerCase().trim() : "", st = status ? status.value : "";
+    f.querySelectorAll("tr.rd-bug").forEach(function (tr) {
+      var okq = !q || tr.textContent.toLowerCase().indexOf(q) >= 0;
+      var oks = !st || tr.dataset.st === st;
+      tr.hidden = !(okq && oks);
+    });
+  }
+  function marca(valor) {
+    f.querySelectorAll("tr.rd-bug").forEach(function (tr) {
+      if (!tr.hidden) { var c = tr.querySelector(".rd-sel"); if (c) c.checked = valor; }
+    });
+    atualiza();
+  }
+  var todos = document.getElementById("rd-todos"), nenhum = document.getElementById("rd-nenhum");
+  var abrir = document.getElementById("rd-abrir");
+  if (todos) todos.addEventListener("click", function () { marca(true); });
+  if (nenhum) nenhum.addEventListener("click", function () { marca(false); });
+  if (abrir) abrir.addEventListener("click", function () {
+    f.querySelectorAll("details.rd-proj:not([open])").forEach(function (d) { d.open = true; });
+  });
+  if (filtro) filtro.addEventListener("input", filtra);
+  if (status) status.addEventListener("change", filtra);
+  f.addEventListener("change", atualiza);
+  f.addEventListener("htmx:afterSettle", function () { filtra(); atualiza(); });
+  atualiza();
+})();
+</script>

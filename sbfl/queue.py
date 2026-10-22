@@ -17,6 +17,7 @@ from .home import Home, Settings
 from .instance import WorkerLock
 from .prepare import _rmtree
 from .power import keep_awake
+from .progress import Progress
 from .prepare import bug_from_key
 
 _SCHEMA = (
@@ -108,6 +109,54 @@ def list_batches(home: Home, limit: int = 100) -> list[dict]:
             "FROM batches b ORDER BY b.id DESC LIMIT ?", (limit,))]
 
 
+def get_batch(home: Home, batch_id: int) -> dict | None:
+    """Um lote pelo id, com a contagem de jobs (como em `list_batches`); None se não existe."""
+    with contextlib.closing(_connect(home)) as con:
+        row = con.execute(
+            "SELECT b.id, b.name, b.created, b.kinds, b.state, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id) AS total, "
+            "(SELECT COUNT(*) FROM jobs j WHERE j.batch_id=b.id AND j.state='done') AS done "
+            "FROM batches b WHERE b.id=?", (batch_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def job_of_run(home: Home, run_rel: str) -> dict | None:
+    """O job que gravou a execução `run_rel` (com `extra` decodificado); None se nenhum."""
+    with contextlib.closing(_connect(home)) as con:
+        row = con.execute("SELECT * FROM jobs WHERE run_rel=? ORDER BY id DESC LIMIT 1", (run_rel,)).fetchone()
+    if row is None:
+        return None
+    job = dict(row)
+    job["extra"] = json.loads(job.get("bug_extra") or "{}")
+    return job
+
+
+def pending_jobs(home: Home) -> list[dict]:
+    """Jobs pendentes de lotes ativos ou pausados, na ordem de execução (com nome e estado do lote)."""
+    with contextlib.closing(_connect(home)) as con:
+        return [dict(r) for r in con.execute(
+            "SELECT j.*, b.name AS batch_name, b.state AS batch_state FROM jobs j "
+            "JOIN batches b ON b.id = j.batch_id WHERE j.state='pending' AND b.state IN ('active','paused') "
+            "ORDER BY j.batch_id, j.idx")]
+
+
+def delete_batch(home: Home, batch_id: int) -> None:
+    """Apaga um lote encerrado e seus jobs do histórico (as execuções gravadas em `runs/` ficam).
+
+    Recusa lotes com job pendente ou em andamento: é preciso cancelar antes. A checagem e a remoção
+    são um único comando SQL por tabela, na mesma transação, então o worker nunca pega um job no meio."""
+    with contextlib.closing(_connect(home)) as con, con:
+        if con.execute("SELECT 1 FROM batches WHERE id=?", (batch_id,)).fetchone() is None:
+            raise ValueError(f"Lote não encontrado: {batch_id}")
+        con.execute("DELETE FROM jobs WHERE batch_id=? AND NOT EXISTS "
+                    "(SELECT 1 FROM jobs WHERE batch_id=? AND state IN ('pending','running'))",
+                    (batch_id, batch_id))
+        cur = con.execute("DELETE FROM batches WHERE id=? AND NOT EXISTS (SELECT 1 FROM jobs WHERE batch_id=?)",
+                          (batch_id, batch_id))
+        if cur.rowcount == 0:
+            raise ValueError("O lote ainda tem jobs na fila ou em andamento: cancele antes de excluir.")
+
+
 def batch_jobs(home: Home, batch_id: int) -> list[dict]:
     """Jobs de um lote, na ordem (bug_extra já decodificado em `extra`)."""
     with contextlib.closing(_connect(home)) as con:
@@ -151,10 +200,15 @@ class Worker(threading.Thread):
         self._other = False                        # outra instância segura a trava
         self._stop_ev = threading.Event()
         self._abort = threading.Event()            # fechamento do app: mata o Maven e devolve o job à fila
+        self._cancel = threading.Event()           # cancelamento pelo usuário: mata o Maven e descarta o job
+        self._cancel_req: set[int] = set()         # jobs com cancelamento pedido (cobre o intervalo até o início)
+        self._settled = True                       # o job corrente já passou do ponto de cancelar
         self._lock = threading.Lock()
         self._subs: set[_q.Queue] = set()
         self._log: deque[str] = deque(maxlen=LOG_LINES)
         self._current: dict | None = None
+        self._progress: Progress | None = None     # progresso do job corrente (alimentado por _on_line)
+        self._last_progress: tuple[int, dict] | None = None   # (job, estado final) do último job
         self._last_error: str | None = None
 
     # -- controle --
@@ -176,6 +230,54 @@ class Worker(threading.Thread):
             con.execute("UPDATE batches SET state='cancelled' WHERE id=? AND state IN ('active','paused')",
                         (batch_id,))
 
+    def remove_pending(self, job_id: int) -> bool:
+        """Tira um job da fila (vira `cancelled`). Falso se ele não está mais pendente.
+
+        O UPDATE condicional é o mesmo da reivindicação em `_next_job`: só um dos dois vence."""
+        with contextlib.closing(_connect(self.home)) as con, con:
+            cur = con.execute("UPDATE jobs SET state='cancelled' WHERE id=? AND state='pending'", (job_id,))
+            if cur.rowcount == 0:
+                return False
+            bid = con.execute("SELECT batch_id FROM jobs WHERE id=?", (job_id,)).fetchone()[0]
+            _close_if_finished(con, bid)
+        return True
+
+    def cancel_job(self, job_id: int) -> str:
+        """Cancela um job. Devolve `pendente` (tirado da fila), `andamento` (Maven morto, execução
+        descartada) ou vazio se não havia o que cancelar."""
+        if self.remove_pending(job_id):
+            return "pendente"
+        job = get_job(self.home, job_id)
+        if job is None or job["state"] != "running":
+            return ""
+        with self._lock:
+            cur = self._current
+            if cur is not None and (cur["job_id"] != job_id or self._settled):
+                return ""
+            if cur is None and (self._other or not self.is_alive()):
+                return ""
+            self._cancel_req.add(job_id)      # se o job ainda não começou, `_run_job` vê o pedido
+            if cur is not None:
+                self._cancel.set()
+        if cur is not None and self.ident is not None:
+            proc.kill_thread(self.ident)      # só os processos do worker, a árvore inteira
+        return "andamento"
+
+    def cancel_pending(self) -> int:
+        """Cancela todos os jobs pendentes de todos os lotes; o job em andamento segue."""
+        with contextlib.closing(_connect(self.home)) as con, con:
+            n = con.execute("UPDATE jobs SET state='cancelled' WHERE state='pending'").rowcount
+            con.execute("UPDATE batches SET state='cancelled' WHERE state IN ('active','paused')")
+        return n
+
+    def cancel_everything(self) -> int:
+        """Esvazia a fila e cancela também o job em andamento."""
+        n = self.cancel_pending()
+        cur = self.current()
+        if cur is not None and self.cancel_job(cur["job_id"]):
+            n += 1
+        return n
+
     def stop(self, kill: bool = True) -> None:
         """Para o laço. Com `kill`, também mata os processos em andamento (o job volta para `pending`)."""
         self._stop_ev.set()
@@ -188,7 +290,25 @@ class Worker(threading.Thread):
         with self._lock:
             if self._current is None:
                 return None
-            return {**self._current, "log": list(self._log)}
+            prog = self._progress.to_dict() if self._progress is not None else None
+            return {**self._current, "log": list(self._log), "progress": prog}
+
+    def progress_of(self, job_id: int) -> dict | None:
+        """Progresso do job corrente ou, logo depois de terminar, o estado final dele."""
+        with self._lock:
+            if self._current is not None and self._current.get("job_id") == job_id and self._progress is not None:
+                return self._progress.to_dict()
+            if self._last_progress is not None and self._last_progress[0] == job_id:
+                return self._last_progress[1]
+        return None
+
+    def _end_current(self) -> None:
+        """Fim do job corrente (com a trava): guarda o estado final do progresso e limpa o corrente."""
+        if self._progress is not None and self._current is not None:
+            self._progress.finish()
+            self._last_progress = (self._current["job_id"], self._progress.to_dict())
+        self._progress = None
+        self._current = None
 
     def subscribe(self) -> _q.Queue:
         q: _q.Queue = _q.Queue(maxsize=SUB_MAX)
@@ -211,7 +331,14 @@ class Worker(threading.Thread):
                     self._subs.discard(q)   # assinante lento: descartado, nunca bloqueia o worker
 
     def _on_line(self, line: str) -> None:
-        self._publish(str(line).rstrip("\r\n"))
+        text = str(line).rstrip("\r\n")
+        with self._lock:
+            if self._progress is not None:
+                try:
+                    self._progress.feed(text)
+                except Exception:      # o progresso é enfeite: nunca atrapalha o job
+                    pass
+        self._publish(text)
 
     # -- laço --
     def _after_select(self) -> None:
@@ -268,7 +395,7 @@ class Worker(threading.Thread):
             self._wlock.release()
 
     def _loop(self) -> None:
-        proc.set_abort(self._abort)
+        proc.set_abort(self._abort, self._cancel)
         recovered = False
         while not self._stop_ev.is_set():
             try:
@@ -302,21 +429,57 @@ class Worker(threading.Thread):
     def _run_job(self, job: dict, opts: dict) -> None:
         with self._lock:
             self._log.clear()
+            self._cancel.clear()
+            self._settled = False
             self._current = {"job_id": job["id"], "batch_id": job["batch_id"],
-                             "bug": job["bug_key"], "kind": job["kind"]}
+                             "bug": job["bug_key"], "kind": job["kind"], "started": time.time()}
+            self._progress = Progress(job["kind"])
+            if job["id"] in self._cancel_req:     # cancelado entre a reivindicação e o início
+                self._cancel.set()
         t0 = time.monotonic()
         since = datetime.now().isoformat(timespec="seconds")
         rel, error = None, None
-        try:
-            bug = _bug_of(self.settings, job)
-            rel = execute(self.home, self.settings, bug, job["kind"], RunOptions(**opts, log_cb=self._on_line))
-        except Exception as e:   # o worker nunca morre por erro de job
-            error = repr(e)[-1500:]
-            rel = self._find_run(job, since)
+        if not self._cancel.is_set():
+            try:
+                bug = _bug_of(self.settings, job)
+                rel = execute(self.home, self.settings, bug, job["kind"],
+                              RunOptions(**opts, log_cb=self._on_line))
+            except Exception as e:   # o worker nunca morre por erro de job
+                error = repr(e)[-1500:]
+                rel = self._find_run(job, since)
+        with self._lock:
+            cancelled = self._cancel.is_set() or job["id"] in self._cancel_req
+            self._settled = True      # a partir daqui um cancelamento não tem mais efeito
+        if cancelled:                 # o usuário cancelou: nada do que foi gravado fica
+            self._discard_job(job, rel or self._find_run(job, since), time.monotonic() - t0)
+            return
         if self._abort.is_set():   # app fechando: o job é refeito na próxima abertura
             self._requeue_job(job)
             return
         self._finish_job(job, rel, error, time.monotonic() - t0)
+
+    def _discard_job(self, job: dict, rel: str | None, seconds: float) -> None:
+        """Fim de um job cancelado: apaga a execução parcial e a cópia de trabalho e marca `cancelled`."""
+        try:
+            if rel:
+                store.delete_run(self.home, rel)
+            work = self.home.work / "w"
+            if work.is_dir():           # um job por vez: toda cópia de trabalho é deste job
+                for d in work.iterdir():
+                    _rmtree(d, strict=False)
+        except Exception as e:
+            self._record_error(e)
+        try:
+            with contextlib.closing(_connect(self.home)) as con, con:
+                con.execute("UPDATE jobs SET state='cancelled', run_rel=NULL, error=NULL, seconds=? WHERE id=?",
+                            (round(seconds, 3), job["id"]))
+                _close_if_finished(con, job["batch_id"])
+        finally:
+            self._publish(None)
+            with self._lock:
+                self._end_current()
+                self._cancel.clear()
+                self._cancel_req.discard(job["id"])
 
     def _requeue_job(self, job: dict) -> None:
         try:
@@ -325,7 +488,7 @@ class Worker(threading.Thread):
         finally:
             self._publish(None)
             with self._lock:
-                self._current = None
+                self._end_current()
 
     def _find_run(self, job: dict, since: str) -> str | None:
         """Pasta criada por um job que falhou (a mais recente do bug e tipo desde o início do job)."""
@@ -346,4 +509,4 @@ class Worker(threading.Thread):
         finally:
             self._publish(None)
             with self._lock:
-                self._current = None
+                self._end_current()

@@ -24,6 +24,7 @@ DEFAULTS = {
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": []},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
+            "max_copy_mb": 2048, "max_copy_files": 200000,    # pasta local maior que isso não é copiada
             "skip_flags": list(SKIP_FLAGS)},
     "bugsjar": {"root": "", "projects": [],
                 "url_template": "https://github.com/bugs-dot-jar/{project}.git"},
@@ -45,6 +46,36 @@ _NOTES = {
 
 _BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+_VIRTUALIZED: dict[str, str | None] = {}
+
+
+def redirected_path(plain: str, real: str) -> str | None:
+    """`real` (caminho resolvido de um arquivo novo) cai na área de um pacote MSIX, e `plain` não?"""
+    p = plain.lower().replace("/", "\\")
+    r = real.lower().replace("/", "\\")
+    if r.startswith("\\\\?\\"):
+        r = r[4:]
+    if r == p:
+        return None
+    if "\\packages\\" in r and "\\localcache\\" in r and "\\packages\\" not in p:
+        return str(Path(real).parent)
+    return None
+
+
+def _probe_redirect(root: Path) -> str | None:
+    probe = Path(root) / ".probe"
+    try:
+        Path(root).mkdir(parents=True, exist_ok=True)
+        probe.write_bytes(b"jflp")
+        try:
+            real = os.path.realpath(probe)
+        finally:
+            probe.unlink(missing_ok=True)
+    except OSError:
+        return None
+    return redirected_path(str(probe), real)
 
 
 @dataclass(frozen=True)
@@ -94,6 +125,18 @@ class Home:
             base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
             return cls(Path(base) / "jflp")
         return cls(Path.home() / ".jflp")
+
+    def virtualized_root(self) -> str | None:
+        """Caminho REAL da pasta quando o Windows redireciona a gravação (app aberto de dentro de um app
+        MSIX, como o terminal do Claude: vai para AppData/Local/Packages/<app>/LocalCache/Local/jflp).
+        Cria um arquivo-sonda (o `resolve()` de um arquivo NOVO revela o redirecionamento); None = normal.
+        O resultado é guardado por pasta. Só aviso: nada muda de lugar."""
+        if os.name != "nt":
+            return None
+        key = os.path.normcase(str(self.root))
+        if key not in _VIRTUALIZED:
+            _VIRTUALIZED[key] = _probe_redirect(self.root)
+        return _VIRTUALIZED[key]
 
     def ensure(self) -> Home:
         """Cria as pastas e, se faltar, grava um config.toml comentado."""

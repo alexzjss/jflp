@@ -8,6 +8,7 @@ from pathlib import Path
 from .diffgt import TEST_PATH_RE, faults_from_hunks, fqcn_from_path, parse_left_hunks
 from .errors import StageError
 from .gitutil import git
+from .proc import NO_WINDOW
 
 SKIP_DIRS = {".git", "target", "build", ".gradle", "out", "node_modules"}
 
@@ -53,7 +54,8 @@ def tree_truth(buggy: Path, fixed: Path):
             continue
         d = subprocess.run(["git", "diff", "--no-index", "-U0", "--no-color", "--no-renames", "--",
                             str(p), str(q)], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace").stdout
+                           encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL,
+                           creationflags=NO_WINDOW).stdout
         # reescreve o cabeçalho para o caminho relativo
         d = re.sub(r"^--- .*$", f"--- a/{rel}", d, count=1, flags=re.M)
         chunks.append(d)

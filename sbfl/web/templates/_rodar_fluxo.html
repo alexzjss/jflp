@@ -1,0 +1,8 @@
+{% if ok %}
+<section id="s1" class="rd-passo rd-fechado" hx-swap-oob="true">
+  <h2><span class="rd-num rd-feito">1</span> Pasta</h2>
+  <p class="rd-linha"><code>{{ pasta }}</code>
+    <a href="#" class="rd-trocar" hx-get="/rodar/trocar?projeto={{ pasta|q }}" hx-target="#s1" hx-swap="outerHTML">trocar</a></p>
+</section>
+{% endif %}
+{% include fluxo_tpl %}

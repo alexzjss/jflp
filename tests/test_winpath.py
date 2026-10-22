@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sbfl import prepare as prep_mod, store
 from sbfl.adapters.base import Bug
 from sbfl.home import Home
-from sbfl.winpath import long_path
+from sbfl.winpath import inside, long_path
 
 
 @unittest.skipUnless(os.name == "nt", "caminhos longos só importam no Windows")
@@ -67,6 +67,17 @@ class LongPathTests(unittest.TestCase):
         self.assertFalse(os.access(long_path(copied), os.W_OK))
         store.make_writable(final)
         self.assertTrue(os.access(long_path(copied), os.W_OK))
+
+
+class InsideTests(unittest.TestCase):
+    def test_compara_sem_resolver(self):
+        base = Path(tempfile.gettempdir()) / "jflp-base"
+        self.assertTrue(inside(base, base))
+        self.assertTrue(inside(base / "a" / "b", base))
+        self.assertFalse(inside(base / ".." / "fora", base))
+        self.assertFalse(inside(Path(str(base) + "-irma") / "x", base))   # prefixo não é pasta-mãe
+        with mock.patch("pathlib.Path.resolve", side_effect=AssertionError("não deve resolver")):
+            self.assertTrue(inside(base / "x", base))
 
 
 if __name__ == "__main__":

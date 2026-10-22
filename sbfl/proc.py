@@ -11,23 +11,29 @@ import time
 from typing import Callable
 
 
+# Processo-filho de console não abre janela (o app roda sem console, via pythonw).
+NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
 class Aborted(Exception):
     """A thread foi interrompida (fechamento do app): nenhum processo novo pode começar."""
 
 
 _LIVE: set[subprocess.Popen] = set()
+_OWNER: dict[subprocess.Popen, int] = {}     # processo -> id da thread que o iniciou
 _LIVE_LOCK = threading.Lock()
 _LOCAL = threading.local()
 
 
-def set_abort(event: threading.Event | None) -> None:
-    """Liga à thread atual um evento de interrupção: com ele aceso, `run` recusa novos processos."""
-    _LOCAL.abort = event
+def set_abort(*events: threading.Event | None) -> None:
+    """Liga à thread atual eventos de interrupção: com qualquer um aceso, `run` recusa novos processos.
+
+    O worker passa dois: o do fechamento do app e o do cancelamento pelo usuário."""
+    _LOCAL.abort = tuple(e for e in events if e is not None)
 
 
 def aborted() -> bool:
-    ev = getattr(_LOCAL, "abort", None)
-    return ev is not None and ev.is_set()
+    return any(ev.is_set() for ev in getattr(_LOCAL, "abort", ()))
 
 
 def live_count() -> int:
@@ -44,13 +50,23 @@ def kill_all() -> int:
     return len(procs)
 
 
+def kill_thread(ident: int) -> int:
+    """Mata a árvore dos processos iniciados por uma thread (cancelar um job sem tocar nos demais)."""
+    with _LIVE_LOCK:
+        procs = [p for p in _LIVE if _OWNER.get(p) == ident]
+    for p in procs:
+        kill_tree(p)
+    return len(procs)
+
+
 atexit.register(kill_all)
 
 
 def kill_tree(p: subprocess.Popen) -> None:
     try:
         if os.name == "nt":
-            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
         else:
             os.killpg(os.getpgid(p.pid), signal.SIGKILL)
     except Exception:
@@ -83,9 +99,11 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
         p = subprocess.Popen(
             [str(c) for c in cmd], cwd=cwd, env=env, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
-            bufsize=1, start_new_session=(os.name != "nt"),
+            bufsize=1, start_new_session=(os.name != "nt"), stdin=subprocess.DEVNULL,
+            creationflags=NO_WINDOW,
         )
         _LIVE.add(p)
+        _OWNER[p] = threading.get_ident()
     if aborted():           # o aviso chegou entre a checagem e o registro
         kill_tree(p)
     state = {"timed_out": False}
@@ -122,6 +140,7 @@ def run(cmd, cwd=None, env=None, timeout=None, log_path=None, drop=None,
         p.wait()
         with _LIVE_LOCK:
             _LIVE.discard(p)
+            _OWNER.pop(p, None)
         if timer:
             timer.cancel()
         if f:

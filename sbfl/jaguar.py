@@ -35,21 +35,80 @@ def write_test_list(path: Path, classes: list[str]) -> None:
         f.write("\n".join(classes) + "\n")
 
 
-def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str) -> list:
+def write_test_selection(sel_dir: Path, classes: list[str]) -> list[str]:
+    """O JaguarRunner 0.0.6 lê `-tf` mas não usa: roda toda `*Test.class` que acha em `-t`, e do arquivo só usa o
+    caminho para deduzir o nome (a classe é carregada do classpath). Recria `sel_dir` com um arquivo vazio por
+    classe escolhida, para passar em `-t`; devolve as que o Jaguar não rodaria (nome sem o sufixo Test)."""
+    shutil.rmtree(sel_dir, ignore_errors=True)
+    sel_dir.mkdir(parents=True, exist_ok=True)
+    ignored = []
+    for cls in classes:
+        if not cls.lower().endswith("test"):
+            ignored.append(cls)
+            continue
+        marker = sel_dir.joinpath(*cls.split(".")).with_suffix(".class")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+    return ignored
+
+
+LOGBACK_XML = """<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder><pattern>%d{{HH:mm:ss.SSS}} [%thread] %-5level %logger{{36}} - %msg%n</pattern></encoder>
+  </appender>
+  <appender name="JFLPFILE" class="ch.qos.logback.core.FileAppender">
+    <file>{file}</file>
+    <append>true</append>
+    <immediateFlush>true</immediateFlush>
+    <encoder><charset>UTF-8</charset><pattern>%msg%n</pattern></encoder>
+  </appender>
+  <logger name="JaguarLogger" level="DEBUG"><appender-ref ref="JFLPFILE"/></logger>
+  <root level="DEBUG"><appender-ref ref="CONSOLE"/></root>
+</configuration>
+"""
+
+
+def write_logback(config: Path, test_log: Path) -> None:
+    """Configuração do logback que também grava o JaguarLogger em arquivo: um teste que troca ou fecha
+    System.out derruba o console, mas não o arquivo."""
+    from xml.sax.saxutils import escape
+    config.write_text(LOGBACK_XML.format(file=escape(test_log.resolve().as_posix())),
+                      encoding="utf-8", newline="\n")
+
+
+def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str,
+              logback: Path | None = None, test_dir: Path | None = None) -> list:
+    """`test_dir`: pasta da seleção (`write_test_selection`) passada em `-t`; os testes de verdade seguem no classpath."""
     lib = Path(opts.lib)
     sep = os.pathsep
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
     return [
         opts.java,
         *opts.jvm_args,
+        *([f"-Dlogback.configurationFile={logback.resolve().as_posix()}"] if logback else []),
         f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",
-        "-p", ".", "-c", ctx.classes_dir, "-t", ctx.tests_dir,
+        "-p", ".", "-c", ctx.classes_dir, "-t", str(test_dir) if test_dir else ctx.tests_dir,
         "-tf", str(tf), "-h", heuristic,
         "-ot", opts.output_type, "-o", out_base,
         "-l", opts.log_level,
     ]
+
+
+def _file_events(path: Path, attempt: int) -> list[tuple[str, str, str]]:
+    """(teste, classe, Passed|Failed) da tentativa `attempt` no arquivo do JaguarLogger."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    k = text.rfind(f"# sbfl attempt {attempt}\n")
+    out = []
+    for ln in text[k:].splitlines() if k >= 0 else []:
+        m = TEST_RE.search(ln)
+        if m:
+            out.append((m.group(1), m.group(2), m.group(3)))
+    return out
 
 
 def _find_xml(project_dir: Path, tail: list[str], out_base: str) -> Path | None:
@@ -68,11 +127,16 @@ def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = 
     heuristic = heuristic or opts.heuristic
     out_base = f"sbfl_{heuristic}"
     log = out_dir / "jaguar.log"
+    test_log = out_dir / "jaguar-tests.log"       # JaguarLogger direto em arquivo (sobrevive a System.setOut)
+    logback = out_dir / "logback-jflp.xml"
+    write_logback(logback, test_log)
     tf = ctx.project_dir / ".sbfl_tests.txt"
-    classes = list(ctx.test_classes)
+    sel_dir = out_dir / "testes-selecionados"
+    # na ordem em que o Jaguar acha os arquivos (por nome), para o culpado de um crash ser o certo
+    classes = sorted(dict.fromkeys(ctx.test_classes), key=lambda c: c.split("."))
     excluded: list[str] = []
     last_seen = None
-    meta = {"attempts": 0, "excluded_classes": excluded, "analysis_exceptions": 0}
+    meta = {"attempts": 0, "excluded_classes": excluded, "analysis_exceptions": 0, "ignored_classes": []}
     stale = ctx.project_dir / ".jaguar" / f"{out_base}.xml"
     for attempt in range(opts.max_retries + 1):
         meta["attempts"] = attempt + 1
@@ -83,9 +147,16 @@ def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = 
             meta["status"] = "no_tests"
             return meta
         write_test_list(tf, remaining)
+        meta["ignored_classes"] = write_test_selection(sel_dir, remaining)
+        remaining = [c for c in remaining if c not in meta["ignored_classes"]]
+        if not remaining:
+            meta["status"] = "no_tests"
+            return meta
         with open(log, "a", encoding="utf-8") as lf:
             lf.write(f"# sbfl attempt {attempt + 1}\n")
-        r = run(build_cmd(opts, ctx, tf, out_base, heuristic), cwd=ctx.project_dir,
+        with open(test_log, "a", encoding="utf-8", newline="\n") as tl:
+            tl.write(f"# sbfl attempt {attempt + 1}\n")
+        r = run(build_cmd(opts, ctx, tf, out_base, heuristic, logback, sel_dir), cwd=ctx.project_dir,
                 env=opts.env or None, timeout=opts.timeout_s, log_path=log,
                 drop=NOISE,
                 count={"analysis_exceptions": r"Exception during analysis"},
@@ -94,6 +165,9 @@ def run_jaguar(opts: JaguarOptions, ctx, out_dir: Path, heuristic: str | None = 
         meta["seconds"] = meta.get("seconds", 0) + r["seconds"]
         events = [TEST_RE.search(t) for t in r["collected"]["test"]]
         events = [(m.group(1), m.group(2), m.group(3)) for m in events if m]
+        from_file = _file_events(test_log, attempt + 1)
+        if len(from_file) > len(events):     # o stdout pode ter sido cortado por um teste; o arquivo não
+            events = from_file
         failed = [f"{c}#{n}" for n, c, s in events if s == "Failed"]
         meta["failed_tests"] = failed[:200]
         xml = _find_xml(ctx.project_dir, r["tail"], out_base)

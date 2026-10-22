@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -32,6 +34,8 @@ class DecodeTests(unittest.TestCase):
 
 class WslTests(unittest.TestCase):
     def setUp(self):
+        detect.clear_cache()
+        self.addCleanup(detect.clear_cache)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.settings = load_settings(Home(Path(self.tmp.name)))
@@ -112,6 +116,8 @@ class WslTests(unittest.TestCase):
 
 class JdkTests(unittest.TestCase):
     def setUp(self):
+        detect.clear_cache()
+        self.addCleanup(detect.clear_cache)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Home(Path(self.tmp.name) / "h")
@@ -224,3 +230,75 @@ class RealMachineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CacheTests(unittest.TestCase):
+    """Sondas de JDK/Maven e do WSL são lembradas; uma instalação trocada é sondada de novo."""
+
+    def setUp(self):
+        detect.clear_cache()
+        self.addCleanup(detect.clear_cache)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.home = Home(self.root / "home")
+        self.home.ensure()
+        self.settings = load_settings(self.home)
+        jdk = self.home.tools / "jdk-17"
+        mvn = self.home.tools / "apache-maven-3.9.9"
+        (jdk / "bin").mkdir(parents=True)
+        (mvn / "bin").mkdir(parents=True)
+        self.java = detect._exe(jdk, "java")
+        self.mvn = detect._exe(mvn, "mvn")
+        self.java.write_bytes(b"x")
+        self.mvn.write_bytes(b"x")
+        self.calls = 0
+
+        def fake(cmd, **kw):
+            self.calls += 1
+            if cmd[0].endswith(self.java.name):
+                return subprocess.CompletedProcess(cmd, 0, b"", b'openjdk version "17.0.1" 2021')
+            return subprocess.CompletedProcess(cmd, 0, b"Apache Maven 3.9.9 (abc)\n", b"")
+
+        p = mock.patch.object(detect.subprocess, "run", side_effect=fake)
+        p.start()
+        self.addCleanup(p.stop)
+        for name in ("_system_java_homes", "_system_maven_homes"):
+            q = mock.patch.object(detect, name, return_value=[])
+            q.start()
+            self.addCleanup(q.stop)
+
+    def test_segunda_busca_nao_cria_processos(self):
+        self.assertEqual(len(detect.find_jdks(self.home, self.settings)), 1)
+        self.assertEqual(len(detect.find_mavens(self.home, self.settings)), 1)
+        n = self.calls
+        self.assertGreaterEqual(n, 2)
+        detect.find_jdks(self.home, self.settings)
+        detect.find_mavens(self.home, self.settings)
+        self.assertEqual(self.calls, n)
+
+    def test_mtime_diferente_sonda_de_novo(self):
+        detect.find_jdks(self.home, self.settings)
+        n = self.calls
+        st = self.java.stat()
+        os.utime(self.java, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+        detect.find_jdks(self.home, self.settings)
+        self.assertEqual(self.calls, n + 1)
+
+    def test_clear_cache_forca_nova_sonda(self):
+        detect.find_jdks(self.home, self.settings)
+        n = self.calls
+        detect.clear_cache()
+        detect.find_jdks(self.home, self.settings)
+        self.assertEqual(self.calls, n + 1)
+
+    def test_wsl_com_ttl(self):
+        with mock.patch.object(detect, "_is_windows", return_value=True), \
+                mock.patch.object(detect, "_run", return_value=(0, "Ubuntu\n")) as run:
+            detect.wsl_status(self.settings)
+            n = run.call_count
+            detect.wsl_status(self.settings)
+            self.assertEqual(run.call_count, n)
+            with mock.patch.object(detect.time, "monotonic", return_value=time.monotonic() + 1000):
+                detect.wsl_status(self.settings)
+            self.assertGreater(run.call_count, n)

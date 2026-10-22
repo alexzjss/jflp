@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from sbfl import status as st
-from sbfl.diagnose import RULES, classify
+from sbfl.diagnose import RULES, SEM_INSTRUMENTACAO, classify
+from sbfl.outputs import AVISO_LOG_INTERROMPIDO
 from sbfl.run_maven import AttemptResult
 
 
@@ -41,6 +42,38 @@ class DiagnoseTest(unittest.TestCase):
         for log, status in cases:
             self.assertEqual(self.c(log).status, status, log)
         self.assertGreaterEqual(len(RULES), 8)
+
+    def test_projeto_invalido_e_terminal(self):
+        logs = [
+            "[ERROR] The goal you specified requires a project to execute but there is no POM in this "
+            "directory (C:\\w). Please verify you invoked Maven from the correct directory. -> [Help 1]\n"
+            "org.apache.maven.MissingProjectException",
+            "[ERROR] Could not find the selected project in the reactor: maven @ \n[ERROR] -> [Help 1]",
+        ]
+        for log in logs:
+            for kind in ("maven", "jaguar1", "jaguar2"):
+                d = self.c(log, kind=kind)
+                self.assertEqual(d.status, st.PROJETO_INVALIDO, log)
+                self.assertEqual(d.suggestions, [])
+                self.assertIn("pom.xml", d.cause)
+                self.assertIn("módulo", d.cause)
+
+    def test_pom_pai_fora_da_pasta_escolhida_nao_e_dependencia(self):
+        log = ("[ERROR] Non-resolvable parent POM for org.apache.maven:apache-maven:3.2.6-SNAPSHOT: "
+               "Could not find artifact org.apache.maven:maven:pom:3.2.6-SNAPSHOT and "
+               "'parent.relativePath' points at wrong local POM @ line 21, column 11 -> [Help 2]")
+        d = self.c(log)
+        self.assertEqual(d.status, st.PROJETO_INVALIDO)
+        self.assertEqual(d.suggestions, [])
+        self.assertIn("pom pai", d.cause)
+
+    def test_candidatos_vazios_para_projeto_invalido(self):
+        from sbfl.autosearch import candidates
+        from sbfl.diagnose import Diagnosis
+        from sbfl.home import Home, load_settings
+        from sbfl.run_maven import AttemptConfig
+        settings = load_settings(Home(Path(self.tmp) / "h"))
+        self.assertEqual(candidates(AttemptConfig(), Diagnosis(st.PROJETO_INVALIDO, "x"), "maven", settings), [])
 
     def test_rat_unapproved_license(self):
         log = ("[ERROR] Failed to execute goal org.apache.rat:apache-rat-plugin:0.10:check (check) "
@@ -129,12 +162,43 @@ class DiagnoseTest(unittest.TestCase):
         self.assertEqual(d.status, "ok_testes_falhando")
         self.assertEqual(d.suggestions, [])
 
-    def test_empty_jaguar2_csv_no_failures_is_ok_with_warning(self):
+    def test_empty_jaguar2_csv_no_failures_is_sem_teste_falhando(self):
         csv = Path(self.tmp) / "j.csv"
         csv.write_text("")
         d = self.c("", kind="jaguar2", outputs={"jaguar2_csv": csv}, tests={"A#a": "passed"})
-        self.assertEqual(d.status, "ok")
-        self.assertIn("nenhum teste falhou: relatório vazio (defeito não reproduzido)", d.warnings)
+        self.assertEqual(d.status, "sem_teste_falhando")
+        self.assertIn("Nenhum teste falhou", d.cause)
+        self.assertIn(SEM_INSTRUMENTACAO, d.warnings)
+        self.assertFalse(st.is_success(d.status))
+
+    def test_maven_com_todos_os_testes_passando_nao_e_sucesso(self):
+        sf = Path(self.tmp) / "surefire"
+        sf.mkdir()
+        (sf / "r.xml").write_text("<x/>")
+        d = self.c("", outputs={"surefire": sf}, tests={"A#a": "passed", "A#b": "skipped"})
+        self.assertEqual(d.status, "sem_teste_falhando")
+        self.assertEqual(d.cause, st.CAUSA_SEM_TESTE_FALHANDO)
+
+    def test_jaguar1_sem_falha_e_xml_vazio_avisa_que_nada_foi_instrumentado(self):
+        x = Path(self.tmp) / "jaguar1.xml"
+        x.write_text('<FlatFaultClassification heuristic="OCHIAI" project="fault localization"/>')
+        log = "DEBUG JaguarLogger - ClassFilesCache size = 0\nTest t(A) : Passed\n"
+        d = self.c(log, kind="jaguar1", outputs={"jaguar1_xml": x}, tests={"A#t": "passed"})
+        self.assertEqual(d.status, "sem_teste_falhando")
+        self.assertIn(SEM_INSTRUMENTACAO, d.warnings)
+
+    def test_jaguar1_cache_vazio_com_falha_continua_concluida_mas_avisa(self):
+        x = Path(self.tmp) / "jaguar1.xml"
+        x.write_text('<FlatFaultClassification heuristic="OCHIAI" project="fault localization"/>')
+        d = self.c("ClassFilesCache size = 0\n", kind="jaguar1", outputs={"jaguar1_xml": x}, tests={"A#t": "failed"})
+        self.assertEqual(d.status, "ok_testes_falhando")
+        self.assertEqual(d.warnings, [SEM_INSTRUMENTACAO])
+
+    def test_jaguar1_com_ranking_nao_avisa(self):
+        x = Path(self.tmp) / "jaguar1.xml"
+        x.write_text('<r><requirements name="a.B" location="3" suspicious-value="0.5" cef="1" cep="0" cnf="0" cnp="1"/></r>')
+        d = self.c("ClassFilesCache size = 12\n", kind="jaguar1", outputs={"jaguar1_xml": x}, tests={"A#t": "failed"})
+        self.assertEqual((d.status, d.warnings), ("ok_testes_falhando", []))
 
     def test_empty_jaguar2_csv_with_failing_tests_is_jaguar_sem_saida(self):
         csv = Path(self.tmp) / "j.csv"
@@ -254,6 +318,22 @@ class DiagnoseTest(unittest.TestCase):
         csv.mkdir()
         d = self.c("", kind="jaguar2", outputs={"jaguar2_csv": csv})
         self.assertEqual(d.status, "jaguar_sem_saida")
+
+    def test_jaguar1_log_cortado_mas_xml_com_falha_e_ok_testes_falhando(self):
+        x = Path(self.tmp) / "jaguar1.xml"
+        x.write_text('<r><requirements name="a.B" location="3" suspicious-value="1.0" cef="1" cep="0" cnf="0" cnp="258"/></r>')
+        extra = {"test_counts": {"total": 259, "passed": 258, "failed": 1, "error": 0, "skipped": 0},
+                 "log_truncado": True}
+        d = self.c("ClassFilesCache size = 12\n", kind="jaguar1", outputs={"jaguar1_xml": x},
+                   tests={"A#t": "passed"}, extra=extra)
+        self.assertEqual(d.status, "ok_testes_falhando")
+        self.assertEqual(d.warnings, [AVISO_LOG_INTERROMPIDO])
+
+    def test_effective_reavalia_sem_teste_falhando_gravado_com_contagem_nova(self):
+        self.assertEqual(st.effective(st.SEM_TESTE_FALHANDO, {"total": 259, "passed": 258, "failed": 1}),
+                         st.OK_TEST_FAIL)
+        self.assertEqual(st.effective(st.SEM_TESTE_FALHANDO, {"total": 19, "passed": 19, "failed": 0}),
+                         st.SEM_TESTE_FALHANDO)
 
 
 if __name__ == "__main__":

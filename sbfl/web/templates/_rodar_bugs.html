@@ -1,0 +1,21 @@
+{# Bugs de um projeto: id + resumo do JIRA (chega depois, por /rodar/resumos) + último resultado #}
+<div class="rd-tabela">
+  <table>
+    <caption class="rd-oculto">Bugs de {{ repo }}</caption>
+    <thead><tr><th scope="col"><span class="rd-oculto">Marcar</span></th><th scope="col">Bug</th><th scope="col">Resumo</th><th scope="col">Último resultado</th></tr></thead>
+    <tbody>
+    {% for b in bugs %}
+      <tr class="rd-bug" data-st="{{ b.st }}">
+        <td><input type="checkbox" class="rd-sel" name="sel" value="{{ repo }}|{{ b.branch }}" id="b{{ pi }}-{{ loop.index }}"
+                   data-proj="{{ pi }}" aria-label="Selecionar {{ b.id }}" {{ 'checked' if b.marcado else '' }}></td>
+        <td><label for="b{{ pi }}-{{ loop.index }}"><strong>{{ b.id }}</strong></label></td>
+        <td class="rd-resumo"><span id="rs-{{ pi }}-{{ loop.index0 }}" class="vazio">…</span></td>
+        <td>{% if b.ult %}<span class="chip {{ b.ult.tom }}">{{ b.ult.label }}</span>{% else %}<span class="vazio">nunca rodado</span>{% endif %}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="4" class="vazio">Nenhum bug (ramo bugs-dot-jar_*) neste repositório.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if bugs %}<div hidden hx-get="/rodar/resumos?repo={{ repo|q }}&pi={{ pi }}" hx-trigger="load" hx-swap="none" hx-target="this"></div>{% endif %}

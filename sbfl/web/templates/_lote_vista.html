@@ -1,0 +1,58 @@
+{# Vista do lote (spec §3.1): cabeçalho com contagem por veredito e a tabela por bug. Com jobs em andamento só é
+   trocada quando algum job muda de estado (/lote/N/tabela responde 204 caso contrário); o andamento de cada célula
+   vem de /job/N/mini, então nada é recriado a cada ciclo. #}
+<div id="lote-vista" class="lv" data-bid="{{ bid }}"{% if v.pendente %} hx-get="/lote/{{ bid }}/tabela" hx-vals='{"sig": "{{ v.sig }}"}' hx-trigger="every {{ poll }}s" hx-swap="outerHTML"{% endif %}>
+  <div class="lv-topo">
+    <p class="lv-contagem" aria-label="Vereditos do lote">
+      {% for code, n in v.contagem.items() %}<span class="lv-cont vd-{{ code }}" title="{{ ver[code].label }}"><span class="vd vd-{{ code }}" aria-hidden="true">{{ ver[code].simbolo }}</span> {{ n }} <span class="lv-cont-rot">{{ ver[code].label }}</span></span>{% endfor %}
+    </p>
+    <p class="lv-andamento vazio">{{ v.feitos }}/{{ v.total_jobs }} execuções{% if v.pendente %} · rodando{% endif %}</p>
+    <div class="botoes lv-acoes">
+      <a class="botao" href="/lote/{{ bid }}/resultado.csv" download>Baixar CSV</a>
+      {% if v.pendente %}<button type="button" hx-post="/lote/{{ bid }}/parar" hx-target="#lote-vista" hx-swap="outerHTML"
+        hx-confirm="Cancelar o lote? As execuções que ainda não começaram saem da fila e a que está rodando é interrompida.">Cancelar lote</button>{% endif %}
+    </div>
+  </div>
+  <div class="lv-tabela" role="region" aria-label="Resultados por bug" tabindex="0">
+  <table class="lv-t">
+    <thead><tr>
+      <th scope="col">Bug</th>
+      {% for k in v.kinds %}<th scope="col">{{ {'maven': 'Maven', 'jaguar1': 'Jaguar 1', 'jaguar2': 'Jaguar 2'}[k] }}</th>{% endfor %}
+      <th scope="col">Gabarito</th>
+    </tr></thead>
+    {% for b in v.bugs %}
+    <tbody class="lv-bug">
+      <tr class="lv-linha" data-key="{{ b.key }}">
+        <th scope="row" class="lv-id">
+          <button type="button" class="lv-toggle" aria-expanded="false" aria-controls="det-{{ b.uid }}"
+                  data-url="/lote/{{ bid }}/bug?key={{ b.key|q }}" data-key="{{ b.key }}"><span class="lv-seta" aria-hidden="true"></span><strong>{{ b.id }}</strong></button>
+          <span class="lv-proj vazio">{{ b.project }}</span>
+          <span class="lv-resumo vazio" id="res-{{ b.uid }}"></span>
+        </th>
+        {% for k in v.kinds %}
+        {% set c = b.celulas.get(k) %}
+        <td class="lv-cel">
+          {%- if not c %}<span class="vazio">-</span>
+          {%- elif c.state == 'running' %}<div class="mini" hx-get="/job/{{ c.job_id }}/mini" hx-trigger="load, every 1s" hx-swap="innerHTML" hx-target="this"><span class="mini-txt">rodando…</span><span class="barra-fina"></span></div>
+          {%- elif c.state == 'pending' %}<span class="vazio">na fila</span>
+          {%- elif c.veredito and c.status and c.tom == 'ok' %}<span class="vd vd-{{ c.veredito.code }}" aria-label="{{ c.veredito.label }}">{{ c.veredito.simbolo }}</span> <span{% if c.pos %} title="{{ c.pos.faixa }}"{% endif %}>{{ c.texto }}</span>
+          {%- elif c.tom == 'erro' %}<span class="erro" title="{{ c.error or c.label }}">{{ c.texto }}</span>
+          {%- elif c.tom == 'alerta' %}<span class="lv-alerta">{{ c.texto }}</span>
+          {%- else %}<span>{{ c.texto }}</span>{% endif %}
+        </td>
+        {% endfor %}
+        <td class="lv-gab">
+          {%- if b.veredito.code != 'sem_dado' or b.posicoes %}<span class="vd vd-{{ b.veredito.code }}" aria-hidden="true">{{ b.veredito.simbolo }}</span> <strong>{{ b.veredito.label }}</strong>
+          {%- if b.posicoes %}<span class="lv-pos vazio">{{ b.posicoes }}</span>{% endif %}
+          {%- else %}<span class="vd vd-sem_dado" aria-hidden="true">—</span> <span class="vazio">{{ 'sem dado' if b.catalogo else 'sem gabarito' }}</span>{% endif %}
+        </td>
+      </tr>
+      <tr class="lv-det" id="det-{{ b.uid }}" hidden>
+        <td colspan="{{ v.kinds|length + 2 }}"><div class="lv-det-corpo" aria-live="polite"></div></td>
+      </tr>
+    </tbody>
+    {% endfor %}
+  </table>
+  </div>
+  {% if com_catalogo %}<div hidden hx-get="/lote/{{ bid }}/resumos" hx-trigger="load" hx-swap="none" hx-target="this"></div>{% endif %}
+</div>

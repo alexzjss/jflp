@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,12 +13,14 @@ from pathlib import Path
 from typing import Callable
 
 from . import proc, recipes
+from .proc import NO_WINDOW
 from . import status as st
 from .adapters.base import Bug
-from .autosearch import candidates, deep_merge
-from .diagnose import Diagnosis, classify
+from .autosearch import candidates, deep_merge, effective_jdk_maven, effective_key
+from .diagnose import Diagnosis, _read_tail, classify
 from .errors import StageError
 from .home import Home, Settings
+from .outputs import parse_surefire_failures
 from .pomgen import generate as pom_generate
 from .prepare import _rmtree, prepare, working_copy
 from .winpath import long_path
@@ -67,14 +70,17 @@ def _first_config(settings: Settings, recipe, opts: RunOptions) -> AttemptConfig
         opts.test_scope or (recipe.test_scope if recipe else None) or settings.get("run", "test_scope", "relevant"))
 
 
-def _count_tests(tests: dict) -> dict:
+def _count_tests(tests: dict, counts: dict | None = None) -> dict:
+    if counts:     # contagem do XML do Jaguar 1, mais confiável que o log
+        return {k: int(counts.get(k) or 0) for k in ("total", "passed", "failed", "error", "skipped")}
     vals = list(tests.values())
     return {"total": len(vals), **{k: vals.count(k) for k in ("passed", "failed", "error", "skipped")}}
 
 
 def _git_out(*args: str) -> str | None:
     try:
-        r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["git", *args], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL, creationflags=NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     return r.stdout.strip() if r.returncode == 0 else None
@@ -83,7 +89,9 @@ def _git_out(*args: str) -> str | None:
 def _env_info(prep, res: AttemptResult | None) -> dict:
     git = _git_out("--version")
     commit = None
-    if (prep.pristine / ".git").exists():
+    if prep.info.get("source_commit"):      # pasta local: o pristine não leva o .git
+        commit = prep.info["source_commit"]
+    elif (prep.pristine / ".git").exists():
         commit = _git_out("-C", str(prep.pristine), "rev-parse", "HEAD")
     try:
         version = importlib.metadata.version("jflp")
@@ -115,6 +123,22 @@ def _copy_outputs(w: RunWriter, kind: str, res: AttemptResult, last: int) -> Non
         w.write_text("pom/jaguar2-pom.diff", diff + "\n")
 
 
+def _prep_warnings(prep) -> list[str]:
+    """Avisos que o `prepare` deixou em `info["warnings"]` (ex.: verdade-terreno não achada)."""
+    raw = (getattr(prep, "info", None) or {}).get("warnings") or []
+    return list(dict.fromkeys(str(x) for x in raw if x))
+
+
+def _failures(res: AttemptResult) -> list[dict]:
+    """Testes que falharam, com a mensagem e o primeiro quadro da pilha que é do projeto (se há relatório)."""
+    sf = res.outputs.get("surefire")
+    out = parse_surefire_failures(Path(sf)) if sf and Path(sf).is_dir() else []
+    seen = {f["test"] for f in out}
+    out += [{"test": t, "message": None, "type": None, "frame": None}
+            for t, v in sorted(res.tests.items()) if v in ("failed", "error") and t not in seen]
+    return out
+
+
 def _write_attempt(w: RunWriter, n: int, cfg: AttemptConfig, diag: Diagnosis,
                    res: AttemptResult, log: Path) -> None:
     if log.exists():
@@ -125,6 +149,39 @@ def _write_attempt(w: RunWriter, n: int, cfg: AttemptConfig, diag: Diagnosis,
         "command": [str(c) for c in res.command], "toolenv": res.toolenv,
         "status": diag.status, "rc": res.rc, "timed_out": res.timed_out,
         "seconds": res.seconds, "extra": res.extra})
+
+
+_SUREFIRE_RUN = re.compile(r"maven-surefire-plugin:[^:\s]+:test\b")
+
+
+def phase_rank(kind: str, diag: Diagnosis, res: AttemptResult) -> int:
+    """Até onde a tentativa chegou: checkout 0 < pom/projeto/biblioteca 1 < reactor 2 < compilação e
+    dependências 3 < testes 4 < Jaguar sem saída/crash 5 < sucesso 6."""
+    s = diag.status
+    if st.is_success(s):
+        return 6
+    if s == st.SEM_TESTE_FALHANDO:
+        return 5
+    if s == st.CHECKOUT_FALHOU:
+        return 0
+    fase = (res.extra or {}).get("fase")
+    if s == st.PROJETO_INVALIDO or fase in ("pom", "jaguar1_lib"):
+        return 1
+    if fase == "reactor":
+        return 2
+    if s in (st.JAGUAR_SEM_SAIDA, st.JAGUAR_CRASH):
+        return 5
+    if s == st.TESTES_NAO_ENCONTRADOS or res.tests or (res.outputs or {}).get("surefire"):
+        return 4
+    if kind != "jaguar1" and _SUREFIRE_RUN.search(_read_tail(res.log)):
+        return 4        # o Surefire chegou a rodar (ex.: a JVM de teste caiu)
+    return 3
+
+
+def _label(n: int, cfg: AttemptConfig, res: AttemptResult, status: str) -> str:
+    jdk, _ = effective_jdk_maven(res.toolenv)
+    jdk = jdk if jdk is not None else cfg.jdk
+    return f"tentativa {n}" + (f" (JDK {jdk})" if jdk is not None else "") + f": {status}"
 
 
 def _stopped(w: RunWriter, status: str, cause: str, **extra) -> Path:
@@ -151,7 +208,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
             w.write_json("env.json", _env_info(prep, None))
             w.write_text("command.txt", "")
             _stopped(w, st.DESCONHECIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
-                     attempts=0, test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
+                     attempts=0, warnings=_prep_warnings(prep), test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
                      relevant_tests=prep.relevant_tests, truth=[f.to_dict() for f in prep.truth])
             return w.rel
 
@@ -174,11 +231,15 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         configs: list[AttemptConfig] = []
         queue: list[AttemptConfig] = []
         cfg: AttemptConfig | None = first
-        # última tentativa REAL (que rodou): é ela que define status, saídas e checkout
+        # tentativa REAL (que rodou) que foi mais longe: define status, saídas e checkout
         diag: Diagnosis | None = None
         res: AttemptResult | None = None
         real_n = 0
-        keep: Path | None = None       # cópia de trabalho da última tentativa real
+        best_rank = -1
+        outcomes: list[tuple[int, str]] = []   # (n, "tentativa N (JDK X): status") de cada tentativa real
+        ran_keys: set[str] = set()     # configurações efetivas já executadas
+        eff: tuple = (None, None)      # JDK/Maven que o perfil resolveu na 1ª tentativa
+        keep: Path | None = None       # cópia de trabalho da melhor tentativa
         missing: MissingTool | None = None
         carry_jdk: int | None = None   # JDK que levou o build até a fase de testes
         skipped: list[str] = []        # candidatas ignoradas por falta de ferramenta
@@ -186,9 +247,12 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         try:
             n = 0
             while cfg is not None:
-                n += 1
                 if cfg.jdk is None and carry_jdk is not None:
                     cfg = replace(cfg, jdk=carry_jdk)
+                if n and effective_key(cfg, *eff) in ran_keys:     # mesma configuração efetiva: não repete
+                    cfg = queue.pop(0) if queue and n < max_attempts else None
+                    continue
+                n += 1
                 configs.append(cfg)
                 if cb:
                     cb(f"# jflp tentativa {n}")
@@ -200,7 +264,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     _rmtree(workdir)
                     w.write_json(f"attempts/{n}/attempt.json", {"config": cfg.to_dict(), "skipped": e.message})
                     if cb:
-                        cb(f"# jflp tentativa {n} ignorada: {e.message}")
+                        cb(f"# jflp tentativa {n}: ignorada")
                     skipped.append(f"tentativa {n} ignorada: {e.message}")
                     if n == 1:
                         missing = e
@@ -214,33 +278,43 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 except BaseException:
                     _rmtree(workdir)
                     raise
-                if keep is not None:
-                    _rmtree(keep)
-                res, keep, real_n = r, workdir, n
-                diag = classify(kind, res)
-                if cfg.jdk is not None and (diag.status == st.JAGUAR_SEM_SAIDA or st.is_success(diag.status)):
+                d = classify(kind, r)
+                rank = phase_rank(kind, d, r)       # antes de _write_attempt: ele apaga o log
+                if n == 1:
+                    eff = effective_jdk_maven(r.toolenv)
+                ran_keys.add(effective_key(cfg, *effective_jdk_maven(r.toolenv)))
+                outcomes.append((n, _label(n, cfg, r, d.status)))
+                if cb:
+                    cb(f"# jflp tentativa {n}: {d.status}")
+                if rank >= best_rank:       # empate: a mais recente
+                    if keep is not None:
+                        _rmtree(keep)
+                    res, diag, keep, real_n, best_rank = r, d, workdir, n, rank
+                else:
+                    _rmtree(workdir)
+                if cfg.jdk is not None and (d.status == st.JAGUAR_SEM_SAIDA or st.is_success(d.status)):
                     carry_jdk = cfg.jdk
-                _write_attempt(w, n, cfg, diag, res, log)
+                _write_attempt(w, n, cfg, d, r, log)
                 if proc.aborted():
                     aborted = True
                     break
-                stop = (st.is_success(diag.status) or not opts.auto_search or n >= max_attempts
-                        or diag.status == st.TIMEOUT)
+                stop = (st.is_success(d.status) or not opts.auto_search or n >= max_attempts
+                        or d.status in (st.TIMEOUT, st.PROJETO_INVALIDO, st.SEM_TESTE_FALHANDO))
                 if n == 1 and not stop:
-                    queue = candidates(first, diag, kind, settings, _detected(prep, settings, kind, res))
+                    queue = candidates(first, d, kind, settings, _detected(prep, settings, kind, r), r.toolenv)
                 cfg = None if stop or not queue else queue.pop(0)
 
             if aborted:
                 _stopped(w, st.INTERROMPIDO, "execução interrompida: o aplicativo foi fechado",
-                         attempts=real_n, attempt_configs=[c.to_dict() for c in configs], **base)
+                         warnings=_prep_warnings(prep), attempts=real_n, attempt_configs=[c.to_dict() for c in configs], **base)
             elif missing is not None:
                 status = st.JDK_INCOMPATIVEL if missing.kind == "jdk" else st.DESCONHECIDO
                 w.write_json("env.json", _env_info(prep, None))
                 w.write_text("command.txt", "")
-                _stopped(w, status, missing.message, attempts=1,
+                _stopped(w, status, missing.message, attempts=1, warnings=_prep_warnings(prep),
                          attempt_configs=[c.to_dict() for c in configs], **base)
             else:
-                _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base, skipped)
+                _finalize(settings, w, kind, prep, opts, res, diag, keep, configs, real_n, base, skipped, outcomes)
         finally:
             if keep is not None:
                 _rmtree(keep)
@@ -270,14 +344,18 @@ def _detected(prep, settings, kind: str, res: AttemptResult) -> set[str]:
 
 
 def _finalize(settings, w: RunWriter, kind, prep, opts, res: AttemptResult, diag: Diagnosis,
-              workdir: Path, configs, real_n: int, base, skipped: list[str] | None = None) -> None:
+              workdir: Path, configs, real_n: int, base, skipped: list[str] | None = None,
+              outcomes: list[tuple[int, str]] | None = None) -> None:
     _copy_outputs(w, kind, res, real_n)
     w.write_json("env.json", _env_info(prep, res))
     w.write_text("command.txt", format_commands(res.phases) if res.phases else (
         _quote(res.command) + "\n" if res.command else ""))
-    warnings = list(diag.warnings) + list(skipped or [])
+    warnings = _prep_warnings(prep) + [x for x in diag.warnings if x not in _prep_warnings(prep)]
+    warnings += list(skipped or [])
+    # as outras tentativas, para não esconder o que aconteceu (o status acima é o da que foi mais longe)
+    warnings += [text for n, text in (outcomes or []) if n != real_n]
     run = {"status": diag.status, "diagnosis": diag.to_dict(), "warnings": warnings,
-           "tests": _count_tests(res.tests), "attempts": len(configs),
+           "tests": _count_tests(res.tests, (res.extra or {}).get("test_counts")), "failures": _failures(res), "attempts": len(configs),
            "attempt_configs": [c.to_dict() for c in configs], **base}
     archive = (opts.archive_checkout if opts.archive_checkout is not None
                else settings.get("run", "archive_checkout", True))

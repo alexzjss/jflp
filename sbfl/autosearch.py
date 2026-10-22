@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
+from . import status as st
 from .diagnose import Diagnosis, Suggestion, _keep
 from .run_maven import AttemptConfig
 from .toolchain.profiles import PROFILES
@@ -43,7 +44,7 @@ def _default_jdk(first: AttemptConfig, kind: str, jdk: int | None) -> int | None
 
 def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: set[str]) -> AttemptConfig:
     cfg = replace(first)
-    if s.fix and (kind == "jaguar2" or s.fix == "unblock-http"):   # só o Jaguar 2 usa correções do POM
+    if s.fix and (kind == "jaguar2" or s.fix in ("unblock-http", "skip-jacoco")):   # só o Jaguar 2 usa correções do POM
         cfg = _with_fix(cfg, s.fix, s.params, detected)
     if s.jdk is not None:
         cfg = replace(cfg, jdk=_default_jdk(first, kind, s.jdk) or first.jdk)
@@ -54,9 +55,27 @@ def _from_suggestion(first: AttemptConfig, s: Suggestion, kind: str, detected: s
     return cfg
 
 
+def effective_jdk_maven(toolenv: dict | None) -> tuple[int | None, str | None]:
+    """JDK (major) e Maven (versão) que uma tentativa realmente usou, a partir de `AttemptResult.toolenv`."""
+    te = toolenv or {}
+    jdk = (te.get("jdk") or {}).get("major")
+    mvn = (te.get("maven") or {}).get("version")
+    return (int(jdk) if jdk is not None else None), (str(mvn) if mvn else None)
+
+
+def effective_key(cfg: AttemptConfig, jdk: int | None, maven: str | None) -> str:
+    """Chave da configuração EFETIVA: JDK/Maven "padrão" (None) viram os que o perfil de fato resolve."""
+    return replace(cfg, jdk=cfg.jdk if cfg.jdk is not None else jdk,
+                   maven=cfg.maven if cfg.maven is not None else maven).key()
+
+
 def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
-               detected: set[str] | None = None) -> list[AttemptConfig]:
-    """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir e limitado por run.max_attempts."""
+               detected: set[str] | None = None, toolenv: dict | None = None) -> list[AttemptConfig]:
+    """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir (pela configuração efetiva,
+    com o JDK/Maven que a 1ª tentativa resolveu em `toolenv`) e limitado por run.max_attempts."""
+    ejdk, emvn = effective_jdk_maven(toolenv)
+    if diag.status == st.PROJETO_INVALIDO:    # erro de escolha da pasta/módulo: nenhuma configuração resolve
+        return []
     detected = set(detected or ())
     out = [_from_suggestion(first, s, kind, detected)
            for s in diag.suggestions if s.fix != "exclude-duplicates" and _keep(kind, s.fix, s.maven)]
@@ -67,10 +86,11 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
             out.append(_with_fix(first, "override-version", {"plugins": {SUREFIRE: v}}, detected))
         for v in COMPILER_VERSIONS:
             out.append(_with_fix(first, "compiler-java", {"version": v}, detected))
-    seen, result = {first.key()}, []
+    seen, result = {effective_key(first, ejdk, emvn)}, []
     for c in out:
-        if c.key() not in seen:
-            seen.add(c.key())
+        k = effective_key(c, ejdk, emvn)
+        if k not in seen:
+            seen.add(k)
             result.append(c)
     limit = max(0, int(settings.get("run", "max_attempts", 6)) - 1)
     return result[:limit]

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import xml.etree.ElementTree as ET
 from unittest import mock
 from pathlib import Path
 
@@ -43,11 +44,20 @@ FAKE_MVN = textwrap.dedent("""\
         os.makedirs("target/test-classes", exist_ok=True)
     """)
 
+# Como o JaguarRunner 0.0.6 de verdade: ignora `-tf` e roda toda `*Test.class` achada em `-t` (em ordem de nome),
+# deduzindo a classe pelo caminho do arquivo.
 FAKE_JAVA = textwrap.dedent('''\
     import sys, os
     a = sys.argv
-    tf = a[a.index("-tf") + 1]; out = a[a.index("-o") + 1]
-    for cls in open(tf).read().split():
+    tdir = a[a.index("-t") + 1]; out = a[a.index("-o") + 1]
+    found = []
+    for root, dirs, files in os.walk(tdir):
+        dirs.sort()
+        for f in sorted(files):
+            if f.lower().endswith("test.class"):
+                rel = os.path.relpath(os.path.join(root, f), tdir)
+                found.append(rel[:-len(".class")].replace(os.sep, "."))
+    for cls in found:
         if cls == "x.CrashTest": sys.exit(137)
         st = "Failed" if cls == "x.FailTest" else "Passed"
         print(f"10:00:00.000 [main] DEBUG JaguarLogger - Test t({cls}) : {st}", flush=True)
@@ -112,6 +122,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_multimodule_installs_reactor_first(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core", ["a.BTest"]), work,
@@ -138,6 +149,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_unblock_http_passes_settings_to_every_mvn_call(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core", ["a.BTest"]), work,
@@ -154,6 +166,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_reactor_failure_stops(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         te = self.toolenv()
         (Path(te.maven.home) / "bin" / "fake.py").write_text("import sys; sys.exit(1)\n")
         r = run_jaguar2(self.home, self.settings, self._prep(work, "core"), work, AttemptConfig(),
@@ -186,6 +199,7 @@ class Jaguar2Test(Base):
     def test_jaguar2_forces_locale_and_records_phases_with_env(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         (work / "pom.xml").write_text(POM.format("root"))
         (work / "core" / "pom.xml").write_text(POM.format("core"))
         te = self.toolenv()
@@ -268,6 +282,27 @@ class Jaguar1Test(Base):
         self.assertEqual(len(parse_xml_jaguar1(out / "jaguar_Ochiai.xml")), 1)
         self.assertEqual(meta["failed_tests"], ["x.FailTest#t"])
 
+    def test_jaguar1_roda_so_as_classes_escolhidas(self):
+        """O JaguarRunner ignora `-tf`: a seleção (e a exclusão) tem de chegar pela pasta passada em `-t`."""
+        fake = self._fake_java()
+        proj = self.tmp / "proj"
+        tests = proj / "target" / "test-classes" / "x"
+        tests.mkdir(parents=True)
+        for n in ("OkTest", "OutroTest", "FailTest"):      # a pasta real tem mais testes do que os escolhidos
+            (tests / f"{n}.class").write_bytes(b"\xca\xfe")
+        ctx = Ctx(proj, "target/classes", "target/test-classes", [], ["x.OkTest", "x.FailTest", "x.Helper"], [])
+        out = self.tmp / "out"
+        out.mkdir()
+        opts = JaguarOptions(lib=self.tmp, java=fake, env=dict(os.environ), max_retries=2)
+        meta = run_jaguar(opts, ctx, out)
+        self.assertEqual(meta["status"], "ok")
+        corrida = (out / "jaguar.log").read_text(encoding="utf-8")
+        self.assertIn("t(x.OkTest)", corrida)
+        self.assertIn("t(x.FailTest)", corrida)
+        self.assertNotIn("OutroTest", corrida)
+        self.assertEqual(meta["ignored_classes"], ["x.Helper"])     # o Jaguar só roda nomes terminados em Test
+        self.assertEqual(sorted(p.name for p in tests.iterdir()), ["FailTest.class", "OkTest.class", "OutroTest.class"])
+
     def test_run_jaguar1_end_to_end_with_fakes(self):
         lib = self.tmp / "lib"
         lib.mkdir()
@@ -286,6 +321,7 @@ class Jaguar1Test(Base):
         self.assertEqual(r.extra["excluded_classes"], ["x.CrashTest"])
         self.assertEqual(r.extra["meta_status"], "ok")
         self.assertGreaterEqual(r.extra["attempts"], 2)
+        self.assertEqual(r.tests, {"x.OkTest#t": "passed", "x.FailTest#t": "failed"})   # só a última rodada
         argvs = [c["argv"] for c in self.read_calls()]
         self.assertIn("test-compile", argvs[0])
         self.assertIn("dependency:copy-dependencies", argvs[1])
@@ -345,6 +381,7 @@ class Jaguar1Test(Base):
         te.env["FAKE_FAIL"] = "install"
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
         prep = Prepared(Bug("local", "p", "1"), work, "core", None, [], {})
         r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(), self.tmp / "j1.log",
                         toolenv=te)
@@ -360,6 +397,57 @@ class Jaguar1Test(Base):
         self.assertIsNone(r.rc)
         self.assertEqual(r.extra["fase"], "jaguar1_lib")
         self.assertIn("Jaguar 1", r.extra["erro"])
+
+    def test_logback_proprio_grava_o_jaguarlogger_em_arquivo(self):
+        from sbfl.jaguar import build_cmd, write_logback
+        ctx = Ctx(self.tmp, "c", "t", [], [], [])
+        cfg = self.tmp / "lb.xml"
+        write_logback(cfg, self.tmp / "tests & log.log")
+        txt = cfg.read_text(encoding="utf-8")
+        self.assertIn('<logger name="JaguarLogger" level="DEBUG">', txt)
+        self.assertIn("tests &amp; log.log", txt)
+        self.assertEqual(ET.fromstring(txt).tag, "configuration")
+        opts = JaguarOptions(lib=self.tmp, java="java")
+        flag = f"-Dlogback.configurationFile={cfg.resolve().as_posix()}"
+        cmd = build_cmd(opts, ctx, self.tmp / "tf", "o", "Ochiai", cfg)
+        self.assertIn(flag, cmd)
+        self.assertLess(cmd.index(flag), cmd.index("-cp"))
+        self.assertFalse(any("logback" in c for c in build_cmd(opts, ctx, self.tmp / "tf", "o", "Ochiai")))
+
+    def test_run_jaguar1_stdout_cortado_usa_arquivo_e_xml(self):
+        """Um teste troca System.out: o stdout para no 1º teste, mas o arquivo do JaguarLogger e o XML têm tudo."""
+        script = self.tmp / "cortado.py"
+        script.write_text(textwrap.dedent('''\
+            import sys, os
+            a = sys.argv
+            out = a[a.index("-o") + 1]
+            lb = [x for x in a if x.startswith("-Dlogback.configurationFile=")]
+            assert lb, a
+            cfg = open(lb[0].split("=", 1)[1], encoding="utf-8").read()
+            f = cfg.split("<file>")[1].split("</file>")[0]
+            print("10:00:00.000 [main] DEBUG JaguarLogger - Test t1(x.AllTest) : Passed", flush=True)
+            with open(f, "a", encoding="utf-8") as lf:
+                for n, st in (("t1", "Passed"), ("t2", "Failed"), ("t3", "Passed")):
+                    lf.write("Test %s(x.AllTest) : %s\\n" % (n, st))
+            os.makedirs(".jaguar", exist_ok=True)
+            p = os.path.abspath(f".jaguar/{out}.xml")
+            open(p, "w").write('<F><requirements location="5" cef="1" cep="0" cnf="0" cnp="2" name="a.B" suspicious-value="1.0"/></F>')
+            '''))
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        (lib / "jacocoagent.jar").write_bytes(b"jar")
+        self.settings.set("jaguar1", "lib", str(lib))
+        te = self.toolenv(8, FakeEnv)
+        te.fake_java = str(_wrapper(self.tmp / "fakejava2", script))
+        work = self.tmp / "w2"
+        work.mkdir()
+        prep = Prepared(Bug("local", "p", "1"), work, ".", ["x.AllTest"], [], {})
+        r = run_jaguar1(self.home, self.settings, prep, work, AttemptConfig(), self.tmp / "j2.log", toolenv=te)
+        self.assertEqual(r.rc, 0, r.extra)
+        self.assertEqual(r.tests, {"x.AllTest#t1": "passed", "x.AllTest#t2": "failed", "x.AllTest#t3": "passed"})
+        self.assertEqual(r.extra["test_counts"], {"total": 3, "passed": 2, "failed": 1, "error": 0, "skipped": 0})
+        self.assertFalse(r.extra["log_truncado"])     # o arquivo do JaguarLogger completa o que o stdout perdeu
+        self.assertIn("Test t3(x.AllTest) : Passed", r.log.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

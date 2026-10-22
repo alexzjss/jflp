@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import io
+from bisect import bisect_left, bisect_right
 from collections import Counter
 from pathlib import Path
 
@@ -47,18 +48,22 @@ def compare_spectra(a: list[LineScore], b: list[LineScore]) -> dict:
 
 
 def fault_positions(scores: list[LineScore], faults: list[FaultLine]) -> dict:
-    """Posição das linhas do defeito, ordenando por `susp` decrescente (empates entre best e worst)."""
+    """Posição das linhas do defeito com empates: `rank_best` = 1 + nº de linhas com pontuação maior;
+    `rank_worst` = nº de linhas com pontuação maior ou igual; `tied` = nº de linhas com a mesma pontuação;
+    `expected` = média de melhor e pior (posição esperada, métrica usual de empate no SBFL)."""
     vals = [round(s.susp, 12) for s in scores]
+    ordered = sorted(vals)
+    n = len(vals)
     wanted = {(f.cls, f.line) for f in select_lines(faults)}
     rows = []
     for s, v in zip(scores, vals):
         if (outer(s.cls), s.line) in wanted:
-            better = sum(1 for x in vals if x > v)
-            rows.append({"cls": s.cls, "line": s.line, "susp": s.susp, "rank_best": better + 1,
-                         "rank_worst": sum(1 for x in vals if x >= v),
-                         "tied": sum(1 for x in vals if x == v),
+            lo, hi = bisect_left(ordered, v), bisect_right(ordered, v)
+            best, worst = n - hi + 1, n - lo
+            rows.append({"cls": s.cls, "line": s.line, "susp": s.susp, "rank_best": best,
+                         "rank_worst": worst, "tied": hi - lo, "expected": (best + worst) / 2,
                          "cef": s.cef, "cep": s.cep, "cnf": s.cnf, "cnp": s.cnp})
-    return {"total": len(scores), "lines": rows, "not_covered": len(wanted) - len(rows)}
+    return {"total": n, "lines": rows, "not_covered": len(wanted) - len(rows)}
 
 
 def run_tests(home, rel: str) -> dict[str, str]:

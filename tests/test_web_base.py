@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
 import time
@@ -13,11 +14,8 @@ try:
 except ImportError:
     HAVE_WEB = False
 
-from sbfl import queue as jq
-from sbfl.adapters.base import Bug
 from sbfl.home import Home, load_settings
 from tests.web_helpers import BASE, TOKEN, WebFixture
-
 
 
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
@@ -37,7 +35,7 @@ class WebBase(WebFixture, unittest.TestCase):
         self.assertIn("SameSite=strict", cookie)
         page = self.client.get("/")   # o cliente guardou o cookie
         self.assertEqual(page.status_code, 200)
-        self.assertIn("Painel", page.text)
+        self.assertIn("Rodar", page.text)
 
     def test_bad_host_rejected(self):
         c = self.authed()
@@ -51,15 +49,6 @@ class WebBase(WebFixture, unittest.TestCase):
                    headers={"origin": "http://evil.example.com"})
         self.assertEqual(r.status_code, 403)
 
-    def test_painel_shows_queue_and_error(self):
-        self.worker.status.return_value = {"alive": True, "last_error": "RuntimeError('boom')",
-                                           "current": None}
-        jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "7")], ["maven"], {})
-        r = self.authed().get("/")
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("bugsjar/commons-lang/7", r.text)
-        self.assertIn("boom", r.text)
-
     def test_ambiente_renders_without_tools(self):
         patches = self.no_tools()
         for p in patches:
@@ -67,8 +56,28 @@ class WebBase(WebFixture, unittest.TestCase):
             self.addCleanup(p.stop)
         r = self.authed().get("/ambiente")
         self.assertEqual(r.status_code, 200)
-        self.assertIn("não encontrado", r.text)
-        self.assertIn("baixe na tela Ambiente", r.text)
+        for nome in ("Maven puro", "Jaguar 1", "Jaguar 2"):
+            self.assertIn(f"<h2>{nome}</h2>", r.text)
+        self.assertIn("✗ falta JDK 11", r.text)            # Jaguar 2 precisa de JDK 11
+        self.assertIn("Baixar JDK 11", r.text)
+        self.assertIn("não encontrado", r.text)            # detalhes continuam no <details>
+        self.assertIn("<details", r.text)
+        self.assertIn("<summary>Detalhes</summary>", r.text)
+
+    def test_ambiente_cartao_pronto_sem_botao_de_download(self):
+        from sbfl.toolchain.detect import Jdk, Maven
+        jdks = [Jdk(self.tmp / "j8", 8, "1.8", "config"), Jdk(self.tmp / "j11", 11, "11", "config")]
+        mavens = [Maven(self.tmp / "m369", (3, 6, 9), "config"), Maven(self.tmp / "m399", (3, 9, 9), "config")]
+        lib = self.tmp / "lib"
+        lib.mkdir()
+        (lib / "jacocoagent.jar").write_bytes(b"x")
+        self.settings.set("jaguar1", "lib", str(lib))
+        with mock.patch("sbfl.web.routes_env.find_jdks", return_value=jdks),              mock.patch("sbfl.web.routes_env.find_mavens", return_value=mavens),              mock.patch("sbfl.toolchain.profiles.find_jdks", return_value=jdks),              mock.patch("sbfl.toolchain.profiles.find_mavens", return_value=mavens),              mock.patch("sbfl.web.routes_env.wsl_status",
+                        return_value=mock.Mock(installed=False, distros=[], d4j=None, message="x")),              mock.patch("sbfl.web.routes_env._git", return_value=None):
+            r = self.authed().get("/ambiente")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.text.count('class="perfil pronto"'), 3)
+        self.assertNotIn("Baixar", r.text.split('<div id="dialogo">')[0])
 
     def test_plano_shows_unknown_size_and_checksum(self):
         from sbfl.toolchain.download import Download
@@ -135,7 +144,7 @@ class WebBase(WebFixture, unittest.TestCase):
 
     def test_unauthenticated_requests_denied(self):
         for method, path in [("get", "/static/htmx.min.js"), ("get", "/ambiente/progresso/x"),
-                             ("get", "/painel/estado"), ("post", "/ambiente/baixar"),
+                             ("post", "/ambiente/baixar"),
                              ("post", "/ambiente/prefetch"), ("post", "/ambiente/apontar")]:
             with self.subTest(method=method, path=path):
                 self.assertEqual(getattr(self.client, method)(path).status_code, 403)
@@ -213,16 +222,6 @@ class WebBase(WebFixture, unittest.TestCase):
                 time.sleep(0.05)
         self.assertEqual(pf.call_count, 1)
 
-    def test_painel_auto_refresh_fragment(self):
-        c = self.authed()
-        self.assertIn('hx-trigger="every 3s"', c.get("/").text)
-        jq.create_batch(self.home, "t", [Bug("bugsjar", "commons-lang", "9")], ["maven"], {})
-        frag = c.get("/painel/estado")
-        self.assertEqual(frag.status_code, 200)
-        self.assertIn("bugsjar/commons-lang/9", frag.text)
-        self.assertNotIn("<html", frag.text)
-
-
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
 class ServeBind(unittest.TestCase):
     def test_serve_occupied_port_returns_error(self):
@@ -262,3 +261,23 @@ class ServeBind(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
+class TelasRemovidas(WebFixture, unittest.TestCase):
+    """Painel, Executar, Bugs, Lotes, Fila, Comparar, Receitas e Exportar saíram da interface."""
+    REMOVIDAS = ("/painel", "/painel/estado", "/executar", "/executar/1", "/bugs", "/bug/bugsjar/maven/MNG-1",
+                 "/lotes", "/fila", "/lote/1/progresso", "/comparar", "/receitas", "/exportar")
+
+    def test_urls_antigas_dao_404(self):
+        c = self.authed()
+        for path in self.REMOVIDAS:
+            with self.subTest(path=path):
+                self.assertEqual(c.get(path).status_code, 404)
+
+    def test_barra_lateral_so_tem_rodar_resultados_e_ambiente(self):
+        html = self.authed().get("/rodar").text
+        nav = html[html.index('<nav class="lateral">'):html.index("</nav>")]
+        self.assertEqual(re.findall(r'<a href="(/[^"]*)"', nav), ["/rodar", "/resultados", "/ambiente"])
+        self.assertNotIn("<details", nav)
+        self.assertNotIn("Mais", nav)

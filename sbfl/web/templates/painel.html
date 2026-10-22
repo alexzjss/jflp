@@ -1,9 +1,0 @@
-{% extends "base.html" %}
-{% block title %}Painel - JFLP Studio{% endblock %}
-{% block content %}
-<h1>Painel</h1>
-
-<div id="estado" hx-get="/painel/estado" hx-trigger="every 3s" hx-swap="innerHTML">
-{% include "_painel_estado.html" %}
-</div>
-{% endblock %}

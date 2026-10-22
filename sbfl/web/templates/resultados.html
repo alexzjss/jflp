@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Resultados - JFLP Studio{% endblock %}
+{% block content %}
+<h1>Resultados</h1>
+
+<section aria-label="Lotes">
+{% if lotes %}
+<table class="compacta lv-lotes">
+  <thead><tr><th scope="col">Lote</th><th scope="col">Data</th><th scope="col">Ferramentas</th><th scope="col">Bugs</th>
+    <th scope="col">Vereditos</th><th scope="col">Estado</th><th scope="col"><span class="rd-oculto">Ações</span></th></tr></thead>
+  <tbody>{% for l in lotes %}
+    <tr>
+      <td><a href="/lote/{{ l.id }}">#{{ l.id }}{% if l.name %} {{ l.name }}{% endif %}</a></td>
+      <td class="num">{{ l.data }}</td>
+      <td>{{ l.ferramentas }}</td>
+      <td class="num">{{ l.bugs }}</td>
+      <td class="chips">
+        {% if l.contagem %}
+          {% for code, n in l.contagem.items() if n %}<span class="lv-cont" title="{{ ver[code].label }}"><span class="vd vd-{{ code }}" aria-hidden="true">{{ ver[code].simbolo }}</span> {{ n }}<span class="rd-oculto"> {{ ver[code].label }}</span></span>{% endfor %}
+        {% else %}<span class="vazio">-</span>{% endif %}
+      </td>
+      <td>{{ l.estado }}{% if l.andamento %} <span class="vazio">({{ l.andamento }})</span>{% endif %}</td>
+      <td class="lv-lote-acoes"><a href="/lote/{{ l.id }}">Abrir</a>
+        {% if l.encerrado %}<button type="button" hx-post="/lote/{{ l.id }}/excluir" hx-swap="none"
+          hx-confirm="Excluir o lote #{{ l.id }} do histórico? As execuções gravadas ficam.">Excluir</button>{% endif %}</td>
+    </tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}
+<p class="vazio">Nenhum lote ainda. <a class="botao primario" href="/rodar">Rodar algo</a></p>
+{% endif %}
+</section>
+{% endblock %}

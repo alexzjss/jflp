@@ -95,6 +95,8 @@ def test_selection_args(prep: Prepared, scope: str, workdir: Path) -> list[str]:
 
 
 UNBLOCK_HTTP = "unblock-http"
+SKIP_JACOCO = "skip-jacoco"
+JACOCO_SKIP = "-Djacoco.skip=true"
 _UNBLOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <settings>
   <mirrors>
@@ -136,7 +138,8 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
             failed.phases = phases
             return failed
         log_phase(log, "maven", on_line)
-    cmd = te.mvn(*sargs, "clean", "test", *(settings.get("run", "skip_flags", []) or []),
+    # Maven puro não precisa de cobertura: o JaCoCo antigo do POM derruba a JVM de teste (javaagent)
+    cmd = te.mvn(*sargs, "clean", "test", *(settings.get("run", "skip_flags", []) or []), JACOCO_SKIP,
                  "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false",
                  "-Dsurefire.failIfNoSpecifiedTests=false",
                  *test_selection_args(prep, cfg.test_scope, workdir))
@@ -171,6 +174,19 @@ def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Pa
     """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
+        return None
+    if not (workdir / "pom.xml").is_file():
+        # sem POM na raiz não há reactor a instalar: o `mvn -pl` falharia com MissingProjectException
+        msg = (f"# jflp: sem pom.xml em {workdir}; reactor não instalado "
+               f"(o módulo {prep.module} roda como projeto próprio)")
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        if on_line:
+            try:
+                on_line(msg)
+            except Exception:
+                pass
         return None
     log_phase(log, "reactor", on_line)
     # só o módulo do bug e o que ele precisa (o reactor inteiro pode ter módulos de distribuição que quebram)

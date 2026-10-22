@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ..pomgen.fixes import JAGUAR_ARTIFACTS, JAGUAR_GROUP
 from ..run_jaguar2 import prefetch_jaguar2
-from ..toolchain.detect import find_jdks, find_mavens
+from ..toolchain.detect import clear_cache, find_jdks, find_mavens
 from ..toolchain.download import DownloadError, fetch
 from ..toolchain.profiles import MissingTool, resolve
 from .routes_env import KIND_LABEL, _git, _mb, _new_task, _plans, _render, jaguar1_lib
@@ -214,6 +214,7 @@ def _work(task: dict, steps: list[dict], home, settings) -> None:
                 state, msg = "failed", str(e)
             except Exception as e:        # um passo não derruba os demais
                 state, msg = "failed", f"Erro inesperado: {e}"
+            clear_cache()                 # a ferramenta recém-baixada aparece já
             _set_step(task, step["id"], state, msg)
         task["current"] = None
         task["failed"] = sum(1 for s in task["steps"] if s["state"] == "failed")

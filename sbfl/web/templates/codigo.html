@@ -4,10 +4,11 @@
 <h1>Resultado no código</h1>
 <p class="vazio"><a href="/run/{{ rel|q }}">{{ run.bug }}</a> · {{ rel }}{% if atual %} · <code>{{ atual }}</code>{% endif %}</p>
 
-{% if not classes %}
+{% if not classes and not rows %}
 <p class="aviso">{{ aviso }}</p>
 {% else %}
 <div class="codigo-layout">
+  {% if classes %}
   <nav class="codigo-classes" aria-label="Classes com linhas suspeitas">
     <h2>Classes</h2>
     <ul>
@@ -22,6 +23,7 @@
     {% endfor %}
     </ul>
   </nav>
+  {% endif %}
 
   <section class="codigo-painel">
   {% if aviso %}

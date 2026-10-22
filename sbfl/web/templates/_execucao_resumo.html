@@ -1,0 +1,25 @@
+<div class="av-resumo-corpo" data-estado="{{ job.state }}" data-ok="{{ '1' if ok else ('0' if ok is not none else '') }}" data-rel="{{ rel or '' }}" data-status="{{ run.status if run else '' }}">
+{% if job.state == 'cancelled' %}
+  <h2>Cancelado</h2>
+  <p class="vazio">A execução foi cancelada e nada ficou gravado.</p>
+  <div class="botoes"><a class="botao" href="/rodar">Nova execução</a> <a class="botao" href="/resultados">Resultados</a></div>
+{% elif run %}
+  <h2>Resultado</h2>
+  <p class="av-linha-resumo">
+    <span class="chip {{ tom }}">{{ rotulo }}</span>
+    {% if tests %}<span><strong>{{ tests.total }}</strong> testes · <strong>{{ (tests.failed or 0) + (tests.error or 0) }}</strong> com falha</span>{% endif %}
+    {% if run.seconds is not none and run.seconds is defined %}<span>{{ run.seconds|round|int }} s</span>{% endif %}
+    {% if run.attempts %}<span>{{ run.attempts }} {{ 'tentativa' if run.attempts == 1 else 'tentativas' }}</span>{% endif %}
+  </p>
+  <div class="botoes">
+    <a class="botao primario" href="/run/{{ rel|q }}">Ver execução</a>
+    {% if job.kind != 'maven' %}<a class="botao" href="/run/{{ rel|q }}/codigo">Ver no código</a>{% endif %}
+  </div>
+  <p class="vazio" id="av-redir" hidden>Abrindo a execução em <span id="av-redir-n">3</span> s…
+    <button type="button" id="av-ficar">Ficar aqui</button></p>
+{% else %}
+  <h2>Terminou sem resultado</h2>
+  <p class="erro">{{ job.error or 'A execução terminou sem gravar uma pasta de execução.' }}</p>
+  <div class="botoes"><a class="botao" href="/rodar">Nova execução</a> <a class="botao" href="/resultados">Resultados</a></div>
+{% endif %}
+</div>

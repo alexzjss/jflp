@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..home import Home
+from ..winpath import inside
 from .detect import _is_windows
 
 _TIMEOUT = 60
@@ -183,8 +184,8 @@ def _check_name(root: Path, name: str) -> Path:
     norm = name.replace("\\", "/")
     if norm.startswith("/") or (len(norm) > 1 and norm[1] == ":") or ".." in norm.split("/"):
         raise DownloadError(f"Arquivo recusado, caminho inseguro: {name}")
-    target = (root / norm).resolve()
-    if target != root and root not in target.parents:
+    target = Path(os.path.abspath(root / norm))
+    if not inside(target, root):
         raise DownloadError(f"Arquivo recusado, caminho fora do destino: {name}")
     return target
 
@@ -192,7 +193,7 @@ def _check_name(root: Path, name: str) -> Path:
 def safe_extract(archive: Path, dest: Path) -> None:
     """Extrai zip ou tar.gz recusando caminhos absolutos, '..' e links para fora."""
     dest.mkdir(parents=True, exist_ok=True)
-    root = dest.resolve()
+    root = Path(os.path.abspath(dest))
     try:
         if zipfile.is_zipfile(archive):
             with zipfile.ZipFile(archive) as z:
@@ -221,8 +222,8 @@ def safe_extract(archive: Path, dest: Path) -> None:
                         raise DownloadError(f"Arquivo recusado, tipo especial: {m.name}")
                     if m.issym() or m.islnk():
                         base = target.parent if m.issym() else root
-                        link = (base / m.linkname.replace("\\", "/")).resolve()
-                        if m.linkname.startswith("/") or (link != root and root not in link.parents):
+                        link = os.path.abspath(base / m.linkname.replace("\\", "/"))
+                        if m.linkname.startswith("/") or not inside(link, root):
                             raise DownloadError(f"Arquivo recusado, link para fora: {m.name}")
                 try:
                     t.extractall(root, members=members, filter="data")

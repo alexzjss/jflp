@@ -1,5 +1,5 @@
 ﻿# Lançador do JFLP Studio (Windows). Na 1ª execução cria .venv ao lado do script e instala o jflp.
-# Uso: .\jflp.ps1 [argumentos do jflp]   (sem argumentos abre a interface: jflp ui)
+# Uso: .\jflp.ps1 [argumentos do jflp]   (sem argumentos: cria o atalho na 1ª vez e abre a janela do app)
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $venv = Join-Path $root '.venv'
@@ -39,6 +39,16 @@ if (-not (Test-Path $jflp)) {
 }
 
 $env:PYTHONUTF8 = '1'
-if ($args.Count -eq 0) { $args = @('ui') }
+if ($args.Count -eq 0) {
+    # duplo clique: cria o atalho na 1ª vez e abre a janela do app sem console (pythonw ui --app)
+    $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'JFLP Studio.lnk'
+    if (-not (Test-Path $lnk)) { & $jflp atalho | Out-Host }
+    $vpyw = Join-Path $venv 'Scripts\pythonw.exe'
+    if (Test-Path $vpyw) {
+        Start-Process -FilePath $vpyw -ArgumentList @('-m', 'sbfl', 'ui', '--app') -WorkingDirectory $root
+        exit 0
+    }
+    $args = @('ui')
+}
 & $jflp @args
 exit $LASTEXITCODE

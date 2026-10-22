@@ -64,7 +64,7 @@ class Base(unittest.TestCase):
                 pom = workdir / "jaguar2-pom.xml"
                 pom.write_text("<project/>")
                 out = {"jaguar2_csv": csv, "pom": pom}
-                tests = {"a.BTest#t": "failed" if what == "testfail" else "passed"}
+                tests = {"a.BTest#t": "passed" if what == "allpass" else "failed"}
             return AttemptResult(0, False, 1.0, log, out, tests, ["mvn", "test"], {"jdk": {"major": 11}}, extra)
         return run
 
@@ -77,6 +77,44 @@ class Base(unittest.TestCase):
 
 
 class ExecuteTest(Base):
+    def test_sem_teste_falhando_para_a_busca_e_nao_e_sucesso(self):
+        rel, run = self.go(lambda n, c: "allpass")
+        self.assertEqual(run["status"], "sem_teste_falhando")
+        self.assertEqual(len(self.cfgs), 1)
+        self.assertIn("Nenhum teste falhou", run["diagnosis"]["cause"])
+        self.assertEqual(run["diagnosis"]["suggestions"], [])
+        self.assertEqual(run["failures"], [])
+        self.assertFalse(ex.st.is_success(run["status"]))
+
+    def test_grava_falhas_com_provavel_erro_do_surefire(self):
+        base = self.fake_runner(lambda n, c: "testfail")
+
+        def with_reports(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            r = base(home, settings, prep, workdir, cfg, log, toolenv, on_line)
+            sf = workdir / "target" / "surefire-reports"
+            sf.mkdir(parents=True, exist_ok=True)
+            (sf / "TEST-a.BTest.xml").write_text(
+                '<testsuite><testcase classname="a.BTest" name="t"><failure message="esperava 1" type="AssertionError">'
+                "AssertionError: esperava 1\n\tat org.junit.Assert.fail(Assert.java:1)\n"
+                "\tat a.B.soma(B.java:3)\n\tat a.BTest.t(BTest.java:9)\n</failure></testcase></testsuite>",
+                encoding="utf-8")
+            r.outputs["surefire"] = sf
+            return r
+        with mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch.object(ex, "run_jaguar2", with_reports):
+            rel = ex.execute(self.home, self.settings, BUG, "jaguar2", ex.RunOptions())
+        run = load_run(self.home, rel)
+        self.assertEqual(run["failures"], [{"test": "a.BTest#t", "message": "esperava 1", "type": "AssertionError",
+                                            "frame": {"cls": "a.B", "method": "soma", "file": "B.java", "line": 3}}])
+
+    def test_avisos_do_prepare_vao_para_a_execucao(self):
+        self.prep.info["warnings"] = ["não achei a verdade-terreno"]
+        _, run = self.go(lambda n, c: "testfail")
+        self.assertEqual(run["warnings"][0], "não achei a verdade-terreno")
+        self.prep.info["jaguar2_suportado"] = False
+        _, run = self.go(lambda n, c: "testfail")
+        self.assertIn("não achei a verdade-terreno", run["warnings"])
+
     def test_execute_success_first_try(self):
         opts = ex.RunOptions(log_cb=self.lines.append)
         rel, run = self.go(lambda n, c: "testfail", opts)
@@ -107,7 +145,7 @@ class ExecuteTest(Base):
     def test_autosearch_stops_at_first_success(self):
         rel, run = self.go(lambda n, c: "ok" if "skip-animal-sniffer" in c.fixes_on else "sniffer")
         self.assertEqual(run["attempts"], 2)
-        self.assertEqual(run["status"], "ok")
+        self.assertEqual(run["status"], "ok_testes_falhando")
         self.assertEqual(len(run["attempt_configs"]), 2)
         # a correção sugerida mantém as detectadas
         self.assertEqual(self.cfgs[1].fixes_on, frozenset({"junit4", "skip-animal-sniffer"}))
@@ -217,7 +255,7 @@ class ExecuteTest(Base):
                 return "missing"
             return "ok" if c.jdk == 17 else "sniffer"
         rel, run = self.go(behave)
-        self.assertEqual(run["status"], "ok")
+        self.assertEqual(run["status"], "ok_testes_falhando")
         self.assertEqual(run["attempts"], len(run["attempt_configs"]))
         d = self.home.runs.joinpath(*rel.split("/"))
         metas = [json.loads(f.read_text(encoding="utf-8")) for f in sorted(d.glob("attempts/*/attempt.json"))]
@@ -339,6 +377,27 @@ class ExecuteTest(Base):
         runs = list_runs(self.home)
         self.assertEqual([r["status"] for r in runs], ["desconhecido"])
         self.assertEqual(list((self.home.work / "w").iterdir()), [])
+
+
+class ProjetoInvalidoTest(Base):
+    def test_projeto_sem_pom_nao_tenta_de_novo(self):
+        log_text = ("[ERROR] The goal you specified requires a project to execute but there is no POM in "
+                    "this directory (C:\\w). MissingProjectException\n")
+        calls = []
+
+        def runner(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            calls.append(cfg)
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(log_text, encoding="utf-8")
+            return AttemptResult(1, False, 1.0, log, {}, {}, ["mvn"], {}, {})
+
+        with mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch.object(ex, "run_maven", runner):
+            rel = ex.execute(self.home, self.settings, BUG, "maven", ex.RunOptions())
+        run = load_run(self.home, rel)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(run["status"], "projeto_invalido")
+        self.assertEqual(run["attempts"], 1)
 
 
 class ProcOnLineTest(Base):

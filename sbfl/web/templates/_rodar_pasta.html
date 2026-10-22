@@ -1,0 +1,20 @@
+<section id="s1" class="rd-passo">
+  <h2><span class="rd-num">1</span> Pasta</h2>
+  <form id="form-pasta" class="rd-pasta" hx-get="/rodar/pasta" hx-target="#fluxo" hx-swap="innerHTML">
+    <label for="projeto" class="rd-rotulo">Pasta do repositório bugs-dot-jar, de um projeto dele ou de um projeto Maven</label>
+    <div class="linha">
+      <input type="text" id="projeto" name="projeto" value="{{ pasta }}" autocomplete="off"
+             placeholder="C:\caminho\da\pasta" required>
+      {% if tk %}<button type="button" hx-post="/rodar/escolher" hx-include="#projeto" hx-target="#projeto"
+                         hx-swap="outerHTML" hx-on::after-request="setTimeout(function(){htmx.trigger('#form-pasta','submit')},50)">Escolher pasta…</button>{% endif %}
+      <button type="submit" class="primario">Abrir</button>
+    </div>
+    {% if recentes %}
+    <div class="rd-recentes" role="group" aria-label="Pastas recentes">
+      <span class="vazio">Recentes:</span>
+      {% for r in recentes %}<button type="button" class="rd-chip" title="{{ r.spec }}" data-pasta="{{ r.spec }}"
+        onclick="document.getElementById('projeto').value=this.dataset.pasta;htmx.trigger('#form-pasta','submit')">{{ r.nome }}</button>{% endfor %}
+    </div>
+    {% endif %}
+  </form>
+</section>
