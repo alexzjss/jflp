@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from ..home import Home, Settings, load_settings
+from ..home import Home, Settings, apply_work_dir, load_settings
 from ..queue import Worker
 
 COOKIE = "jflp_token"
@@ -127,8 +127,10 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
         return 1
     port = port or _free_port()
     token = secrets.token_urlsafe(24)
+    home, aviso_work_dir = apply_work_dir(home, settings)
     worker = Worker(home, settings)
     app = create_app(home, settings, worker, token, port)
+    app.state.aviso_work_dir = aviso_work_dir
     url = f"http://127.0.0.1:{port}/?t={token}"
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, name="jflp-uvicorn", daemon=True)
