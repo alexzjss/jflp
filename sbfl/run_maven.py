@@ -156,7 +156,7 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
     total = 0.0
     offline = ["-o"] if cfg.params.get("offline") else []
     if offline:     # JDK 7 + Maven 3.0.5 não podem tocar a rede: as dependências vêm antes, num JDK 8
-        pre = prefetch_dependencies(home, settings, mod, log, on_line)
+        pre = prefetch_dependencies(home, settings, prep, workdir, log, on_line)
         total += pre["seconds"]
         phases.append(phase_record("prefetch", pre["command"], pre["env"]))
     sargs = sargs + offline
@@ -188,16 +188,30 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
                          te.describe(), {}, phases)
 
 
-def prefetch_dependencies(home: Home, settings: Settings, mod: Path, log: Path, on_line=None) -> dict:
+def prefetch_dependencies(home: Home, settings: Settings, prep: Prepared, workdir: Path, log: Path,
+                          on_line=None) -> dict:
     """`dependency:go-offline` com JDK 8 e o Maven mais novo disponível, no mesmo `m2`, via mirror https.
-    Falha aqui não aborta: o build offline seguinte acusa o que faltar."""
+    Em bug multi-módulo roda na raiz do reactor (todas as dependências dos módulos; `-fae`); os artefatos dos
+    próprios módulos são instalados depois pelo reactor offline. Falha aqui não aborta (só avisa no log)."""
+    mod = module_dir(prep, workdir)
+    root = workdir if (prep.module != "." and (workdir / "pom.xml").is_file()) else mod
     ver = max((m.version for m in find_mavens(home, settings)), default=None)
     te = resolve("maven", home, settings, pom_dir=mod, jdk=8,
                  maven=".".join(str(n) for n in ver) if ver else None)
     log_phase(log, "prefetch", on_line)
-    cmd = te.mvn(*mirror_settings_args(home), "dependency:go-offline")
-    r = proc.run(cmd, cwd=mod, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
+    cmd = te.mvn(*mirror_settings_args(home), *(["-fae"] if root != mod else []), "dependency:go-offline")
+    r = proc.run(cmd, cwd=root, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
                  on_line=on_line)
+    if r["rc"] != 0 or r["timed_out"]:
+        msg = ("# jflp: aviso: o pré-carregamento das dependências (go-offline) falhou; "
+               "o build offline pode acusar dependências ausentes")
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        if on_line:
+            try:
+                on_line(msg)
+            except Exception:
+                pass
     return {"command": cmd, "env": te.env, "seconds": r["seconds"], "rc": r["rc"]}
 
 

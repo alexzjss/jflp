@@ -171,7 +171,8 @@ class RunMavenTest(unittest.TestCase):
         te = self._fake_toolenv()
         read = self._recording_fake(te)
         cfg = AttemptConfig(jdk=7, maven="3.0.5", params={"cobertura": True, "offline": True})
-        with mock.patch("sbfl.run_maven.resolve", return_value=te) as res,                 mock.patch("sbfl.run_maven.find_mavens", return_value=[Maven(te.maven.home, (3, 9, 9), "managed")]):
+        mavens = [Maven(te.maven.home, (3, 9, 9), "managed")]
+        with mock.patch("sbfl.run_maven.resolve", return_value=te) as res,                 mock.patch("sbfl.run_maven.find_mavens", return_value=mavens):
             r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work, cfg,
                           self.tmp / "l.log", toolenv=te)
         self.assertEqual((res.call_args.kwargs["jdk"], res.call_args.kwargs["maven"]), (8, "3.9.9"))
@@ -183,6 +184,26 @@ class RunMavenTest(unittest.TestCase):
         self.assertIn("clean", calls[1]["argv"])
         self.assertIn("-o", calls[1]["argv"])
         self.assertEqual([p["name"] for p in r.phases], ["prefetch", "maven"])
+        self.assertEqual(r.rc, 0)
+
+    def test_offline_multimodulo_prefetch_na_raiz_e_aviso_se_falhar(self):
+        work = self.tmp / "w"
+        (work / "core").mkdir(parents=True)
+        (work / "pom.xml").write_text("<project/>")
+        te = self._fake_toolenv()
+        read = self._recording_fake(te, fail_on="dependency:go-offline")
+        cfg = AttemptConfig(params={"offline": True})
+        log = self.tmp / "l.log"
+        mavens = [Maven(te.maven.home, (3, 9, 9), "managed")]
+        with mock.patch("sbfl.run_maven.resolve", return_value=te),                 mock.patch("sbfl.run_maven.find_mavens", return_value=mavens):
+            r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"], "core"), work, cfg, log, toolenv=te)
+        calls = read()
+        self.assertEqual([("dependency:go-offline" in c["argv"], "install" in c["argv"]) for c in calls[:2]],
+                         [(True, False), (False, True)])
+        self.assertEqual(Path(calls[0]["cwd"]), work)
+        self.assertIn("-fae", calls[0]["argv"])
+        self.assertIn("-o", calls[1]["argv"])
+        self.assertIn("aviso", log.read_text(encoding="utf-8"))
         self.assertEqual(r.rc, 0)
 
     def test_sem_offline_nao_ha_go_offline(self):
