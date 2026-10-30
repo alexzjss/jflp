@@ -1,0 +1,10 @@
+{
+    "project":  "commons-math",
+    "branch":  "origin/bugs-dot-jar_MATH-1005_91d280b7",
+    "checkout":  true,
+    "maven":  "BUILD SUCCESS",
+    "maven_tests":  "Tests run: 5035, Failures: 1, Errors: 1, Skipped: 49",
+    "repo_tests":  "Tests run: 5035, Failures: 0, Errors: 1, Skipped: 49",
+    "repo_failed":  1,
+    "maven_failed_count":  2
+}

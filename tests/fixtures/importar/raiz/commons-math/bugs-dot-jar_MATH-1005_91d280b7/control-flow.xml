@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<FlatFaultClassification heuristic="TARANTULA" project="fault localization" requirementType="LINE">
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="120" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>120</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="121" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>121</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="157" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>157</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="158" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>158</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="151" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>151</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="150" type="LINE" cef="1" cep="3" cnf="2" cnp="5026" name="org.apache.commons.math3.stat.correlation.StorelessCovariance" number="1" suspicious-value="1.0">
+        <location>150</location>
+    </requirements>
+</FlatFaultClassification>

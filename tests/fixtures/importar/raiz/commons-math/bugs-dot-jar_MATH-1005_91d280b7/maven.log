@@ -1,0 +1,15 @@
+
+Tests in error: 
+  MathArraysTest.testLinearCombinationWithSingleElementArray:591 � ArrayIndexOutOfBounds
+
+Tests run: 5035, Failures: 1, Errors: 1, Skipped: 49
+
+[ERROR] There are test failures.
+
+Please refer to E:\Documentos\GitHub\bugs-dot-jar\commons-math\target\surefire-reports for the individual test results.
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  01:43 min
+[INFO] Finished at: 2026-10-28T22:21:20-03:00
+[INFO] ------------------------------------------------------------------------

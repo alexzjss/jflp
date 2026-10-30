@@ -1,0 +1,15 @@
+[ERROR] -> [Help 2]
+[ERROR] Failed to execute goal on project maven-script-ant: Could not resolve dependencies for project org.apache.maven:maven-script-ant:jar:2.1-SNAPSHOT
+[ERROR] dependency: org.codehaus.plexus:plexus-ant-factory:jar:1.0-alpha-2-SNAPSHOT (compile)
+[ERROR] 	org.codehaus.plexus:plexus-ant-factory:jar:1.0-alpha-2-SNAPSHOT was not found in https://repo.maven.apache.org/maven2 during a previous attempt. This failure was cached in the local repository and resolution is not reattempted until the update interval of central-https has elapsed or updates are forced
+[ERROR] -> [Help 1]
+[ERROR] 
+[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.
+[ERROR] Re-run Maven using the -X switch to enable full debug logging.
+[ERROR] 
+[ERROR] For more information about the errors and possible solutions, please read the following articles:
+[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException
+[ERROR] [Help 2] http://cwiki.apache.org/confluence/display/MAVEN/MojoFailureException
+[ERROR] 
+[ERROR] After correcting the problems, you can resume the build with the command
+[ERROR]   mvn <args> -rf :maven-reporting-api

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<FlatFaultClassification heuristic="TARANTULA" project="fault localization" requirementType="LINE">
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="359" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>359</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="351" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>351</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="353" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>353</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="356" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>356</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="355" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>355</location>
+    </requirements>
+    <requirements xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="lineRequirement" location="358" type="LINE" cef="1" cep="0" cnf="5" cnp="100" name="org.apache.maven.project.artifact.MavenMetadataSource" number="1" suspicious-value="1.0">
+        <location>358</location>
+    </requirements>
+</FlatFaultClassification>
