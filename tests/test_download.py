@@ -89,6 +89,22 @@ class DownloadTests(unittest.TestCase):
             d = dl.plan_maven(self.home, "3.6.3")
         self.assertEqual(d.checksum, "ee" * 64)
 
+    def test_plan_jdk7_e_maven305(self):
+        d = dl.plan_jdk(self.home, 7, os_name="windows", arch="x64")     # sem rede: URL e hash fixos
+        self.assertEqual(d.url, "https://cdn.azul.com/zulu/bin/zulu7.56.0.11-ca-jdk7.0.352-win_x64.zip")
+        self.assertEqual(d.algo, "sha256")
+        self.assertEqual(len(d.checksum), 64)
+        self.assertTrue(d.archive)
+        self.assertTrue(d.dest.name.startswith("jdk-"))
+        with self.assertRaises(dl.DownloadError):
+            dl.plan_jdk(self.home, 7, os_name="linux", arch="x64")
+        base = "https://archive.apache.org/dist/maven/binaries/apache-maven-3.0.5-bin.zip"
+        sha = "ab" * 20
+        with mock.patch("urllib.request.urlopen", _router({base + ".sha1": f"{sha}  apache-maven-3.0.5-bin.zip\n".encode()})):
+            m = dl.plan_maven(self.home, "3.0.5")
+        self.assertEqual((m.url, m.checksum, m.algo), (base, sha, "sha1"))
+        self.assertEqual(m.dest, self.home.tools / "apache-maven-3.0.5")
+
     def test_plan_jdk_without_checksum_fails_closed(self):
         payload = [{"release_name": "jdk-11.0.24+8", "binary": {"package": {
             "link": "https://github.com/adoptium/jdk.zip", "size": 123}}}]

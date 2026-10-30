@@ -145,6 +145,57 @@ class RunMavenTest(unittest.TestCase):
             """), encoding="utf-8")
         return lambda: [json.loads(x) for x in calls.read_text().splitlines()] if calls.exists() else []
 
+    def test_mirror_settings_conteudo(self):
+        from sbfl.run_maven import mirror_settings_args
+        args = mirror_settings_args(self.home)
+        self.assertEqual(args[0], "-s")
+        f = Path(args[1])
+        self.assertEqual(f, self.home.tools / "jflp-settings-mirror.xml")
+        text = f.read_text(encoding="utf-8")
+        self.assertIn("<id>jflp-https</id>", text)
+        self.assertIn("<mirrorOf>external:http:*</mirrorOf>", text)
+        self.assertIn("<url>https://repo.maven.apache.org/maven2</url>", text)
+        self.assertNotIn("<blocked>", text)
+
+    def test_cobertura_usa_mirror_e_unblock_tem_precedencia(self):
+        from sbfl.run_maven import settings_args
+        cob = AttemptConfig(params={"cobertura": True})
+        self.assertEqual(Path(settings_args(self.home, cob)[1]).name, "jflp-settings-mirror.xml")
+        both = AttemptConfig(fixes_on=frozenset({"unblock-http"}), params={"cobertura": True})
+        self.assertEqual(Path(settings_args(self.home, both)[1]).name, "jflp-settings-unblock.xml")
+        self.assertEqual(settings_args(self.home, AttemptConfig()), [])
+
+    def test_offline_roda_go_offline_antes(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        te = self._fake_toolenv()
+        read = self._recording_fake(te)
+        cfg = AttemptConfig(jdk=7, maven="3.0.5", params={"cobertura": True, "offline": True})
+        with mock.patch("sbfl.run_maven.resolve", return_value=te) as res,                 mock.patch("sbfl.run_maven.find_mavens", return_value=[Maven(te.maven.home, (3, 9, 9), "managed")]):
+            r = run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work, cfg,
+                          self.tmp / "l.log", toolenv=te)
+        self.assertEqual((res.call_args.kwargs["jdk"], res.call_args.kwargs["maven"]), (8, "3.9.9"))
+        calls = read()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("dependency:go-offline", calls[0]["argv"])
+        self.assertNotIn("-o", calls[0]["argv"])
+        self.assertIn("jflp-settings-mirror.xml", " ".join(calls[0]["argv"]))
+        self.assertIn("clean", calls[1]["argv"])
+        self.assertIn("-o", calls[1]["argv"])
+        self.assertEqual([p["name"] for p in r.phases], ["prefetch", "maven"])
+        self.assertEqual(r.rc, 0)
+
+    def test_sem_offline_nao_ha_go_offline(self):
+        work = self.tmp / "w"
+        work.mkdir()
+        te = self._fake_toolenv()
+        read = self._recording_fake(te)
+        run_maven(self.home, self.settings, _prep(work, ["a.BTest"]), work,
+                  AttemptConfig(params={"cobertura": True}), self.tmp / "l.log", toolenv=te)
+        calls = read()
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("-o", calls[0]["argv"])
+
     def test_multimodule_installs_reactor_before_clean_test(self):
         work = self.tmp / "w"
         (work / "core").mkdir(parents=True)

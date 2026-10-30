@@ -7,6 +7,7 @@ from dataclasses import replace
 from . import status as st
 from .diagnose import Diagnosis, Suggestion, _keep
 from .run_maven import AttemptConfig
+from .toolchain.detect import find_jdks, find_mavens
 from .toolchain.profiles import PROFILES
 
 SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin"
@@ -69,6 +70,31 @@ def effective_key(cfg: AttemptConfig, jdk: int | None, maven: str | None) -> str
                    maven=cfg.maven if cfg.maven is not None else maven).key()
 
 
+LEGACY_JDK = 7
+LEGACY_MAVEN = "3.0.5"
+
+
+def _legacy(first: AttemptConfig, kind: str, settings) -> list[AttemptConfig]:
+    """Perfil legado (JDK 7 + Maven 3.0.5) para a cobertura; com `legado_offline`, também a versão offline."""
+    if kind != "maven" or not settings.get("cobertura", "legado", False):
+        return []
+    home = getattr(settings, "home", None)
+    if home is None:
+        return []
+    try:
+        has_jdk = any(j.major == LEGACY_JDK for j in find_jdks(home, settings))
+        has_mvn = any(".".join(map(str, m.version)) == LEGACY_MAVEN for m in find_mavens(home, settings))
+    except Exception:
+        return []
+    if not (has_jdk and has_mvn):
+        return []
+    legacy = replace(first, jdk=LEGACY_JDK, maven=LEGACY_MAVEN)
+    out = [legacy]
+    if settings.get("cobertura", "legado_offline", False):
+        out.append(replace(legacy, params={**first.params, "offline": True}))
+    return out
+
+
 def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
                detected: set[str] | None = None, toolenv: dict | None = None) -> list[AttemptConfig]:
     """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir (pela configuração efetiva,
@@ -86,11 +112,13 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
             out.append(_with_fix(first, "override-version", {"plugins": {SUREFIRE: v}}, detected))
         for v in COMPILER_VERSIONS:
             out.append(_with_fix(first, "compiler-java", {"version": v}, detected))
+    out += _legacy(first, kind, settings)
     seen, result = {effective_key(first, ejdk, emvn)}, []
     for c in out:
         k = effective_key(c, ejdk, emvn)
         if k not in seen:
             seen.add(k)
             result.append(c)
-    limit = max(0, int(settings.get("run", "max_attempts", 6)) - 1)
+    cap = max(int(settings.get("run", "max_attempts", 6)), int(first.params.get("max_attempts") or 0))
+    limit = max(0, cap - 1)
     return result[:limit]

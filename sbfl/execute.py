@@ -214,6 +214,8 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
 
         recipe = recipes.find(home, bug, kind)
         first = _first_config(settings, recipe, opts)
+        if first.params.get("max_attempts"):     # ex.: lote de cobertura pede mais tentativas (perfis legados)
+            max_attempts = max(max_attempts, int(first.params["max_attempts"]))
         if opts.tests:
             first = replace(first, test_scope="relevant")
         if opts.fixes_add:

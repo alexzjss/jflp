@@ -12,6 +12,7 @@ from . import proc
 from .home import Home, Settings
 from .outputs import parse_surefire
 from .prepare import Prepared
+from .toolchain.detect import find_mavens
 from .toolchain.profiles import ToolEnv, resolve
 
 MAX_TEST_ARG = 6000
@@ -112,10 +113,34 @@ _UNBLOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+MIRROR_URL = "https://repo.maven.apache.org/maven2"
+_MIRROR_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<settings>
+  <mirrors>
+    <mirror>
+      <id>jflp-https</id>
+      <mirrorOf>external:http:*</mirrorOf>
+      <name>jflp: repositórios http redirecionados para https</name>
+      <url>{MIRROR_URL}</url>
+    </mirror>
+  </mirrors>
+</settings>
+"""
+
+
+def mirror_settings_args(home: Home) -> list[str]:
+    """`-s <settings>` que redireciona repositórios http:// para o Central em https (sem desligar o bloqueio)."""
+    path = home.tools / "jflp-settings-mirror.xml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_MIRROR_XML, encoding="utf-8", newline="\n")
+    return ["-s", str(path)]
+
+
 def settings_args(home: Home, cfg: AttemptConfig) -> list[str]:
-    """`-s <settings>` que desliga o bloqueio de repositórios http:// do Maven >= 3.8.1 (correção unblock-http)."""
+    """`-s <settings>`: a correção unblock-http (desliga o bloqueio de http:// do Maven >= 3.8.1) tem precedência;
+    nas tentativas de cobertura, o mirror https."""
     if UNBLOCK_HTTP not in cfg.fixes_on:
-        return []
+        return mirror_settings_args(home) if cfg.params.get("cobertura") else []
     path = home.tools / "jflp-settings-unblock.xml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_UNBLOCK_XML, encoding="utf-8", newline="\n")
@@ -129,6 +154,12 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
     sargs = settings_args(home, cfg)
     phases: list[dict] = []
     total = 0.0
+    offline = ["-o"] if cfg.params.get("offline") else []
+    if offline:     # JDK 7 + Maven 3.0.5 não podem tocar a rede: as dependências vêm antes, num JDK 8
+        pre = prefetch_dependencies(home, settings, mod, log, on_line)
+        total += pre["seconds"]
+        phases.append(phase_record("prefetch", pre["command"], pre["env"]))
+    sargs = sargs + offline
     r0 = install_reactor(te, settings, prep, workdir, log, on_line, sargs)   # multi-módulo: instala o reactor antes
     if r0 is not None:
         total += r0["seconds"]
@@ -155,6 +186,19 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
     phases.append(phase_record("maven", cmd, te.env))
     return AttemptResult(r["rc"], r["timed_out"], round(total + r["seconds"], 1), log, outputs, tests, cmd,
                          te.describe(), {}, phases)
+
+
+def prefetch_dependencies(home: Home, settings: Settings, mod: Path, log: Path, on_line=None) -> dict:
+    """`dependency:go-offline` com JDK 8 e o Maven mais novo disponível, no mesmo `m2`, via mirror https.
+    Falha aqui não aborta: o build offline seguinte acusa o que faltar."""
+    ver = max((m.version for m in find_mavens(home, settings)), default=None)
+    te = resolve("maven", home, settings, pom_dir=mod, jdk=8,
+                 maven=".".join(str(n) for n in ver) if ver else None)
+    log_phase(log, "prefetch", on_line)
+    cmd = te.mvn(*mirror_settings_args(home), "dependency:go-offline")
+    r = proc.run(cmd, cwd=mod, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
+                 on_line=on_line)
+    return {"command": cmd, "env": te.env, "seconds": r["seconds"], "rc": r["rc"]}
 
 
 def log_phase(log: Path, name: str, on_line=None) -> None:

@@ -475,5 +475,51 @@ class CandidatesTest(Base):
         self.assertEqual([c.jdk for c in j1], [17, 11])
 
 
+class LegadoCandidatesTest(Base):
+    def _tools(self, jdk7=True, mvn305=True):
+        from sbfl.toolchain.detect import Jdk, Maven
+        jdks = [Jdk(Path("j7"), 7, "1.7.0_352", "managed")] if jdk7 else []
+        mvns = [Maven(Path("m"), (3, 0, 5), "managed")] if mvn305 else []
+        return mock.patch.multiple("sbfl.autosearch", find_jdks=lambda *a: jdks, find_mavens=lambda *a: mvns)
+
+    def _cands(self, kind="maven", **tools):
+        self.settings.set("run", "max_attempts", 20)
+        self.settings.set("cobertura", "legado", True)
+        with self._tools(**tools):
+            return candidates(AttemptConfig(params={"cobertura": True}), Diagnosis("x"), kind, self.settings)
+
+    def test_candidates_incluem_legado_quando_ferramentas_existem(self):
+        out = self._cands()
+        self.assertEqual((out[-1].jdk, out[-1].maven), (7, "3.0.5"))
+        self.assertFalse(out[-1].params.get("offline"))
+        self.assertEqual(len([c for c in out if c.jdk == 7]), 1)
+        self.settings.set("cobertura", "legado_offline", True)
+        with self._tools():
+            out = candidates(AttemptConfig(params={"cobertura": True}), Diagnosis("x"), "maven", self.settings)
+        self.assertEqual([(c.jdk, c.maven, c.params.get("offline")) for c in out[-2:]],
+                         [(7, "3.0.5", None), (7, "3.0.5", True)])
+        self.assertTrue(out[-1].params["cobertura"])
+
+    def test_candidates_sem_legado_sem_jdk7(self):
+        self.assertFalse(any(c.jdk == 7 for c in self._cands(jdk7=False)))
+        self.assertFalse(any(c.maven == "3.0.5" for c in self._cands(mvn305=False)))
+        self.assertFalse(any(c.jdk == 7 for c in self._cands(kind="jaguar1")))
+
+    def test_legado_desligado_por_padrao(self):
+        self.settings.set("run", "max_attempts", 20)
+        with self._tools():
+            out = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
+        self.assertFalse(any(c.jdk == 7 for c in out))
+
+    def test_legado_respeita_max_attempts_e_params(self):
+        self.settings.set("cobertura", "legado", True)
+        self.settings.set("run", "max_attempts", 4)
+        with self._tools():
+            few = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
+            more = candidates(AttemptConfig(params={"max_attempts": 8}), Diagnosis("x"), "maven", self.settings)
+        self.assertEqual(len(few), 3)
+        self.assertEqual(more[-1].jdk, 7)
+
+
 if __name__ == "__main__":
     unittest.main()
