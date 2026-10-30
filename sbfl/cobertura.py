@@ -231,7 +231,7 @@ def _fim(job: dict, rows: dict) -> datetime | None:
 
 
 def resumo(home: Home, bid: int) -> dict:
-    lista, rows = _montar(home, bid, detalhe=False)
+    lista, rows = _montar(home, bid, detalhe=True)
     por_sit = {s: 0 for s in (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC, SIT_RODANDO, SIT_PENDENTE)}
     projetos: dict[str, dict] = {}
     agora = datetime.now()
@@ -282,7 +282,7 @@ def refazer(home: Home, bid: int, bug_keys: list[str] | None = None, so_falhas: 
     jobs, rows = _load(home, bid)
     ids = []
     for j in jobs:
-        if j["bug_key"] not in alvo or j["state"] != "done":
+        if j["bug_key"] not in alvo or j["state"] not in ("done", "cancelled"):
             continue
         if so_falhas and etapa(j, _run_of(home, j, rows, True)) in (SIT_OK, SIT_NAO_EXEC):
             continue
@@ -292,8 +292,9 @@ def refazer(home: Home, bid: int, bug_keys: list[str] | None = None, so_falhas: 
             bloco = ids[i:i + _CHUNK]
             marks = ",".join("?" * len(bloco))
             con.execute("UPDATE jobs SET state='pending', run_rel=NULL, error=NULL, seconds=NULL, forcado=NULL, "
-                        f"origem=NULL WHERE state='done' AND id IN ({marks})", bloco)
-        con.execute("UPDATE batches SET state='active' WHERE id=? AND state='done'", (bid,)) if ids else None
+                        f"origem=NULL WHERE state IN ('done','cancelled') AND id IN ({marks})", bloco)
+        if ids:
+            con.execute("UPDATE batches SET state='active' WHERE id=? AND state IN ('done','cancelled')", (bid,))
     return len(ids)
 
 

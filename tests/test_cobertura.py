@@ -218,6 +218,43 @@ class TestAcoes(Base):
         self.assertIsNotNone(r["ritmo_h"])
         self.assertGreater(r["restante_s"], 0)
 
+    def test_resumo_conta_legado_jdk7_como_nao_executavel(self):
+        from sbfl.store import run_dir
+        self.finish(self.k0, {k: "compilacao_falhou" for k in cb.KINDS})
+        for j in self.jobs(self.bid):
+            if j["bug_key"] == self.k0:
+                d = run_dir(self.home, j["run_rel"])
+                d.mkdir(parents=True, exist_ok=True)
+                (d / "run.json").write_text(json.dumps({"status": "compilacao_falhou",
+                                                        "attempt_configs": [{"jdk": 8}, {"jdk": 7}]}),
+                                            encoding="utf-8")
+        b = {x["key"]: x for x in cb.bugs(self.home, self.bid)}[self.k0]
+        self.assertEqual(b["situacao"], "nao_executavel")
+        r = cb.resumo(self.home, self.bid)
+        self.assertEqual(r["por_situacao"]["nao_executavel"], 1)
+        self.assertEqual(r["por_situacao"]["falhou"], 0)
+
+    def test_refazer_requeue_cancelados_e_reativa_lote(self):
+        self.sql("UPDATE jobs SET state='cancelled' WHERE bug_key=?", self.k0)
+        self.sql("UPDATE batches SET state='cancelled' WHERE id=?", self.bid)
+        self.assertEqual(cb.refazer(self.home, self.bid, [self.k0]), 3)
+        self.assertEqual({j["state"] for j in self.jobs(self.bid) if j["bug_key"] == self.k0}, {"pending"})
+        self.assertEqual(jq.get_batch(self.home, self.bid)["state"], "active")
+
+    def test_refazer_reativa_lote_concluido(self):
+        self.finish(self.k0, {"maven": "compilacao_falhou"})
+        self.sql("UPDATE batches SET state='done' WHERE id=?", self.bid)
+        self.assertEqual(cb.refazer(self.home, self.bid, [self.k0]), 1)
+        self.assertEqual(jq.get_batch(self.home, self.bid)["state"], "active")
+
+    def test_batch_id_com_varios_lotes(self):
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("INSERT INTO batches(name, kinds, options, state, meta) VALUES('x','[]','{}','active',NULL)")
+            novo = con.execute("INSERT INTO batches(name, kinds, options, state, meta) "
+                               "VALUES('y','[]','{}','active','{\"cobertura\": true}')").lastrowid
+            con.execute("INSERT INTO batches(name, kinds, options, state, meta) VALUES('z','[]','{}','active','{}')")
+        self.assertEqual(cb.batch_id(self.home), novo)
+
     def test_resumo_sem_historico(self):
         r = cb.resumo(self.home, self.bid)
         self.assertIsNone(r["ritmo_h"])
