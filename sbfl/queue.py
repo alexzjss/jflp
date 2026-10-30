@@ -37,6 +37,12 @@ def _connect(home: Home) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     for sql in _SCHEMA:
         con.execute(sql)
+    for tabela, coluna in (("jobs", "origem"), ("jobs", "forcado"), ("batches", "meta")):
+        if coluna not in {r[1] for r in con.execute(f"PRAGMA table_info({tabela})")}:
+            try:
+                con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} TEXT")
+            except sqlite3.OperationalError:    # outra conexão migrou primeiro
+                pass
     return con
 
 
