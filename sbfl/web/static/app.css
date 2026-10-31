@@ -408,7 +408,8 @@ button.cb-sec { background: transparent; color: var(--text); border: 1px solid v
 button.link { background: none; border: none; color: var(--text); padding: 0; font: inherit; text-decoration: underline; cursor: pointer; }
 .cb-pagina { display: flex; gap: 14px; align-items: center; margin: 12px 0; }
 .cb-detalhe:empty { display: none; }
-.cb-detalhe { margin-top: 16px; }
+.cb-detalhe { margin-top: 16px; padding-top: 10px; border-top: 2px solid var(--line); scroll-margin-top: 16px; }
+.cb-aviso { margin-left: 8px; }
 .cb-config .linha input[type=text], .cb-config .linha input[type=url] { flex: 1; min-width: 260px; }
 .cb-config label { display: block; margin: 6px 0; }
 .cb-config .cb-form input[type=number] { width: 90px; }

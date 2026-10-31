@@ -12,6 +12,7 @@
     <button type="submit" name="acao" value="nao_executavel" class="cb-sec">Marcar não executáveis</button>
     <button type="submit" name="acao" value="priorizar" class="cb-sec">Priorizar</button>
     <span class="vazio">{{ total }} bug{{ '' if total == 1 else 's' }}</span>
+    {% if aviso %}<span class="vazio cb-aviso" role="status">{{ aviso }}</span>{% endif %}
   </div>
 
   <div class="cb-tabela-wrap">
@@ -73,4 +74,10 @@
 function cbMarcarTodos(on) {
   document.querySelectorAll('#acao-lote input[name=keys]').forEach(function (c) { c.checked = on; });
 }
+// o detalhe fica embaixo da tabela: depois de carregado, rola até ele
+document.body.addEventListener('htmx:afterSwap', function (e) {
+  if (e.detail.target && e.detail.target.id === 'detalhe') {
+    e.detail.target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+});
 </script>

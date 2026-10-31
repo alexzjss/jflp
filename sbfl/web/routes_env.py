@@ -7,9 +7,10 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import planilha
 from ..run_jaguar2 import prefetch_jaguar2
@@ -173,7 +174,7 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
     home, settings = st.home, st.settings
     lib = jaguar1_lib(home, settings)
     return {
-        "page": "ambiente", "msg": msg, "msg_ok": msg_ok,
+        "page": "ambiente", "msg": msg, "msg_ok": msg_ok, "msgs": {}, "erros": {},
         "jdks": find_jdks(home, settings),
         "mavens": [(m, _vstr(m.version)) for m in find_mavens(home, settings)],
         "git": _git(),
@@ -188,9 +189,15 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
     }
 
 
+SECOES = ("planilha", "cobertura")
+
+
 @router.get("/ambiente", response_class=HTMLResponse)
-def ambiente(request: Request):
-    return _render(request, "ambiente.html", _env_context(request))
+def ambiente(request: Request, msg: str = "", secao: str = ""):
+    ctx = _env_context(request)
+    if msg and secao in SECOES:
+        ctx["msgs"] = {secao: msg}
+    return _render(request, "ambiente.html", ctx)
 
 
 def _plans(home, tipo: str, v: str):
@@ -313,8 +320,17 @@ def _looks_like_maven(p: Path) -> bool:
     return (p / "boot").is_dir() and (p / "conf" / "settings.xml").is_file()
 
 
-def _render_ambiente(request: Request, msg: str, ok: bool, status: int = 200):
-    return _render(request, "ambiente.html", _env_context(request, msg, ok), status if ok else 400)
+def _volta(secao: str, msg: str) -> RedirectResponse:
+    """PRG: depois de salvar, volta à seção com a mensagem na própria seção."""
+    return RedirectResponse("/ambiente?" + urlencode({"secao": secao, "msg": msg}) + f"#{secao}", status_code=303)
+
+
+def _erro_ambiente(request: Request, secao: str, erro: str, valores: dict) -> HTMLResponse:
+    """Re-renderiza a seção com o erro e os valores digitados (não se perde o que foi escrito)."""
+    ctx = _env_context(request)
+    ctx["erros"] = {secao: erro}
+    ctx[secao] = {**ctx[secao], **valores}
+    return _render(request, "ambiente.html", ctx, 400)
 
 
 @router.post("/ambiente/planilha", response_class=HTMLResponse)
@@ -322,12 +338,12 @@ def salvar_planilha(request: Request, url: str = Form("")):
     st = request.app.state
     url = url.strip()
     if url and not url.lower().startswith("https://"):
-        return _render_ambiente(request, "A URL do app da web precisa começar com https://.", False)
+        return _erro_ambiente(request, "planilha", "A URL do app da web precisa começar com https://.", {"url": url})
     planilha.salvar_url(st.settings, url)
     env = getattr(st, "enviador", None)
     if env is not None:
         env.acordar()
-    return _render_ambiente(request, "URL da planilha salva." if url else "URL da planilha removida.", True)
+    return _volta("planilha", "URL da planilha salva." if url else "URL da planilha removida.")
 
 
 @router.post("/ambiente/planilha/reenviar", response_class=HTMLResponse)
@@ -341,26 +357,32 @@ def reenviar_planilha(request: Request):
         msg = f"{n} linhas voltaram para a fila de envio."
     else:
         msg = f"{n} linhas marcadas para envio, mas o envio automático não está rodando nesta sessão."
-    return _render_ambiente(request, msg, True)
+    return _volta("planilha", msg)
 
 
 @router.post("/ambiente/cobertura", response_class=HTMLResponse)
-def salvar_cobertura(request: Request, workers: int = Form(4), work_dir: str = Form(""),
+def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str = Form(""),
                      legado: bool = Form(False), legado_offline: bool = Form(False)):
     st = request.app.state
+    valores = {"workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline}
+    try:
+        n = int(workers.strip())
+    except ValueError:
+        n = 0
+    if not 1 <= n <= WORKERS_MAX:
+        return _erro_ambiente(request, "cobertura", f"Os workers vão de 1 a {WORKERS_MAX}: digite um número inteiro.",
+                              valores)
     wd = work_dir.strip().strip('"')
-    if not 1 <= workers <= WORKERS_MAX:
-        return _render_ambiente(request, f"Os workers vão de 1 a {WORKERS_MAX}.", False)
     if wd and not Path(wd).is_absolute():
-        return _render_ambiente(request, "A pasta de trabalho precisa de um caminho absoluto.", False)
+        return _erro_ambiente(request, "cobertura", "A pasta de trabalho precisa de um caminho absoluto.", valores)
     settings = st.settings
-    settings.set("cobertura", "workers", workers)
+    settings.set("cobertura", "workers", n)
     settings.set("cobertura", "work_dir", wd)
     settings.set("cobertura", "legado", bool(legado))
     settings.set("cobertura", "legado_offline", bool(legado_offline))
     settings.save()
-    return _render_ambiente(request, "Configuração da cobertura salva. Workers e pasta de trabalho valem "
-                                     "depois de reiniciar o JFLP Studio.", True)
+    return _volta("cobertura", "Configuração salva. Workers e pasta de trabalho valem depois de reiniciar "
+                               "o JFLP Studio.")
 
 
 @router.post("/ambiente/apontar", response_class=HTMLResponse)

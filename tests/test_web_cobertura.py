@@ -13,6 +13,47 @@ from web_helpers import HAVE_WEB, WebFixture
 
 from sbfl import cobertura as cb
 from sbfl import queue as jq
+from sbfl import store
+from sbfl.adapters.base import Bug
+from sbfl.diffgt import FaultLine
+
+TRUTH = [FaultLine("org.x.Foo", 4, "removed").to_dict()]
+FALHA_MAVEN = [{"test": "org.x.FooTest#bar", "message": "esperava 1", "type": "junit.framework.AssertionFailedError",
+                "frame": {"cls": "org.x.Foo", "method": "bar", "file": "Foo.java", "line": 4}}]
+
+
+def _ranking(n: int, defeito_pos: int) -> list[tuple]:
+    """n linhas de org.x.Other com suspeição decrescente; o defeito (org.x.Foo:4) na posição `defeito_pos`."""
+    rows = [("org.x.Other", i, round(1.0 - i / 1000, 6)) for i in range(1, n + 1)]
+    rows[defeito_pos - 1] = ("org.x.Foo", 4, rows[defeito_pos - 1][2])
+    return rows
+
+
+def _grava_run(home, ramo: str, kind: str, status: str = "ok_testes_falhando", outputs=None, **extra) -> str:
+    w = store.RunWriter(home, Bug("bugsjar", "maven", ramo, {}), kind)
+    for rel, text in (outputs or {}).items():
+        w.write_text(rel, text)
+    w.finish({"status": status, "started": "2026-01-01T10:00:00", "truth": TRUTH, **extra})
+    return w.rel
+
+
+def _grava_j2(home, ramo: str, rows) -> str:
+    txt = "".join(f"{c.replace('.', '/')},{ln},1,0,0,2,{s}\n" for c, ln, s in rows)
+    return _grava_run(home, ramo, "jaguar2", outputs={"outputs/jaguar2.csv": txt})
+
+
+def _grava_j1(home, ramo: str, rows) -> str:
+    xml = "<root>" + "".join(
+        f'<requirements name="{c}" location="{ln}" suspicious-value="{s}" cef="1" cep="0" cnf="0" cnp="2"/>'
+        for c, ln, s in rows) + "</root>"
+    return _grava_run(home, ramo, "jaguar1", outputs={"outputs/jaguar1.xml": xml})
+
+
+def _celulas(html: str, key: str) -> list[str]:
+    """Texto normalizado das células (td) da linha cujo checkbox tem o valor `key`."""
+    i = html.index(f'value="{key}"')
+    linha = html[html.rindex("<tr>", 0, i):html.index("</tr>", i)]
+    return [" ".join(re.sub(r"<[^>]+>", " ", c).split()) for c in re.findall(r"<td>(.*?)</td>", linha, re.S)]
 
 
 @unittest.skipUnless(HAVE_WEB, "fastapi/httpx não instalados")
@@ -313,13 +354,55 @@ class TestTabela(Base):
         r = self.c.post("/cobertura/bugs/acao", data={"acao": "apagar", "keys": ["x"]}, follow_redirects=False)
         self.assertEqual(r.status_code, 400)
 
-    def test_detalhe_do_bug(self):
+    def preparar(self):
+        """A-1 com Maven (1 falha) e Jaguar 1/2 concluídos; B-1 importado, com o Jaguar 1 caído."""
         bid = self.iniciar()
-        alvo = jq.batch_jobs(self.home, bid)[0]["bug_key"]
-        r = self.c.get("/cobertura/bug", params={"key": alvo})
+        jobs = jq.batch_jobs(self.home, bid)
+        a1 = next(j["bug_key"] for j in jobs if "A-1" in j["bug_key"])
+        b1 = next(j["bug_key"] for j in jobs if "B-1" in j["bug_key"])
+        ra1, rb1 = a1.split("/", 2)[2], b1.split("/", 2)[2]
+        rel_m = _grava_run(self.home, ra1, "maven", failures=FALHA_MAVEN,
+                           tests={"total": 10, "passed": 9, "failed": 1, "error": 0, "skipped": 0})
+        rel_1 = _grava_j1(self.home, ra1, _ranking(60, 3))
+        rel_2 = _grava_j2(self.home, ra1, _ranking(60, 1))
+        rel_b = _grava_run(self.home, rb1, "jaguar1", status="jaguar_crash")
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            for kind, rel in (("maven", rel_m), ("jaguar1", rel_1), ("jaguar2", rel_2)):
+                con.execute("UPDATE jobs SET state='done', run_rel=? WHERE batch_id=? AND bug_key=? AND kind=?",
+                            (rel, bid, a1, kind))
+            con.execute("UPDATE jobs SET state='done', run_rel=? WHERE batch_id=? AND bug_key=? AND kind=?",
+                        (rel_b, bid, b1, "jaguar1"))
+            con.execute("UPDATE jobs SET origem='importado' WHERE batch_id=? AND bug_key=?", (bid, b1))
+        return bid, a1, b1
+
+    def test_tabela_celulas_exatas(self):
+        _, a1, b1 = self.preparar()
+        html = self.c.get("/cobertura/bugs").text
+        self.assertEqual(_celulas(html, a1)[1:8],
+                         [a1.split("/", 2)[2] + " maven", "Concluído", "10 · 1 falhas", "pos. 3", "pos. 1",
+                          "9/10", ""])
+        self.assertEqual(_celulas(html, b1)[1:8],
+                         [b1.split("/", 2)[2] + " outro", "Pendente", "Pendente", "Falhou", "na fila", "—",
+                          "Jaguar 1: jaguar_crash importado"])
+        self.assertIn("importado", _celulas(html, b1)[7])
+
+    def test_detalhe_do_bug(self):
+        _, a1, _ = self.preparar()
+        r = self.c.get("/cobertura/bug", params={"key": a1})
         self.assertEqual(r.status_code, 200)
         self.assertIn("Maven", r.text)
+        self.assertIn("FooTest", r.text)          # teste que falhou (run do Maven)
+        self.assertIn("Foo.java:4", r.text)       # linha do erro guardada na execução
+        self.assertIn("Jaguar 2", r.text)
         self.assertEqual(self.c.get("/cobertura/bug", params={"key": "bugsjar/x/y/z"}).status_code, 404)
+
+    def test_acao_sem_selecao_avisa(self):
+        self.iniciar()
+        r = self.c.post("/cobertura/bugs/acao", data={"acao": "refazer", "projeto": "maven"},
+                        follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("aviso=nenhum", r.headers["location"])
+        self.assertIn("Nenhum bug marcado", self.c.get("/cobertura/bugs?aviso=nenhum").text)
 
 
 class TestAmbiente(Base):
@@ -337,23 +420,48 @@ class TestAmbiente(Base):
         self.assertIn(token, html)
         self.assertIn("copiar", html)
         url = "https://script.google.com/macros/s/abc/exec"
-        r = self.c.post("/ambiente/planilha", data={"url": url})
-        self.assertEqual(r.status_code, 200)
+        r = self.c.post("/ambiente/planilha", data={"url": url}, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertTrue(r.headers["location"].startswith("/ambiente?"))
+        self.assertTrue(r.headers["location"].endswith("#planilha"))
         self.assertEqual(self.settings.get("planilha", "url"), url)
         self.assertEqual(self.settings.get("planilha", "token"), token)
-        self.assertEqual(self.c.post("/ambiente/planilha", data={"url": "http://ruim"}).status_code, 400)
+        self.assertIn("URL da planilha salva.", self.c.get(r.headers["location"]).text)
+
+    def test_ambiente_url_invalida_mantem_o_digitado(self):
+        r = self.c.post("/ambiente/planilha", data={"url": "http://ruim"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("precisa começar com https://", r.text)
+        self.assertIn('value="http://ruim"', r.text)
 
     def test_ambiente_salva_cobertura(self):
         html = self.c.get("/ambiente").text
         self.assertIn('name="workers"', html)
-        r = self.c.post("/ambiente/cobertura", data={"workers": "6", "work_dir": "", "legado": "on"})
-        self.assertEqual(r.status_code, 200)
+        r = self.c.post("/ambiente/cobertura", data={"workers": "6", "work_dir": "", "legado": "on"},
+                        follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertTrue(r.headers["location"].endswith("#cobertura"))
         self.assertEqual(self.settings.get("cobertura", "workers"), 6)
         self.assertTrue(self.settings.get("cobertura", "legado"))
         self.assertFalse(self.settings.get("cobertura", "legado_offline"))
-        self.assertEqual(self.c.post("/ambiente/cobertura", data={"workers": "99"}).status_code, 400)
-        self.assertEqual(self.c.post("/ambiente/cobertura", data={"workers": "2", "work_dir": "relativo"}).status_code,
-                         400)
+        self.assertIn("valem depois de reiniciar", self.c.get(r.headers["location"]).text)
+
+    def test_cobertura_erros_mantem_valores_digitados(self):
+        r = self.c.post("/ambiente/cobertura", data={"workers": "99", "work_dir": "E:/x", "legado": "on"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Os workers vão de 1 a 12", r.text)
+        self.assertIn('value="99"', r.text)
+        self.assertIn('value="E:/x"', r.text)
+        self.assertNotEqual(self.settings.get("cobertura", "workers"), 99)
+
+    def test_cobertura_workers_nao_numerico_da_erro_amigavel(self):
+        r = self.c.post("/ambiente/cobertura", data={"workers": "abc", "work_dir": ""})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("digite um número inteiro", r.text)
+        self.assertNotIn('"detail"', r.text)      # nada de JSON 422
+        r = self.c.post("/ambiente/cobertura", data={"workers": "2", "work_dir": "relativo"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("caminho absoluto", r.text)
 
     def test_ambiente_botoes_legados(self):
         html = self.c.get("/ambiente").text
@@ -370,15 +478,16 @@ class TestAmbiente(Base):
                                    "falhas_linha": 0, "erro_linha": None}
         self.app.state.enviador = env
         with mock.patch("sbfl.planilha.enfileirar_todos", return_value=7) as m:
-            r = self.c.post("/ambiente/planilha/reenviar")
-        self.assertEqual(r.status_code, 200)
+            r = self.c.post("/ambiente/planilha/reenviar", follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
         m.assert_called_once_with(self.home)
         env.acordar.assert_called_once_with(forcar=True)
+        self.assertIn("7 linhas voltaram", self.c.get(r.headers["location"]).text)
 
     def test_reenviar_tudo_sem_enviador(self):
         with mock.patch("sbfl.planilha.enfileirar_todos", return_value=0) as m:
-            r = self.c.post("/ambiente/planilha/reenviar")
-        self.assertEqual(r.status_code, 200)
+            r = self.c.post("/ambiente/planilha/reenviar", follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
         m.assert_called_once()
 
 

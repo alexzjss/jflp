@@ -193,11 +193,13 @@ FILTROS = (("", "Todos"), (cb.SIT_PENDENTE, "Pendentes"), (cb.SIT_RODANDO, "Roda
 SITUACOES = {s for s, _ in FILTROS if s}
 
 
-def _href(filtros: dict, pagina: int = 1) -> str:
+def _href(filtros: dict, pagina: int = 1, aviso: str = "") -> str:
     """/cobertura/bugs com os filtros não vazios (e a página, se não for a primeira)."""
     qs = {k: v for k, v in filtros.items() if v}
     if pagina > 1:
         qs["pagina"] = pagina
+    if aviso:
+        qs["aviso"] = aviso
     return "/cobertura/bugs" + ("?" + urlencode(qs) if qs else "")
 
 
@@ -251,7 +253,8 @@ def _linha(home, bug: dict) -> dict:
 
 
 @router.get("/cobertura/bugs", response_class=HTMLResponse)
-def cobertura_bugs(request: Request, situacao: str = "", projeto: str = "", q: str = "", pagina: int = 1):
+def cobertura_bugs(request: Request, situacao: str = "", projeto: str = "", q: str = "", pagina: int = 1,
+                   aviso: str = ""):
     st = request.app.state
     bid = cb.batch_id(st.home)
     if bid is None:
@@ -269,6 +272,7 @@ def cobertura_bugs(request: Request, situacao: str = "", projeto: str = "", q: s
     return _render(request, "cobertura_bugs.html", {
         "page": "cobertura", "bid": bid, "situacao": sit, "projeto": projeto, "q": q, "pagina": pagina,
         "total": len(filtrados), "total_paginas": total_pag, "chips": chips,
+        "aviso": "Nenhum bug marcado." if aviso == "nenhum" else "",
         "linhas": [_linha(st.home, b) for b in trecho],
         "limpar_projeto": _href({**filtros, "projeto": ""}),
         "anterior": _href(filtros, pagina - 1) if pagina > 1 else "",
@@ -295,9 +299,12 @@ def cobertura_bugs_acao(request: Request, acao: str = Form(...), keys: list[str]
     """Ações sobre os bugs marcados; volta para a tabela com os mesmos filtros."""
     if acao not in ACOES:
         return HTMLResponse("Ação desconhecida.", status_code=400)
+    filtros = {"situacao": situacao, "projeto": projeto, "q": q}
+    if not keys:
+        return RedirectResponse(_href(filtros, pagina, aviso="nenhum"), status_code=303)
     st = request.app.state
     bid = cb.batch_id(st.home)
-    if bid is not None and keys:
+    if bid is not None:
         if acao == "refazer":
             cb.refazer(st.home, bid, keys, so_falhas=False)
         elif acao == "nao_executavel":
@@ -309,4 +316,4 @@ def cobertura_bugs_acao(request: Request, acao: str = Form(...), keys: list[str]
             env = getattr(st, "enviador", None)
             if env is not None:
                 env.acordar()
-    return RedirectResponse(_href({"situacao": situacao, "projeto": projeto, "q": q}, pagina), status_code=303)
+    return RedirectResponse(_href(filtros, pagina), status_code=303)
