@@ -208,31 +208,39 @@ def _bugs_do_lote(home: Home, chaves: list[str] | None) -> list[dict]:
     return list(por_bug.values())
 
 
-def _ler(home: Home, chaves: list[str]) -> dict[str, tuple[str, str]]:
-    """{chave: (linha, atualizado)} das linhas já na caixa de saída (só as pedidas)."""
+def _ler(home: Home, chaves: list[str] | None) -> dict[str, tuple[str, str, str]]:
+    """{chave: (linha, atualizado, assinatura)} das linhas já na caixa de saída (só as pedidas; None = todas).
+
+    Deve ser lido ANTES de tirar o retrato do estado dos bugs: assim quem gravar entre as duas leituras é detectado."""
     out = {}
     with contextlib.closing(_con(home)) as con:
+        if chaves is None:
+            for r in con.execute("SELECT bug_key, linha, atualizado, assinatura FROM planilha_outbox"):
+                out[r[0]] = (r[1], r[2], r[3])
+            return out
         for i in range(0, len(chaves), 500):
             bloco = chaves[i:i + 500]
             marks = ",".join("?" * len(bloco))
-            for r in con.execute(f"SELECT bug_key, linha, atualizado FROM planilha_outbox WHERE bug_key IN ({marks})",
-                                 bloco):
-                out[r[0]] = (r[1], r[2])
+            for r in con.execute(f"SELECT bug_key, linha, atualizado, assinatura FROM planilha_outbox "
+                                 f"WHERE bug_key IN ({marks})", bloco):
+                out[r[0]] = (r[1], r[2], r[3])
     return out
 
 
-def _gravar(home: Home, bugs: list[dict], tentativas: int = 3) -> int:
+def _gravar(home: Home, bugs: list[dict], ant: dict | None = None, tentativas: int = 3) -> int:
     """Monta as linhas SEM transação de escrita aberta e grava em transações curtas (blocos de 100).
 
     Anti-sobrescrita: cada gravação só vale se `atualizado` ainda é o que foi lido antes de montar a linha; se outro
-    escritor mexeu no meio, o bug é remontado a partir do estado atual (na última tentativa grava de qualquer jeito)."""
+    escritor mexeu no meio, o bug é remontado a partir do estado atual (na última tentativa grava de qualquer jeito).
+    `ant` é a leitura da caixa de saída feita ANTES do retrato dos `bugs`; sem ela, lê aqui."""
     pend = {b["key"]: b for b in bugs}
     n = 0
     for t in range(tentativas):
         if not pend:
             break
         ultima = t == tentativas - 1
-        ant = _ler(home, list(pend))
+        if ant is None:
+            ant = _ler(home, list(pend))
         prontas = []
         for chave, bug in pend.items():
             try:
@@ -251,7 +259,7 @@ def _gravar(home: Home, bugs: list[dict], tentativas: int = 3) -> int:
         for i in range(0, len(prontas), LOTE):
             with contextlib.closing(_con(home)) as con, con:
                 for j, (chave, texto, ass) in enumerate(prontas[i:i + LOTE]):
-                    marca, velho = f"{agora}#{i + j:06d}", ant.get(chave, (None, None))[1]
+                    marca, velho = f"{agora}#{i + j:06d}", ant.get(chave, (None, None, None))[1]
                     if velho is None:
                         cur = con.execute("INSERT OR IGNORE INTO planilha_outbox(bug_key, linha, atualizado, enviado, "
                                           "assinatura) VALUES(?,?,?,NULL,?)", (chave, texto, marca, ass))
@@ -266,6 +274,7 @@ def _gravar(home: Home, bugs: list[dict], tentativas: int = 3) -> int:
                         n += 1
                     else:
                         conflitos.append(chave)
+        ant = _ler(home, conflitos) if conflitos else None      # primeiro a caixa de saída, depois o retrato
         pend = {b["key"]: b for b in _bugs_do_lote(home, conflitos)} if conflitos else {}
     return n
 
@@ -273,26 +282,28 @@ def _gravar(home: Home, bugs: list[dict], tentativas: int = 3) -> int:
 def enfileirar(home: Home, bug_keys: list[str]) -> None:
     """Monta a linha de cada bug e a põe (ou atualiza) na caixa de saída como não enviada."""
     if bug_keys:
-        _gravar(home, _bugs_do_lote(home, list(bug_keys)))
+        chaves = list(bug_keys)
+        ant = _ler(home, chaves)
+        _gravar(home, _bugs_do_lote(home, chaves), ant)
 
 
-def _em_blocos(home: Home, bugs: list[dict]) -> int:
-    return sum(_gravar(home, bugs[i:i + LOTE]) for i in range(0, len(bugs), LOTE))
+def _em_blocos(home: Home, bugs: list[dict], ant: dict) -> int:
+    return sum(_gravar(home, bugs[i:i + LOTE], ant) for i in range(0, len(bugs), LOTE))
 
 
 def enfileirar_todos(home: Home) -> int:
     """Reenvio completo: todas as linhas do lote de cobertura voltam à caixa de saída. Devolve quantas."""
-    return _em_blocos(home, _bugs_do_lote(home, None))
+    ant = _ler(home, None)
+    return _em_blocos(home, _bugs_do_lote(home, None), ant)
 
 
 def reconciliar(home: Home) -> int:
     """Enfileira os bugs que ainda não estão na caixa de saída ou cujo estado (situação, etapas, origem) mudou
     desde a última linha gravada: cobre a carga inicial (todos os bugs, os não rodados como pendente) e mudanças
     feitas fora dos workers (importação, refazer, cancelar)."""
+    ant = _ler(home, None)
     lista = _bugs_do_lote(home, None)
-    with contextlib.closing(_con(home)) as con:
-        atuais = {r[0]: r[1] for r in con.execute("SELECT bug_key, assinatura FROM planilha_outbox")}
-    return _em_blocos(home, [b for b in lista if atuais.get(b["key"]) != assinatura(b)])
+    return _em_blocos(home, [b for b in lista if (ant.get(b["key"]) or (None, None, None))[2] != assinatura(b)], ant)
 
 
 def pendentes(home: Home) -> int:
@@ -308,9 +319,10 @@ def linhas_total(home: Home) -> int:
 # ------------------------------------------------------------------ configuração
 
 def garantir_token(settings: Settings) -> str:
-    """Com URL configurada e sem token, gera um (e grava no config.toml)."""
+    """Gera (e grava no config.toml) o token se estiver vazio, com ou sem URL: o passo a passo manda colá-lo no
+    Apps Script antes de implantar. Devolve o token."""
     token = settings.get("planilha", "token", "") or ""
-    if settings.get("planilha", "url", "") and not token:
+    if not token:
         token = secrets.token_urlsafe(24)
         settings.set("planilha", "token", token)
         settings.save()
@@ -320,8 +332,8 @@ def garantir_token(settings: Settings) -> str:
 def salvar_url(settings: Settings, url: str) -> None:
     """Grava a URL do app da web; na primeira vez gera o token."""
     settings.set("planilha", "url", (url or "").strip())
-    if not garantir_token(settings):
-        settings.save()
+    garantir_token(settings)
+    settings.save()
 
 
 # ------------------------------------------------------------------ envio
@@ -436,9 +448,20 @@ class Enviador(threading.Thread):
                             (agora_iso, r["bug_key"], r["atualizado"]))
         with self._lock:
             self._ultimo_ok, self._erro, self._espera, self._proximo = agora_iso, None, self._inicial, 0.0
+        if resp.get("cabecalho_mudou"):     # a planilha trocou o cabeçalho: as linhas antigas ficaram desalinhadas
+            try:
+                enfileirar_todos(self.home)
+                self._forcar = True
+                return 0
+            except Exception as e:      # noqa: BLE001
+                _log.warning("reenvio após mudança de cabeçalho falhou: %r", e)
         return 0 if len(rows) >= LOTE else self._ociosa
 
     def run(self) -> None:
+        try:
+            garantir_token(self.settings)       # o token precisa existir antes da URL (vai no Apps Script)
+        except Exception as e:      # noqa: BLE001
+            _log.warning("não foi possível gravar o token da planilha: %r", e)
         while not self._parar.is_set():
             self._ev.clear()
             try:

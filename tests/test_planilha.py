@@ -226,6 +226,15 @@ class TestOutbox(Cobertura):
         self.assertEqual(len(chamadas), 2)
         self.assertNotEqual(self.outbox()[self.k0]["atualizado"], "outro")
 
+    def test_leitura_da_caixa_vem_antes_do_retrato_dos_bugs(self):
+        ordem = []
+        real_ler, real_bugs = pl._ler, pl._bugs_do_lote
+        with mock.patch.object(pl, "_ler", lambda *a: (ordem.append("ler"), real_ler(*a))[1]),                 mock.patch.object(pl, "_bugs_do_lote", lambda *a: (ordem.append("bugs"), real_bugs(*a))[1]):
+            pl.enfileirar(self.home, [self.k0])
+            pl.reconciliar(self.home)
+            pl.enfileirar_todos(self.home)
+        self.assertEqual(ordem, ["ler", "bugs"] * 3)
+
     def test_falha_ao_montar_linha_e_contada_e_mostrada(self):
         with mock.patch.object(pl, "linha", side_effect=ValueError("quebrou")):
             pl.enfileirar(self.home, [self.k0])
@@ -346,6 +355,26 @@ class TestEnviador(Cobertura):
             return {"ok": True}
         self.enviador(post).ciclo()
         self.assertEqual(pl.pendentes(self.home), 1)
+
+    def test_cabecalho_mudou_reenvia_tudo(self):
+        pl.enfileirar(self.home, [self.k0])
+        post = Fake({"ok": True, "cabecalho_mudou": True}, {"ok": True})
+        env = self.enviador(post, espera_ociosa=100)
+        self.assertEqual(env.ciclo(), 0)
+        self.assertEqual(pl.pendentes(self.home), 4)        # tudo voltou para a fila
+        env.ciclo()                                         # reenvio imediato, sem esperar
+        self.assertEqual(len(post.corpos[1][1]["linhas"]), 4)
+        self.assertEqual(pl.pendentes(self.home), 0)
+
+    def test_token_existe_sem_url(self):
+        self.assertEqual(self.settings.get("planilha", "url"), "")
+        t = pl.garantir_token(self.settings)
+        self.assertGreaterEqual(len(t), 20)
+        self.assertEqual(pl.garantir_token(self.settings), t)       # estável
+        self.assertEqual(load_settings(self.home).get("planilha", "token"), t)      # gravado no config.toml
+        pl.salvar_url(self.settings, "https://exemplo.test/exec")
+        self.assertEqual(self.settings.get("planilha", "token"), t)
+        self.assertEqual(load_settings(self.home).get("planilha", "url"), "https://exemplo.test/exec")
 
     def test_token_gerado_ao_salvar_a_url(self):
         pl.salvar_url(self.settings, " https://exemplo.test/exec ")
