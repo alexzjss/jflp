@@ -485,6 +485,7 @@ class LegadoCandidatesTest(Base):
     def _cands(self, kind="maven", **tools):
         self.settings.set("run", "max_attempts", 20)
         self.settings.set("cobertura", "legado", True)
+        self.settings.set("cobertura", "legado_offline", False)
         with self._tools(**tools):
             return candidates(AttemptConfig(params={"cobertura": True}), Diagnosis("x"), kind, self.settings)
 
@@ -505,7 +506,7 @@ class LegadoCandidatesTest(Base):
         self.assertFalse(any(c.maven == "3.0.5" for c in self._cands(mvn305=False)))
         self.assertFalse(any(c.jdk == 7 for c in self._cands(kind="jaguar1")))
 
-    def test_legado_desligado_por_padrao(self):
+    def test_legado_so_na_cobertura(self):
         self.settings.set("run", "max_attempts", 20)
         with self._tools():
             out = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
@@ -516,7 +517,7 @@ class LegadoCandidatesTest(Base):
         self.settings.set("run", "max_attempts", 4)
         with self._tools():
             few = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
-            more = candidates(AttemptConfig(params={"max_attempts": 8}), Diagnosis("x"), "maven", self.settings)
+            more = candidates(AttemptConfig(params={"cobertura": True, "max_attempts": 8}), Diagnosis("x"), "maven", self.settings)
         self.assertEqual(len(few), 3)
         self.assertEqual(more[-1].jdk, 7)
 

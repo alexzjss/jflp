@@ -76,7 +76,7 @@ LEGACY_MAVEN = "3.0.5"
 
 def _legacy(first: AttemptConfig, kind: str, settings) -> list[AttemptConfig]:
     """Perfil legado (JDK 7 + Maven 3.0.5) para a cobertura; com `legado_offline`, também a versão offline."""
-    if kind != "maven" or not settings.get("cobertura", "legado", False):
+    if kind != "maven" or not first.params.get("cobertura") or not settings.get("cobertura", "legado", False):
         return []
     home = getattr(settings, "home", None)
     if home is None:
