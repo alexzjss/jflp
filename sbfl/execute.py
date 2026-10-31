@@ -207,7 +207,7 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         if kind == "jaguar2" and (prep.info.get("jaguar2_suportado") is False or not (mod / "pom.xml").is_file()):
             w.write_json("env.json", _env_info(prep, None))
             w.write_text("command.txt", "")
-            _stopped(w, st.DESCONHECIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
+            _stopped(w, st.PROJETO_INVALIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
                      attempts=0, warnings=_prep_warnings(prep), test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
                      relevant_tests=prep.relevant_tests, truth=[f.to_dict() for f in prep.truth])
             return w.rel

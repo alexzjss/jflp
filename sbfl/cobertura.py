@@ -91,6 +91,8 @@ def sincronizar(home: Home, settings: Settings, root: Path) -> dict:
                             "VALUES(?,?,?,?,?,'pending')", (bid, idx, bug.key, json.dumps(bug.extra or {}), k))
                 idx += 1
                 novos += 1
+        if novos:       # lote já concluído/cancelado volta a andar com os jobs novos
+            con.execute("UPDATE batches SET state='active' WHERE id=? AND state IN ('done','cancelled')", (bid,))
     return {"batch_id": bid, "adicionados": novos, "total_bugs": total_bugs, "avisos": avisos}
 
 
@@ -342,6 +344,7 @@ def marcar_nao_executavel(home: Home, bid: int, bug_keys: list[str]) -> int:
                               "state=CASE WHEN state='pending' THEN 'done' ELSE state END "
                               "WHERE batch_id=? AND bug_key=? AND state IN ('pending','done')", (bid, k))
             n += cur.rowcount
+        jq._close_if_finished(con, bid)
     return n
 
 

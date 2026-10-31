@@ -99,6 +99,31 @@ class TestSincronizar(Base):
         self.assertEqual(len(novos), 3)
 
 
+class TestLoteReativado(Base):
+    def test_sincronizar_reativa_lote_concluido(self):
+        bid = self.sync()["batch_id"]
+        for estado in ("done", "cancelled"):
+            self.sql("UPDATE batches SET state=? WHERE id=?", estado, bid)
+            extra = make_bugsjar_git(self.tmp / f"src_{estado}", ids=("Z-1",))
+            shutil.move(str(extra), str(self.root / f"zeta_{estado}"))
+            self.assertEqual(self.sync()["adicionados"], 3)
+            self.assertEqual(jq.get_batch(self.home, bid)["state"], "active")
+
+    def test_sincronizar_sem_novos_nao_reativa(self):
+        bid = self.sync()["batch_id"]
+        self.sql("UPDATE batches SET state='done' WHERE id=?", bid)
+        self.assertEqual(self.sync()["adicionados"], 0)
+        self.assertEqual(jq.get_batch(self.home, bid)["state"], "done")
+
+    def test_marcar_nao_executavel_fecha_o_lote(self):
+        bid = self.sync()["batch_id"]
+        chaves = sorted({j["bug_key"] for j in self.jobs(bid)})
+        cb.marcar_nao_executavel(self.home, bid, chaves[:-1])
+        self.assertEqual(jq.get_batch(self.home, bid)["state"], "active")
+        cb.marcar_nao_executavel(self.home, bid, chaves)
+        self.assertEqual(jq.get_batch(self.home, bid)["state"], "done")
+
+
 class TestRegras(unittest.TestCase):
     def test_etapa_regras(self):
         def job(state="done", kind="jaguar1", forcado=None):

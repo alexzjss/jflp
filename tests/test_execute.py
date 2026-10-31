@@ -328,7 +328,7 @@ class ExecuteTest(Base):
         (self.prep.pristine / "pom.xml").unlink()
         rel, run = self.go(lambda n, c: "ok")
         self.assertEqual(self.cfgs, [])
-        self.assertEqual(run["status"], "desconhecido")
+        self.assertEqual(run["status"], "projeto_invalido")
         self.assertEqual(run["diagnosis"]["cause"], "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)")
         self.assertEqual(run["attempts"], 0)
 
@@ -336,7 +336,7 @@ class ExecuteTest(Base):
         self.prep.info["jaguar2_suportado"] = False
         rel, run = self.go(lambda n, c: "ok")
         self.assertEqual(self.cfgs, [])
-        self.assertEqual(run["status"], "desconhecido")
+        self.assertEqual(run["status"], "projeto_invalido")
 
     def test_maven_kind_without_pom_still_runs(self):
         (self.prep.pristine / "pom.xml").unlink()
@@ -398,6 +398,20 @@ class ProjetoInvalidoTest(Base):
         self.assertEqual(len(calls), 1)
         self.assertEqual(run["status"], "projeto_invalido")
         self.assertEqual(run["attempts"], 1)
+
+    def test_jaguar1_sem_pom_e_projeto_invalido(self):
+        (self.prep.pristine / "pom.xml").unlink()
+        log_text = ("[ERROR] The goal you specified requires a project to execute but there is no POM in "
+                    "this directory (C:\w). MissingProjectException\n")
+
+        def runner(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(log_text, encoding="utf-8")
+            return AttemptResult(1, False, 1.0, log, {}, {}, ["mvn"], {}, {})
+
+        with mock.patch.object(ex, "prepare", return_value=self.prep),                 mock.patch.object(ex, "run_jaguar1", runner):
+            rel = ex.execute(self.home, self.settings, BUG, "jaguar1", ex.RunOptions())
+        self.assertEqual(load_run(self.home, rel)["status"], "projeto_invalido")
 
 
 class ProcOnLineTest(Base):
