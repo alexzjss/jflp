@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Bugs da cobertura - JFLP Studio{% endblock %}
+{% block content %}
+<div class="cb">
+<p><a href="/cobertura">← Cobertura</a></p>
+<h1>Bugs da cobertura</h1>
+
+<nav class="cb-filtros" aria-label="Filtrar por situação">
+  {% for c in chips %}<a href="{{ c.href }}" class="cb-filtro{{ ' ativo' if c.ativo }}">{{ c.nome }} <b>{{ c.n }}</b></a>{% endfor %}
+</nav>
+
+<form method="get" action="/cobertura/bugs" class="linha cb-busca">
+  <input type="hidden" name="situacao" value="{{ situacao }}">
+  <input type="hidden" name="projeto" value="{{ projeto }}">
+  <input type="search" name="q" value="{{ q }}" placeholder="Buscar bug ou causa" aria-label="Buscar bug ou causa">
+  <button type="submit">Buscar</button>
+  {% if projeto %}<a href="{{ limpar_projeto }}">projeto {{ projeto }} ✕</a>{% endif %}
+</form>
+
+{% include "_cobertura_linhas.html" %}
+</div>
+{% endblock %}

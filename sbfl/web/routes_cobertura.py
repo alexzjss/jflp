@@ -1,16 +1,23 @@
 """Tela Cobertura (painel): o lote único Maven + Jaguar 1 + Jaguar 2 sobre todos os bugs do Bugs.jar."""
 from __future__ import annotations
 
+import json
+import math
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from .. import bugview as bv
 from .. import cobertura as cb
 from .. import planilha
 from .. import queue as jq
+from ..importar import ORIGEM
 from .comum import _render
+from .routes_lote import _codigo_rel
 
 router = APIRouter()
 
@@ -94,7 +101,7 @@ def painel_ctx(request: Request, bid: int) -> dict:
             restante = f"{r['restante_s'] / 3600:.1f}".replace(".", ",")
     n_workers = wstatus.get("workers") or len(correntes) or 1
     return {"r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote_estado == "paused",
-            "concluida": lote_estado == "done", "outra_instancia": outra,
+            "concluida": lote_estado == "done", "cancelada": lote_estado == "cancelled", "outra_instancia": outra,
             "rodando": rodando, "ultimos": ultimos, "cores": CORES,
             "n_falhados": r["por_situacao"]["falhou"] + r["por_situacao"]["parcial"],
             "ritmo": ritmo, "restante": restante, "n_workers": n_workers, "planilha": _planilha(request)}
@@ -175,3 +182,131 @@ def cobertura_sincronizar(request: Request):
     if pasta and Path(pasta).is_dir():
         cb.sincronizar(st.home, st.settings, Path(pasta))
     return _voltar()
+
+
+# ------------------------------------------------------------------ tabela dos bugs
+
+PAGINA = 50
+ACOES = ("refazer", "nao_executavel", "priorizar")
+FILTROS = (("", "Todos"), (cb.SIT_PENDENTE, "Pendentes"), (cb.SIT_RODANDO, "Rodando"), (cb.SIT_OK, "OK"),
+           (cb.SIT_PARCIAL, "Parcial"), (cb.SIT_FALHOU, "Falharam"), (cb.SIT_NAO_EXEC, "Não executáveis"))
+SITUACOES = {s for s, _ in FILTROS if s}
+
+
+def _href(filtros: dict, pagina: int = 1) -> str:
+    """/cobertura/bugs com os filtros não vazios (e a página, se não for a primeira)."""
+    qs = {k: v for k, v in filtros.items() if v}
+    if pagina > 1:
+        qs["pagina"] = pagina
+    return "/cobertura/bugs" + ("?" + urlencode(qs) if qs else "")
+
+
+def _rotulo(situacao: str) -> str:
+    return dict(CORES).get(situacao, situacao)
+
+
+def _maven(bug: dict, runs: dict) -> str:
+    if "maven" not in bug["jobs"]:
+        return "—"
+    tests = (runs.get("maven") or {}).get("tests") or {}
+    if tests.get("total") is not None and bug["etapas"]["maven"] in (cb.SIT_OK, cb.SIT_FALHOU):
+        falhas = int(tests.get("failed") or 0) + int(tests.get("error") or 0)
+        return f"{tests['total']} · {falhas} falhas"
+    return _rotulo(bug["etapas"]["maven"])
+
+
+def _jaguar(b: bv._Bug, bug: dict, kind: str) -> str:
+    if kind not in bug["jobs"]:
+        return "—"
+    etapa = bug["etapas"][kind]
+    if etapa in (cb.SIT_OK, cb.SIT_FALHOU):
+        _, pos = b.posicao(kind)
+        melhor = (pos or {}).get("melhor")
+        if melhor:
+            return f"pos. {melhor['expected']:g}"
+    if etapa == cb.SIT_RODANDO:
+        return "rodando…"
+    if etapa == cb.SIT_PENDENTE:
+        return "na fila"
+    return _rotulo(etapa)
+
+
+def _linha(home, bug: dict) -> dict:
+    """Uma linha da tabela: Maven, Jaguar 1 e Jaguar 2, concordância J1×J2, motivo e perfil."""
+    jobs = bug["jobs"]
+    primeiro = next(iter(jobs.values()), {})
+    extra = json.loads(primeiro.get("bug_extra") or "{}")
+    b = bv._Bug(home, {"key": bug["key"], "jobs": jobs, "extra": extra})
+    runs = {k: b.run(k) for k in jobs}
+    conc = "—"
+    if "jaguar1" in jobs and "jaguar2" in jobs:
+        c = bv._concordancia(b, bv.TOP_N)
+        if c:
+            conc = f"{c['n_comuns']}/{c['de']}"
+    return {"key": bug["key"], "projeto": bug["projeto"], "bug": bug["bug"], "situacao": bug["situacao"],
+            "situacao_rotulo": _rotulo(bug["situacao"]), "maven": _maven(bug, runs),
+            "j1": _jaguar(b, bug, "jaguar1"), "j2": _jaguar(b, bug, "jaguar2"), "conc": conc,
+            "motivo": planilha._motivo(bug, runs), "perfil": planilha._perfil(runs),
+            "importado": bug.get("origem") == ORIGEM}
+
+
+@router.get("/cobertura/bugs", response_class=HTMLResponse)
+def cobertura_bugs(request: Request, situacao: str = "", projeto: str = "", q: str = "", pagina: int = 1):
+    st = request.app.state
+    bid = cb.batch_id(st.home)
+    if bid is None:
+        return _voltar()
+    base = cb.tabela(st.home, bid, projeto or None)
+    contagem = Counter(b["situacao"] for b in base)
+    sit = situacao if situacao in SITUACOES else ""
+    filtrados = cb.filtrar(base, [sit] if sit else None, q)
+    total_pag = max(1, math.ceil(len(filtrados) / PAGINA))
+    pagina = min(max(pagina, 1), total_pag)
+    trecho = filtrados[(pagina - 1) * PAGINA:pagina * PAGINA]
+    filtros = {"situacao": sit, "projeto": projeto, "q": q}
+    chips = [{"nome": nome, "n": len(base) if not s else contagem.get(s, 0),
+              "href": _href({**filtros, "situacao": s}), "ativo": s == sit} for s, nome in FILTROS]
+    return _render(request, "cobertura_bugs.html", {
+        "page": "cobertura", "bid": bid, "situacao": sit, "projeto": projeto, "q": q, "pagina": pagina,
+        "total": len(filtrados), "total_paginas": total_pag, "chips": chips,
+        "linhas": [_linha(st.home, b) for b in trecho],
+        "limpar_projeto": _href({**filtros, "projeto": ""}),
+        "anterior": _href(filtros, pagina - 1) if pagina > 1 else "",
+        "proxima": _href(filtros, pagina + 1) if pagina < total_pag else "",
+    })
+
+
+@router.get("/cobertura/bug", response_class=HTMLResponse)
+def cobertura_bug(request: Request, key: str = ""):
+    """Detalhe de um bug da tabela (mesmo fragmento do lote)."""
+    home = request.app.state.home
+    bid = cb.batch_id(home)
+    d = bv.bug_detail(home, bid, key) if bid is not None else None
+    if d is None:
+        return HTMLResponse('<p class="aviso erro">Esse bug não faz parte da cobertura.</p>', status_code=404)
+    return _render(request, "_lote_detalhe.html", {"d": d, "bid": bid, "codigo_rel": _codigo_rel(d),
+                                                   "ver": {c: bv.veredito(c) for c in bv.VEREDITOS}})
+
+
+@router.post("/cobertura/bugs/acao")
+def cobertura_bugs_acao(request: Request, acao: str = Form(...), keys: list[str] = Form([]),
+                        situacao: str = Form(""), projeto: str = Form(""), q: str = Form(""),
+                        pagina: int = Form(1)):
+    """Ações sobre os bugs marcados; volta para a tabela com os mesmos filtros."""
+    if acao not in ACOES:
+        return HTMLResponse("Ação desconhecida.", status_code=400)
+    st = request.app.state
+    bid = cb.batch_id(st.home)
+    if bid is not None and keys:
+        if acao == "refazer":
+            cb.refazer(st.home, bid, keys, so_falhas=False)
+        elif acao == "nao_executavel":
+            cb.marcar_nao_executavel(st.home, bid, keys)
+        else:
+            cb.priorizar(st.home, bid, keys)
+        if acao in ("refazer", "nao_executavel"):
+            planilha.enfileirar(st.home, keys)
+            env = getattr(st, "enviador", None)
+            if env is not None:
+                env.acordar()
+    return RedirectResponse(_href({"situacao": situacao, "projeto": projeto, "q": q}, pagina), status_code=303)

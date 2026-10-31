@@ -200,14 +200,17 @@ def _montar(home: Home, bid: int, detalhe: bool) -> tuple[list[dict], dict[str, 
     return out, rows
 
 
-def bugs(home: Home, bid: int, projeto: str | None = None, situacoes=None, busca: str | None = None) -> list[dict]:
-    """Um dict por bug do lote (sem tocar no git), com filtros opcionais."""
+def tabela(home: Home, bid: int, projeto: str | None = None) -> list[dict]:
+    """Bugs do lote COM as execuções (`runs`: kind -> run), para a tabela e os filtros em memória."""
     lista, _ = _montar(home, bid, detalhe=True)
+    return [b for b in lista if not projeto or b["projeto"] == projeto]
+
+
+def filtrar(lista: list[dict], situacoes=None, busca: str | None = None) -> list[dict]:
+    """Filtra bugs já montados por situação e por texto (no nome do bug ou na causa do diagnóstico)."""
     q = (busca or "").strip().lower()
     out = []
     for b in lista:
-        if projeto and b["projeto"] != projeto:
-            continue
         if situacoes and b["situacao"] not in situacoes:
             continue
         if q:
@@ -215,6 +218,12 @@ def bugs(home: Home, bid: int, projeto: str | None = None, situacoes=None, busca
             if q not in b["bug"].lower() and q not in causas.lower():
                 continue
         out.append(b)
+    return out
+
+
+def bugs(home: Home, bid: int, projeto: str | None = None, situacoes=None, busca: str | None = None) -> list[dict]:
+    """Um dict por bug do lote (sem tocar no git), com filtros opcionais."""
+    out = filtrar(tabela(home, bid, projeto), situacoes, busca)
     for b in out:
         b.pop("runs", None)
     return out

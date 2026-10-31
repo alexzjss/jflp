@@ -218,6 +218,169 @@ class TestCobertura(Base):
         self.assertIn("Últimos concluídos", html)
         self.assertNotIn("há —", html)
 
+    def test_painel_cancelado_sem_pausar_e_concluido_sem_parar(self):
+        self.iniciar()
+        with mock.patch("sbfl.queue.get_batch", return_value={"state": "cancelled"}):
+            html = self.c.get("/cobertura/painel").text
+        self.assertNotIn("Pausar após", html)
+        self.assertIn("Parar agora", html)
+        with mock.patch("sbfl.queue.get_batch", return_value={"state": "done"}):
+            html = self.c.get("/cobertura/painel").text
+        self.assertNotIn("Parar agora", html)
+
+    def test_ver_do_projeto_abre_a_tabela_filtrada(self):
+        self.iniciar()
+        html = self.c.get("/cobertura").text
+        self.assertIn('href="/cobertura/bugs?projeto=maven"', html)
+        r = self.c.get("/cobertura/bugs?projeto=maven")
+        self.assertEqual(r.status_code, 200)
+
+
+class TestTabela(Base):
+    def chaves(self, html: str) -> list[str]:
+        return re.findall(r'<input type="checkbox" name="keys" value="([^"]+)"', html)
+
+    def test_tabela_filtra_por_situacao_e_projeto(self):
+        self.iniciar()
+        html = self.c.get("/cobertura/bugs?projeto=maven").text
+        self.assertEqual(len(self.chaves(html)), 2)
+        self.assertIn("A-1", html)
+        self.assertNotIn("B-1", html)
+        self.assertEqual(len(self.chaves(self.c.get("/cobertura/bugs?situacao=pendente").text)), 4)
+        self.assertEqual(self.chaves(self.c.get("/cobertura/bugs?situacao=ok").text), [])
+        self.assertIn("Nenhum bug com esses filtros", self.c.get("/cobertura/bugs?situacao=ok").text)
+
+    def test_tabela_busca(self):
+        self.iniciar()
+        html = self.c.get("/cobertura/bugs?q=B-2").text
+        self.assertEqual(len(self.chaves(html)), 1)
+        self.assertIn("B-2", html)
+        self.assertEqual(self.chaves(self.c.get("/cobertura/bugs?q=nada-disso").text), [])
+
+    def test_tabela_pagina(self):
+        self.iniciar()
+        with mock.patch("sbfl.web.routes_cobertura.PAGINA", 3):
+            html = self.c.get("/cobertura/bugs?pagina=2").text
+        self.assertEqual(len(self.chaves(html)), 1)
+        self.assertIn("Página 2 de 2", html)
+        self.assertIn("← anterior", html)
+        self.assertNotIn("próxima →", html)
+
+    def test_tabela_mostra_colunas_e_filtros_com_contagem(self):
+        bid = self.iniciar()
+        html = self.c.get("/cobertura/bugs").text
+        for titulo in ("Bug", "Situação", "Maven", "Jaguar 1", "Jaguar 2", "J1×J2", "Motivo / perfil"):
+            self.assertIn(titulo, html)
+        self.assertIn("Pendentes <b>4</b>", html)
+        self.assertIn("Não executáveis <b>0</b>", html)
+
+    def test_acao_refazer_selecionados(self):
+        bid = self.iniciar()
+        jobs = jq.batch_jobs(self.home, bid)
+        alvo = jobs[0]["bug_key"]
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='done' WHERE batch_id=? AND bug_key=?", (bid, alvo))
+        r = self.c.post("/cobertura/bugs/acao", data={"acao": "refazer", "keys": [alvo], "projeto": "maven"},
+                        follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertTrue(r.headers["location"].startswith("/cobertura/bugs?"))
+        self.assertIn("projeto=maven", r.headers["location"])
+        estados = {j["state"] for j in jq.batch_jobs(self.home, bid) if j["bug_key"] == alvo}
+        self.assertEqual(estados, {"pending"})
+
+    def test_acao_nao_executavel(self):
+        bid = self.iniciar()
+        alvo = jq.batch_jobs(self.home, bid)[0]["bug_key"]
+        r = self.c.post("/cobertura/bugs/acao", data={"acao": "nao_executavel", "keys": [alvo]},
+                        follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        jobs = [j for j in jq.batch_jobs(self.home, bid) if j["bug_key"] == alvo]
+        self.assertTrue(all(j["forcado"] == "nao_executavel" for j in jobs))
+        self.assertTrue(all(j["state"] == "done" for j in jobs))
+
+    def test_acao_priorizar(self):
+        bid = self.iniciar()
+        r = self.c.post("/cobertura/bugs/acao", data={"acao": "priorizar", "keys": [
+            next(j["bug_key"] for j in jq.batch_jobs(self.home, bid) if "B-2" in j["bug_key"])]},
+            follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        jobs = jq.batch_jobs(self.home, bid)
+        primeiro = min(jobs, key=lambda j: j["idx"])
+        self.assertIn("B-2", primeiro["bug_key"])
+
+    def test_acao_desconhecida_recusada(self):
+        self.iniciar()
+        r = self.c.post("/cobertura/bugs/acao", data={"acao": "apagar", "keys": ["x"]}, follow_redirects=False)
+        self.assertEqual(r.status_code, 400)
+
+    def test_detalhe_do_bug(self):
+        bid = self.iniciar()
+        alvo = jq.batch_jobs(self.home, bid)[0]["bug_key"]
+        r = self.c.get("/cobertura/bug", params={"key": alvo})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Maven", r.text)
+        self.assertEqual(self.c.get("/cobertura/bug", params={"key": "bugsjar/x/y/z"}).status_code, 404)
+
+
+class TestAmbiente(Base):
+    def setUp(self):
+        super().setUp()
+        for p in self.no_tools():
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_ambiente_salva_planilha_e_gera_token(self):
+        html = self.c.get("/ambiente").text
+        self.assertIn('id="planilha"', html)
+        token = self.settings.get("planilha", "token", "")
+        self.assertTrue(token)
+        self.assertIn(token, html)
+        self.assertIn("copiar", html)
+        url = "https://script.google.com/macros/s/abc/exec"
+        r = self.c.post("/ambiente/planilha", data={"url": url})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.settings.get("planilha", "url"), url)
+        self.assertEqual(self.settings.get("planilha", "token"), token)
+        self.assertEqual(self.c.post("/ambiente/planilha", data={"url": "http://ruim"}).status_code, 400)
+
+    def test_ambiente_salva_cobertura(self):
+        html = self.c.get("/ambiente").text
+        self.assertIn('name="workers"', html)
+        r = self.c.post("/ambiente/cobertura", data={"workers": "6", "work_dir": "", "legado": "on"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.settings.get("cobertura", "workers"), 6)
+        self.assertTrue(self.settings.get("cobertura", "legado"))
+        self.assertFalse(self.settings.get("cobertura", "legado_offline"))
+        self.assertEqual(self.c.post("/ambiente/cobertura", data={"workers": "99"}).status_code, 400)
+        self.assertEqual(self.c.post("/ambiente/cobertura", data={"workers": "2", "work_dir": "relativo"}).status_code,
+                         400)
+
+    def test_ambiente_botoes_legados(self):
+        html = self.c.get("/ambiente").text
+        self.assertIn("tipo=jdk&v=7", html)
+        self.assertIn("tipo=maven&v=3.0.5", html)
+        d = mock.Mock(name="x", url="https://x", size=None, algo="sha256", checksum="ab", dest=self.tmp)
+        d.name = "JDK 7 (Zulu)"
+        with mock.patch("sbfl.web.routes_env.plan_jdk", return_value=d):
+            self.assertIn("JDK 7 (Zulu)", self.c.get("/ambiente/plano?tipo=jdk&v=7").text)
+
+    def test_reenviar_tudo(self):
+        env = mock.Mock()
+        env.status.return_value = {"configurada": True, "ultimo_ok": None, "pendentes": 0, "erro": None,
+                                   "falhas_linha": 0, "erro_linha": None}
+        self.app.state.enviador = env
+        with mock.patch("sbfl.planilha.enfileirar_todos", return_value=7) as m:
+            r = self.c.post("/ambiente/planilha/reenviar")
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once_with(self.home)
+        env.acordar.assert_called_once_with(forcar=True)
+
+    def test_reenviar_tudo_sem_enviador(self):
+        with mock.patch("sbfl.planilha.enfileirar_todos", return_value=0) as m:
+            r = self.c.post("/ambiente/planilha/reenviar")
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

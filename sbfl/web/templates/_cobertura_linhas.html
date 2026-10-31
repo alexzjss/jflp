@@ -1,0 +1,76 @@
+{# Tabela dos bugs da cobertura: ações em lote (checkboxes) e refazer por linha #}
+{% macro filtros_ocultos() -%}
+  <input type="hidden" name="situacao" value="{{ situacao }}">
+  <input type="hidden" name="projeto" value="{{ projeto }}">
+  <input type="hidden" name="q" value="{{ q }}">
+  <input type="hidden" name="pagina" value="{{ pagina }}">
+{%- endmacro %}
+<form method="post" action="/cobertura/bugs/acao" id="acao-lote">
+  {{ filtros_ocultos() }}
+  <div class="botoes cb-acoes">
+    <button type="submit" name="acao" value="refazer">Refazer selecionados</button>
+    <button type="submit" name="acao" value="nao_executavel" class="cb-sec">Marcar não executáveis</button>
+    <button type="submit" name="acao" value="priorizar" class="cb-sec">Priorizar</button>
+    <span class="vazio">{{ total }} bug{{ '' if total == 1 else 's' }}</span>
+  </div>
+
+  <div class="cb-tabela-wrap">
+  <table class="cb-tabela">
+    <thead>
+      <tr>
+        <th><input type="checkbox" aria-label="Selecionar todos" onclick="cbMarcarTodos(this.checked)"></th>
+        <th>Bug</th><th>Situação</th><th>Maven</th><th>Jaguar 1</th><th>Jaguar 2</th><th>J1×J2</th>
+        <th>Motivo / perfil</th><th><span class="rd-oculto">Ações</span></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for l in linhas %}
+      <tr>
+        <td><input type="checkbox" name="keys" value="{{ l.key }}" aria-label="Selecionar {{ l.bug }}"></td>
+        <td>
+          <button type="button" class="link" hx-get="/cobertura/bug?key={{ l.key|q }}" hx-target="#detalhe" hx-swap="innerHTML">{{ l.bug }}</button>
+          <div class="vazio">{{ l.projeto }}</div>
+        </td>
+        <td><span class="cb-quad cb-{{ l.situacao }}"></span>{{ l.situacao_rotulo }}</td>
+        <td>{{ l.maven }}</td>
+        <td>{{ l.j1 }}</td>
+        <td>{{ l.j2 }}</td>
+        <td>{{ l.conc }}</td>
+        <td>
+          {{ l.motivo }}
+          {% if l.perfil %}<div class="vazio">{{ l.perfil }}</div>{% endif %}
+          {% if l.importado %}<span class="cb-chip">importado</span>{% endif %}
+        </td>
+        <td><button type="submit" form="rf-{{ loop.index }}" class="link">refazer</button></td>
+      </tr>
+    {% else %}
+      <tr><td colspan="9" class="vazio">Nenhum bug com esses filtros.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</form>
+
+{% for l in linhas %}
+<form id="rf-{{ loop.index }}" method="post" action="/cobertura/bugs/acao" hidden>
+  <input type="hidden" name="acao" value="refazer">
+  <input type="hidden" name="keys" value="{{ l.key }}">
+  {{ filtros_ocultos() }}
+</form>
+{% endfor %}
+
+{% if total_paginas > 1 %}
+<nav class="cb-pagina" aria-label="Páginas">
+  {% if anterior %}<a href="{{ anterior }}">← anterior</a>{% endif %}
+  <span>Página {{ pagina }} de {{ total_paginas }}</span>
+  {% if proxima %}<a href="{{ proxima }}">próxima →</a>{% endif %}
+</nav>
+{% endif %}
+
+<section id="detalhe" class="cb-detalhe" aria-live="polite"></section>
+
+<script>
+function cbMarcarTodos(on) {
+  document.querySelectorAll('#acao-lote input[name=keys]').forEach(function (c) { c.checked = on; });
+}
+</script>

@@ -4,13 +4,15 @@
     <form method="post" action="/cobertura/sincronizar"><button type="submit" class="cb-sec">Sincronizar pasta</button></form>
   </div>
   <div class="botoes">
-    {% if concluida %}
+    {% if concluida or cancelada %}
     {% elif pausado %}
     <form method="post" action="/cobertura/continuar"><button type="submit">Continuar</button></form>
     {% else %}
     <form method="post" action="/cobertura/pausar"><button type="submit">Pausar após o bug atual</button></form>
     {% endif %}
+    {% if not concluida %}
     <form method="post" action="/cobertura/parar"><button type="submit" class="cb-sec">Parar agora</button></form>
+    {% endif %}
     <form method="post" action="/cobertura/refazer-falhados"><button type="submit" class="cb-sec">Refazer falhados ({{ n_falhados }})</button></form>
   </div>
   {% if outra_instancia %}<p class="vazio">outra janela do JFLP Studio está rodando a fila</p>{% endif %}

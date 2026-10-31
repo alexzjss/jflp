@@ -35,6 +35,43 @@
 </div>
 <div id="dialogo"></div>
 
+<section id="planilha" class="cb-config">
+  <h2>Planilha do Google</h2>
+  <p class="vazio">Cada bug da cobertura vira uma linha. Publique o Apps Script como app da web (acesso "qualquer pessoa"),
+    cole o token no script antes de implantar e informe a URL do app da web.</p>
+  <form method="post" action="/ambiente/planilha" class="linha">
+    <input type="url" name="url" value="{{ planilha.url }}" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" aria-label="URL do app da web">
+    <button type="submit">Salvar URL</button>
+  </form>
+  <div class="linha">
+    <input type="text" id="planilha-token" value="{{ planilha.token }}" readonly aria-label="Token da planilha">
+    <button type="button" class="cb-sec" onclick="copiarToken()">copiar</button>
+  </div>
+  <p class="{{ planilha.classe }}">{{ planilha.estado }} · {{ planilha.linhas }} linhas na caixa de saída</p>
+  <form method="post" action="/ambiente/planilha/reenviar"><button type="submit" class="cb-sec">Reenviar tudo</button></form>
+  <script>
+  function copiarToken() {
+    var t = document.getElementById('planilha-token');
+    if (navigator.clipboard) { navigator.clipboard.writeText(t.value); } else { t.select(); document.execCommand('copy'); }
+  }
+  </script>
+</section>
+
+<section id="cobertura" class="cb-config">
+  <h2>Cobertura</h2>
+  {% if cobertura.aviso %}<p class="aviso erro" role="alert">{{ cobertura.aviso }}</p>{% endif %}
+  <form method="post" action="/ambiente/cobertura" class="cb-form">
+    <label>Workers em paralelo (1 a {{ workers_max }})
+      <input type="number" name="workers" min="1" max="{{ workers_max }}" value="{{ cobertura.workers }}"></label>
+    <label>Pasta de trabalho (vazio = padrão do JFLP Studio)
+      <input type="text" name="work_dir" value="{{ cobertura.work_dir }}" placeholder="E:\JFLP\cobertura" autocomplete="off"></label>
+    <label><input type="checkbox" name="legado" {{ 'checked' if cobertura.legado }}> Usar o perfil legado (JDK 7 + Maven 3.0.5) quando o bug pedir</label>
+    <label><input type="checkbox" name="legado_offline" {{ 'checked' if cobertura.legado_offline }}> Legado offline (dependências antes, num JDK 8)</label>
+    <button type="submit">Salvar</button>
+  </form>
+  <p class="vazio">Workers e pasta de trabalho valem depois de reiniciar o JFLP Studio.</p>
+</section>
+
 <details class="ambiente-detalhes">
   <summary>Detalhes</summary>
 
@@ -104,6 +141,15 @@
       <button hx-get="/ambiente/plano?tipo=maven&v={{ v }}" hx-target="#dialogo">Maven {{ v }}</button>
       {% endfor %}
       <button hx-get="/ambiente/plano?tipo=jaguar1" hx-target="#dialogo">Jaguar 1 (2 jars)</button>
+    </div>
+    <p class="vazio">Perfil legado da cobertura:</p>
+    <div class="botoes">
+      {% for v in jdk_legado %}
+      <button hx-get="/ambiente/plano?tipo=jdk&v={{ v }}" hx-target="#dialogo">JDK {{ v }} (legado, Zulu)</button>
+      {% endfor %}
+      {% for v in maven_legado %}
+      <button hx-get="/ambiente/plano?tipo=maven&v={{ v }}" hx-target="#dialogo">Maven {{ v }} (legado)</button>
+      {% endfor %}
     </div>
   </section>
 

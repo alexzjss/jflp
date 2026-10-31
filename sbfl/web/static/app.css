@@ -392,3 +392,24 @@ button.cb-sec { background: transparent; color: var(--text); border: 1px solid v
 .cb-chip-nao_executavel { color: var(--cb-nao_executavel); border-color: var(--cb-nao_executavel); }
 .cb-chip-rodando { color: var(--cb-rodando); border-color: var(--cb-rodando); }
 .cb-selo-concluida { color: var(--cb-ok); border-color: var(--cb-ok); }
+
+/* --- Tabela dos bugs da cobertura --- */
+.cb-filtros { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.cb-filtro { padding: 3px 10px; border-radius: 12px; border: 1px solid var(--line); color: var(--text); text-decoration: none; font-size: .92em; }
+.cb-filtro.ativo { background: var(--panel); border-color: var(--text); font-weight: 600; }
+.cb-filtro b { font-weight: 600; color: var(--muted); }
+.cb-busca { align-items: center; margin-bottom: 8px; }
+.cb-busca input[type=search] { flex: 1; min-width: 220px; }
+.cb-acoes { align-items: center; margin: 8px 0; }
+.cb-tabela-wrap { overflow-x: auto; }
+.cb-tabela { width: 100%; border-collapse: collapse; font-size: .92em; }
+.cb-tabela th, .cb-tabela td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.cb-tabela td input[type=checkbox] { margin: 0; }
+button.link { background: none; border: none; color: var(--text); padding: 0; font: inherit; text-decoration: underline; cursor: pointer; }
+.cb-pagina { display: flex; gap: 14px; align-items: center; margin: 12px 0; }
+.cb-detalhe:empty { display: none; }
+.cb-detalhe { margin-top: 16px; }
+.cb-config .linha input[type=text], .cb-config .linha input[type=url] { flex: 1; min-width: 260px; }
+.cb-config label { display: block; margin: 6px 0; }
+.cb-config .cb-form input[type=number] { width: 90px; }
+.cb-config .cb-form input[type=text] { min-width: 260px; }
