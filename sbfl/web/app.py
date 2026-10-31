@@ -16,7 +16,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .. import planilha
 from ..home import Home, Settings, apply_work_dir, load_settings
+from ..planilha import Enviador
 from ..queue import Worker, WorkerPool
 
 COOKIE = "jflp_token"
@@ -128,9 +130,11 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     port = port or _free_port()
     token = secrets.token_urlsafe(24)
     home, aviso_work_dir = apply_work_dir(home, settings)
-    worker = WorkerPool(home, settings)
+    enviador = Enviador(home, settings)
+    worker = WorkerPool(home, settings, on_bug_change=lambda k: (planilha.enfileirar(home, [k]), enviador.acordar()))
     app = create_app(home, settings, worker, token, port)
     app.state.aviso_work_dir = aviso_work_dir
+    app.state.enviador = enviador
     url = f"http://127.0.0.1:{port}/?t={token}"
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, name="jflp-uvicorn", daemon=True)
@@ -141,6 +145,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
         print(f"erro: não foi possível iniciar o servidor em 127.0.0.1:{port}; "
               "a porta pode estar em uso (tente --port 0).", file=sys.stderr)
         return 1
+    enviador.start()
     worker.start()
     desktop.write_ui_state(home, url)
     print(f"JFLP Studio em {url}")
@@ -172,6 +177,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     finally:
         desktop.remove_ui_state(home)
         server.should_exit = True
+        enviador.stop()
         worker.stop()                 # mata o Maven em andamento e devolve o job à fila
         if worker.is_alive():
             worker.join(10)

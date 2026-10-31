@@ -232,6 +232,7 @@ class Worker(threading.Thread):
         self._idle = 1.0 if owns_lock else 0.25    # pool: um job que acaba libera outro bug/Jaguar 1 logo
         self._gate = None                        # pool: devolve True quando a trava está com o pool
         self._on_exit = None                       # pool: chamado quando a thread termina
+        self.on_bug_change = None                  # pool: chamado com a chave do bug quando um job de cobertura muda
         self._wlock = (lock or WorkerLock(home)) if owns_lock else None   # entregue ao worker
         self._interrupt_req: set[int] = set()      # jobs com "parar agora" pedido (cobre o intervalo até o início)
         self._interrupt = threading.Event()      # "Parar agora": mata o job e o devolve à fila
@@ -549,6 +550,7 @@ class Worker(threading.Thread):
                 self._end_current()
                 self._cancel.clear()
                 self._cancel_req.discard(job["id"])
+        self._avisar_bug(job)
 
     def _discard_run(self, rel: str | None) -> None:
         """Apaga só a execução deste job (as cópias de trabalho são do `execute`, que as remove)."""
@@ -566,6 +568,7 @@ class Worker(threading.Thread):
             self._publish(None)
             with self._lock:
                 self._end_current()
+        self._avisar_bug(job)
 
     def _find_run(self, job: dict, since: str) -> str | None:
         """Pasta criada por um job que falhou (a mais recente do bug e tipo desde o início do job)."""
@@ -587,13 +590,29 @@ class Worker(threading.Thread):
             self._publish(None)
             with self._lock:
                 self._end_current()
+        self._avisar_bug(job)
+
+    def _avisar_bug(self, job: dict) -> None:
+        """Avisa (se houver quem ouça) que um bug do lote de cobertura mudou; um erro aqui nunca chega ao worker."""
+        hook = self.on_bug_change
+        if hook is None:
+            return
+        try:
+            with contextlib.closing(_connect(self.home)) as con:
+                r = con.execute("SELECT meta FROM batches WHERE id=?", (job["batch_id"],)).fetchone()
+            if r and (json.loads(r["meta"] or "{}")).get("cobertura"):
+                hook(job["bug_key"])
+        except Exception as e:      # noqa: BLE001
+            self._record_error(e)
 
 
 class WorkerPool:
     """Vários `Worker` em paralelo sobre a mesma fila. O pool segura a trava de instância e recupera a
     fila uma vez; a regra "nunca dois jobs do mesmo bug" mora na reivindicação SQL de cada worker."""
 
-    def __init__(self, home: Home, settings: Settings, n: int | None = None, lock: WorkerLock | None = None):
+    def __init__(self, home: Home, settings: Settings, n: int | None = None, lock: WorkerLock | None = None,
+                 on_bug_change=None):
+        """`on_bug_change(bug_key)`: chamado quando um job de cobertura termina, é descartado ou volta à fila."""
         if n is None:
             n = settings.get("cobertura", "workers", 4)
         try:
@@ -614,6 +633,7 @@ class WorkerPool:
         for w in self._workers:
             w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
             w._gate, w._on_exit = self._gate, self._worker_exited
+            w.on_bug_change = on_bug_change
 
     # -- vida --
     def _gate(self) -> bool:
