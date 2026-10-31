@@ -402,7 +402,7 @@ class ProjetoInvalidoTest(Base):
     def test_jaguar1_sem_pom_e_projeto_invalido(self):
         (self.prep.pristine / "pom.xml").unlink()
         log_text = ("[ERROR] The goal you specified requires a project to execute but there is no POM in "
-                    "this directory (C:\w). MissingProjectException\n")
+                    "this directory (C:\\w). MissingProjectException\n")
 
         def runner(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
             log.parent.mkdir(parents=True, exist_ok=True)
