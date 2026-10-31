@@ -13,8 +13,8 @@
   <nav class="lateral">
     <div class="marca">JFLP Studio</div>
     {# páginas internas que acendem um item principal #}
-    {% set destaque = {"bugs": "resultados", "lote": "resultados", "job": "rodar"}.get(page, page) %}
-    <a href="/rodar" class="{{ 'ativo' if destaque == 'rodar' else '' }}">Rodar</a>
+    {% set destaque = {"bugs": "resultados", "lote": "resultados", "job": "cobertura", "rodar": "cobertura"}.get(page, page) %}
+    <a href="/cobertura" class="{{ 'ativo' if destaque == 'cobertura' else '' }}">Cobertura</a>
     <a href="/resultados" class="{{ 'ativo' if destaque == 'resultados' else '' }}">Resultados
       <span class="selo-vaga" hx-get="/fila/contagem" hx-trigger="load, every 4s" hx-swap="innerHTML"></span></a>
     <a href="/ambiente" class="{{ 'ativo' if destaque == 'ambiente' else '' }}">Ambiente</a>

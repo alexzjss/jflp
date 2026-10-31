@@ -358,3 +358,34 @@ pre.diff .lv-arq { font-weight: 700; margin-top: 6px; }
 .ambiente-detalhes { margin-top: 0; }
 .ambiente-detalhes > summary { font-weight: 600; padding: 4px 0; }
 .ambiente-detalhes > summary + * { margin-top: 12px; }
+
+/* Cobertura (painel) */
+:root { --cb-ok: #1d7a46; --cb-parcial: #c77700; --cb-falhou: #b3261e; --cb-nao_executavel: #5b4e8c;
+  --cb-rodando: #2f5fd0; --cb-pendente: #e7eaf0; }
+@media (prefers-color-scheme: dark) {
+  :root { --cb-ok: #5fcf8a; --cb-parcial: #f2a93b; --cb-falhou: #ff8a80; --cb-nao_executavel: #a99bdc;
+    --cb-rodando: #7ea2ff; --cb-pendente: #2d3544; }
+}
+.cb-topo { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; }
+.cb-selo-linha { display: flex; align-items: center; gap: 10px; }
+.cb-topo form, .cb-selo-linha form { margin: 0; }
+.cb-selo { padding: 3px 12px; border-radius: 12px; font-weight: 600; border: 1px solid var(--line); }
+.cb-selo-rodando { color: var(--cb-rodando); border-color: var(--cb-rodando); }
+.cb-selo-pausando, .cb-selo-pausado { color: var(--cb-parcial); border-color: var(--cb-parcial); }
+.cb-selo-parado { color: var(--muted); }
+button.cb-sec { background: transparent; color: var(--text); border: 1px solid var(--line); }
+.cb-barra { display: flex; height: 16px; border-radius: 8px; overflow: hidden; background: var(--cb-pendente); }
+.cb-seg { min-width: 2px; }
+.cb-ok { background: var(--cb-ok); } .cb-parcial { background: var(--cb-parcial); }
+.cb-falhou { background: var(--cb-falhou); } .cb-nao_executavel { background: var(--cb-nao_executavel); }
+.cb-rodando { background: var(--cb-rodando); } .cb-pendente { background: var(--cb-pendente); }
+.cb-legenda { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0; margin: 10px 0; font-size: .92em; }
+.cb-quad { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.cb-colunas { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+@media (max-width: 900px) { .cb-colunas { grid-template-columns: 1fr; } }
+.cb-lista { list-style: none; padding: 0; margin: 0; }
+.cb-lista li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.cb-chips { display: flex; gap: 6px; margin-top: 3px; }
+.cb-chip { font-size: .8em; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+.cb-chip-feito { color: var(--cb-ok); border-color: var(--cb-ok); }
+.cb-chip-rodando { color: var(--cb-rodando); border-color: var(--cb-rodando); }

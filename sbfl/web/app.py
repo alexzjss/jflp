@@ -83,9 +83,14 @@ def create_app(home: Home, settings: Settings, worker: Worker, token: str,
         from .routes_assistente import deve_abrir_assistente
         if deve_abrir_assistente(home, app.state.settings):
             return RedirectResponse("/bem-vindo", status_code=303)
+        from .routes_cobertura import tem_cobertura
+        if tem_cobertura(request):
+            return RedirectResponse("/cobertura", status_code=303)
         from .routes_rodar import rodar_pagina
         return rodar_pagina(request)
 
+    from .routes_cobertura import router as cobertura_router
+    app.include_router(cobertura_router)
     from .routes_env import router as env_router
     app.include_router(env_router)
     from .routes_assistente import router as assistente_router
