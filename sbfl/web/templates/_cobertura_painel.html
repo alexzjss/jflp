@@ -4,7 +4,8 @@
     <form method="post" action="/cobertura/sincronizar"><button type="submit" class="cb-sec">Sincronizar pasta</button></form>
   </div>
   <div class="botoes">
-    {% if pausado %}
+    {% if concluida %}
+    {% elif pausado %}
     <form method="post" action="/cobertura/continuar"><button type="submit">Continuar</button></form>
     {% else %}
     <form method="post" action="/cobertura/pausar"><button type="submit">Pausar após o bug atual</button></form>
@@ -12,6 +13,7 @@
     <form method="post" action="/cobertura/parar"><button type="submit" class="cb-sec">Parar agora</button></form>
     <form method="post" action="/cobertura/refazer-falhados"><button type="submit" class="cb-sec">Refazer falhados ({{ n_falhados }})</button></form>
   </div>
+  {% if outra_instancia %}<p class="vazio">outra janela do JFLP Studio está rodando a fila</p>{% endif %}
 </section>
 
 <section>
@@ -62,7 +64,7 @@
       {% if ultimos %}
       <ul class="cb-lista">
         {% for u in ultimos %}
-        <li><span class="cb-quad cb-{{ u.situacao }}"></span>{{ u.projeto }} {{ u.bug }} <span class="vazio">há {{ u.quando }}</span></li>
+        <li><span class="cb-quad cb-{{ u.situacao }}"></span>{{ u.projeto }} {{ u.bug }} {% if u.quando %}<span class="vazio">há {{ u.quando }}</span>{% endif %}</li>
         {% endfor %}
       </ul>
       {% else %}<p class="vazio">Ainda nenhum.</p>{% endif %}

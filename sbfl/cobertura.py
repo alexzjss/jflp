@@ -232,6 +232,10 @@ def _fim(job: dict, rows: dict) -> datetime | None:
 
 def resumo(home: Home, bid: int) -> dict:
     lista, rows = _montar(home, bid, detalhe=True)
+    return _resumir(lista, rows)
+
+
+def _resumir(lista: list[dict], rows: dict[str, dict]) -> dict:
     por_sit = {s: 0 for s in (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC, SIT_RODANDO, SIT_PENDENTE)}
     projetos: dict[str, dict] = {}
     agora = datetime.now()
@@ -263,6 +267,28 @@ def resumo(home: Home, bid: int) -> dict:
     return {"total": len(lista), "concluidos": concluidos, "por_situacao": por_sit,
             "por_projeto": sorted(projetos.values(), key=lambda p: p["projeto"]),
             "ritmo_h": ritmo, "restante_s": restante}
+
+
+CONCLUIDAS = (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC)
+
+
+def painel(home: Home, bid: int, n_ultimos: int = 5) -> dict:
+    """Tudo que o painel precisa com uma única leitura: o resumo mais `rodando` (bugs com etapa em
+    andamento: key, projeto, bug, etapas) e `ultimos` (os N concluídos mais recentes, com `fim`)."""
+    lista, rows = _montar(home, bid, detalhe=True)
+    out = _resumir(lista, rows)
+    out["rodando"] = {b["key"]: {"key": b["key"], "projeto": b["projeto"], "bug": b["bug"],
+                                 "etapas": dict(b["etapas"])}
+                      for b in lista if SIT_RODANDO in b["etapas"].values()}
+    ult = []
+    for b in lista:
+        if b["situacao"] in CONCLUIDAS:
+            fins = [f for f in (_fim(j, rows) for j in b["jobs"].values()) if f]
+            ult.append({"key": b["key"], "projeto": b["projeto"], "bug": b["bug"], "situacao": b["situacao"],
+                        "fim": max(fins) if fins else None})
+    ult.sort(key=lambda u: u["fim"] or datetime.min, reverse=True)
+    out["ultimos"] = ult[:n_ultimos]
+    return out
 
 
 # ------------------------------------------------------------------ ações

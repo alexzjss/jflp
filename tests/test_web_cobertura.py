@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import re
 import shutil
 import tempfile
@@ -144,7 +145,10 @@ class TestCobertura(Base):
         self.assertIn('href="/ambiente#planilha"', html)
         env.status.return_value = {"configurada": True, "ultimo_ok": "2020-01-01T00:00:00", "pendentes": 0,
                                    "erro": None}
-        self.assertIn("Planilha Google sincronizada há", self.c.get("/cobertura/painel").text)
+        with mock.patch("sbfl.planilha.linhas_total", return_value=42):
+            html = self.c.get("/cobertura/painel").text
+        self.assertIn("Planilha Google sincronizada há", html)
+        self.assertIn("· 42 linhas", html)
 
     def test_painel_planilha_erro_em_vermelho(self):
         self.iniciar()
@@ -155,6 +159,64 @@ class TestCobertura(Base):
         self.assertRegex(html, r'class="cb-planilha erro"')
         self.assertIn("Planilha sem enviar há", html)
         self.assertIn("7 pendentes · HTTP 500", html)
+
+
+    def test_ritmo_e_faltam_com_virgula(self):
+        self.iniciar()
+        base = cb.painel(self.home, cb.batch_id(self.home))
+        for restante, texto in ((9000, "faltam ≈ 2,5 h"), (0, "faltam ≈ 0,0 h")):
+            with mock.patch("sbfl.cobertura.painel", return_value={**base, "ritmo_h": 4.0, "restante_s": restante}):
+                html = self.c.get("/cobertura/painel").text
+            self.assertIn("ritmo 4,0 bugs/h", html)
+            self.assertIn(texto, html)
+            self.assertIn("workers", html)
+
+    def test_raiz_redireciona_com_lote_e_sem_pasta(self):
+        self.iniciar()
+        self.assertEqual(self.settings.get("bugsjar", "root", ""), "")
+        r = self.c.get("/", follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/cobertura"))
+
+    def test_selo_concluida_sem_pausar(self):
+        self.iniciar()
+        with mock.patch("sbfl.queue.get_batch", return_value={"state": "done"}):
+            html = self.c.get("/cobertura/painel").text
+        self.assertIn(">Concluída<", html)
+        self.assertNotIn("Pausar após", html)
+        self.assertIn("Refazer falhados", html)
+
+    def test_selo_cancelado_e_outra_instancia(self):
+        self.iniciar()
+        with mock.patch("sbfl.queue.get_batch", return_value={"state": "cancelled"}):
+            self.assertIn(">Parado<", self.c.get("/cobertura/painel").text)
+        self.worker.status.return_value = {"alive": True, "other_instance": True}
+        html = self.c.get("/cobertura/painel").text
+        self.assertIn(">Parado<", html)
+        self.assertIn("outra janela do JFLP Studio está rodando a fila", html)
+
+    def test_chips_por_situacao(self):
+        bid = self.iniciar()
+        jobs = jq.batch_jobs(self.home, bid)
+        k0 = jobs[0]["bug_key"]
+        mine = {j["kind"]: j for j in jobs if j["bug_key"] == k0}
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='done' WHERE id=?", (mine["maven"]["id"],))   # sem run: falhou
+            con.execute("UPDATE jobs SET state='running' WHERE id=?", (mine["jaguar1"]["id"],))
+        self.worker.currents.return_value = [{"job_id": mine["jaguar1"]["id"], "bug": k0, "kind": "jaguar1",
+                                              "started": 0.0}]
+        html = self.c.get("/cobertura/painel").text
+        self.assertIn("cb-chip-falhou", html)
+        self.assertIn("cb-chip-rodando", html)
+        self.assertIn("cb-chip-pendente", html)
+
+    def test_ultimos_sem_hora_nao_mostra_traco(self):
+        bid = self.iniciar()
+        k0 = jq.batch_jobs(self.home, bid)[0]["bug_key"]
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='done' WHERE batch_id=? AND bug_key=?", (bid, k0))
+        html = self.c.get("/cobertura/painel").text
+        self.assertIn("Últimos concluídos", html)
+        self.assertNotIn("há —", html)
 
 
 if __name__ == "__main__":

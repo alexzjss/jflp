@@ -261,5 +261,21 @@ class TestAcoes(Base):
         self.assertIsNone(r["restante_s"])
 
 
+class TestPainel(Base):
+    def test_painel_uma_leitura_rodando_e_ultimos(self):
+        bid = self.sync()["batch_id"]
+        jobs = self.jobs(bid)
+        k0, k1 = jobs[0]["bug_key"], next(j["bug_key"] for j in jobs if j["bug_key"] != jobs[0]["bug_key"])
+        self.sql("UPDATE jobs SET state='done' WHERE batch_id=? AND bug_key=?", bid, k0)
+        self.sql("UPDATE jobs SET state='running' WHERE batch_id=? AND bug_key=? AND kind='maven'", bid, k1)
+        p = cb.painel(self.home, bid, n_ultimos=3)
+        self.assertEqual(p["total"], 4)
+        self.assertEqual(list(p["rodando"]), [k1])
+        self.assertEqual(p["rodando"][k1]["etapas"]["maven"], "rodando")
+        self.assertEqual([u["key"] for u in p["ultimos"]], [k0])
+        self.assertIsNone(p["ultimos"][0]["fim"])
+        self.assertEqual(p["concluidos"], cb.resumo(self.home, bid)["concluidos"])
+
+
 if __name__ == "__main__":
     unittest.main()

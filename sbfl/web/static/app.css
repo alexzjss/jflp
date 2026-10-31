@@ -387,5 +387,8 @@ button.cb-sec { background: transparent; color: var(--text); border: 1px solid v
 .cb-lista li { padding: 5px 0; border-bottom: 1px solid var(--line); }
 .cb-chips { display: flex; gap: 6px; margin-top: 3px; }
 .cb-chip { font-size: .8em; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
-.cb-chip-feito { color: var(--cb-ok); border-color: var(--cb-ok); }
+.cb-chip-ok { color: var(--cb-ok); border-color: var(--cb-ok); }
+.cb-chip-falhou { color: var(--cb-falhou); border-color: var(--cb-falhou); }
+.cb-chip-nao_executavel { color: var(--cb-nao_executavel); border-color: var(--cb-nao_executavel); }
 .cb-chip-rodando { color: var(--cb-rodando); border-color: var(--cb-rodando); }
+.cb-selo-concluida { color: var(--cb-ok); border-color: var(--cb-ok); }

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from .. import cobertura as cb
+from .. import planilha
 from .. import queue as jq
 from .comum import _render
 
@@ -41,14 +42,17 @@ def _ha(iso: str | None) -> str:
         return "—"
 
 
-def _selo(request: Request, bid: int, correntes: list[dict]) -> tuple[str, str]:
-    worker = request.app.state.worker
-    if not worker.status().get("alive"):
-        return "Parado", "parado"
-    lote = jq.get_batch(request.app.state.home, bid) or {}
-    if lote.get("state") == "paused":
-        return ("Pausando…", "pausando") if correntes else ("Pausado", "pausado")
-    return "Rodando", "rodando"
+def _selo(request: Request, bid: int, correntes: list[dict], outra: bool) -> tuple[str, str, str]:
+    """(texto, classe, estado do lote)."""
+    st = request.app.state.worker.status()
+    lote = (jq.get_batch(request.app.state.home, bid) or {}).get("state", "")
+    if outra or not st.get("alive") or lote == "cancelled":
+        return "Parado", "parado", lote
+    if lote == "done":
+        return "Concluída", "concluida", lote
+    if lote == "paused":
+        return ("Pausando…", "pausando", lote) if correntes else ("Pausado", "pausado", lote)
+    return "Rodando", "rodando", lote
 
 
 def _planilha(request: Request) -> dict | None:
@@ -60,45 +64,37 @@ def _planilha(request: Request) -> dict | None:
         return {"tipo": "nao_configurada"}
     if s.get("erro"):
         return {"tipo": "erro", "pendentes": s.get("pendentes", 0), "erro": s["erro"], "ha": _ha(s.get("ultimo_ok"))}
-    return {"tipo": "ok", "ha": _ha(s.get("ultimo_ok")), "linhas": s.get("pendentes", 0)}
+    return {"tipo": "ok", "ha": _ha(s.get("ultimo_ok")), "linhas": planilha.linhas_total(request.app.state.home)}
 
 
 def painel_ctx(request: Request, bid: int) -> dict:
     st = request.app.state
     home = st.home
-    r = cb.resumo(home, bid)
-    lista, rows = cb._montar(home, bid, detalhe=True)
-    por_chave = {b["key"]: b for b in lista}
+    r = cb.painel(home, bid)
+    wstatus = st.worker.status()
     correntes = st.worker.currents()
     agora = datetime.now().timestamp()
     rodando = []
     for c in correntes:
-        b = por_chave.get(c["bug"])
-        etapas = (b or {}).get("etapas", {})
-        chips = [{"nome": ROTULO_KIND[k], "estado": ("rodando" if k == c["kind"] else
-                  "feito" if etapas.get(k) in CONCLUIDAS else "espera")} for k in cb.KINDS]
-        rodando.append({"bug": c["bug"].split("/", 2)[-1], "projeto": (b or {}).get("projeto", ""),
+        b = r["rodando"].get(c["bug"], {})
+        etapas = b.get("etapas", {})
+        chips = [{"nome": ROTULO_KIND[k], "estado": "rodando" if k == c["kind"] else etapas.get(k, "pendente")} for k in cb.KINDS]
+        rodando.append({"bug": c["bug"].split("/", 2)[-1], "projeto": b.get("projeto") or (c["bug"].split("/")[1:2] or [""])[0],
                         "tempo": _duracao(agora - c.get("started", agora)), "chips": chips})
-    ultimos = []
-    for b in lista:
-        if b["situacao"] not in CONCLUIDAS:
-            continue
-        fins = [f for f in (cb._fim(j, rows) for j in b["jobs"].values()) if f]
-        ultimos.append((max(fins) if fins else datetime.min, b))
-    ultimos.sort(key=lambda x: x[0], reverse=True)
-    ultimos = [{"bug": b["bug"], "projeto": b["projeto"], "situacao": b["situacao"],
-                "quando": _ha(f.isoformat()) if f != datetime.min else "—"} for f, b in ultimos[:5]]
+    ultimos = [{"bug": u["bug"], "projeto": u["projeto"], "situacao": u["situacao"],
+                "quando": _ha(u["fim"].isoformat()) if u["fim"] else ""} for u in r["ultimos"]]
     total = r["total"]
     pct = int(r["concluidos"] * 100 / total) if total else 0
-    selo, selo_cls = _selo(request, bid, correntes)
-    lote = jq.get_batch(home, bid) or {}
+    outra = bool(wstatus.get("other_instance"))
+    selo, selo_cls, lote_estado = _selo(request, bid, correntes, outra)
     ritmo = restante = None
     if r["ritmo_h"]:
         ritmo = f"{r['ritmo_h']:.1f}".replace(".", ",")
         if r["restante_s"] is not None:
             restante = f"{r['restante_s'] / 3600:.1f}".replace(".", ",")
-    n_workers = st.worker.status().get("workers") or len(correntes) or 1
-    return {"r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote.get("state") == "paused",
+    n_workers = wstatus.get("workers") or len(correntes) or 1
+    return {"r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote_estado == "paused",
+            "concluida": lote_estado == "done", "outra_instancia": outra,
             "rodando": rodando, "ultimos": ultimos, "cores": CORES,
             "n_falhados": r["por_situacao"]["falhou"] + r["por_situacao"]["parcial"],
             "ritmo": ritmo, "restante": restante, "n_workers": n_workers, "planilha": _planilha(request)}
