@@ -140,7 +140,10 @@ def painel_ctx(request: Request, bid: int) -> dict:
             restante = f"{r['restante_s'] / 3600:.1f}".replace(".", ",")
     n_workers = wstatus.get("workers") or len(correntes) or 1
     ativos = wstatus.get("workers_ativos")
-    return {"workers_max": jq.WORKERS_MAX, "workers_ativos": ativos, "dica_maquina": dica_maquina(),
+    kinds = st.settings.get("cobertura", "kinds", None)
+    kinds = [k for k in cb.KINDS if k in kinds] if isinstance(kinds, list) else []
+    return {"etapas": [{"k": k, "nome": ROTULO_KIND[k], "on": k in (kinds or cb.KINDS)} for k in cb.KINDS],
+            "workers_max": jq.WORKERS_MAX, "workers_ativos": ativos, "dica_maquina": dica_maquina(),
             "diminuindo": isinstance(ativos, int) and ativos > n_workers,
             "r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote_estado == "paused",
             "concluida": lote_estado == "done", "cancelada": lote_estado == "cancelled", "outra_instancia": outra,
@@ -151,14 +154,15 @@ def painel_ctx(request: Request, bid: int) -> dict:
 
 
 @router.get("/cobertura", response_class=HTMLResponse)
-def cobertura_pagina(request: Request):
+def cobertura_pagina(request: Request, aviso: str = ""):
     st = request.app.state
     bid = cb.batch_id(st.home)
     if bid is None:
         return _render(request, "cobertura.html", {"page": "cobertura", "bid": None, "erro": "",
                        "pasta": st.settings.get("bugsjar", "root", "") or ""})
     return _render(request, "cobertura.html", {"page": "cobertura", "bid": bid, "erro": "",
-                   **painel_ctx(request, bid)})
+                   **painel_ctx(request, bid),
+                   "aviso_etapas": "Deixe ao menos uma etapa marcada." if aviso == "etapas" else ""})
 
 
 @router.get("/cobertura/painel", response_class=HTMLResponse)
@@ -201,6 +205,18 @@ def cobertura_workers(request: Request, workers: str = Form("")):
     n = max(1, min(jq.WORKERS_MAX, n))
     st.worker.set_workers(n)
     st.settings.set("cobertura", "workers", n)
+    st.settings.save()
+    return _voltar()
+
+
+@router.post("/cobertura/etapas")
+def cobertura_etapas(request: Request, etapas: list[str] = Form([])):
+    """Escolhe quais etapas a cobertura roda (vale na próxima reivindicação, sem reiniciar) e guarda."""
+    st = request.app.state
+    ligadas = [k for k in cb.KINDS if k in etapas]
+    if not ligadas:
+        return RedirectResponse("/cobertura?aviso=etapas", status_code=303)
+    st.settings.set("cobertura", "kinds", ligadas)
     st.settings.save()
     return _voltar()
 

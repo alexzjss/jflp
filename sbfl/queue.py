@@ -41,6 +41,9 @@ def _disk_usage(path):
     return shutil.disk_usage(str(path))
 
 
+COBERTURA_KINDS = ("maven", "jaguar1", "jaguar2")
+
+
 class DiskGuard:
     """Checa o espaço livre de `home.root` e `home.work` (no máximo a cada `ttl` s). Abaixo do mínimo
     (`cobertura.min_livre_gb`, 5 GB), os lotes de cobertura são pausados e `aviso` diz por quê."""
@@ -476,7 +479,21 @@ class Worker(threading.Thread):
         if not self.settings.get("jaguar1", "port_aware", False):
             rules += (f" AND ({alias}.kind <> 'jaguar1' OR NOT EXISTS "
                       "(SELECT 1 FROM jobs r2 WHERE r2.state='running' AND r2.kind='jaguar1'))")
+        # lote de cobertura: só as etapas ligadas no painel (lidas a cada reivindicação, valem na hora)
+        ligadas = self._cobertura_kinds()
+        if len(ligadas) < len(COBERTURA_KINDS):
+            lista = ",".join("'%s'" % k for k in ligadas) or "''"
+            rules += (f" AND ({alias}.kind IN ({lista}) OR NOT COALESCE((SELECT CASE WHEN json_valid(cb.meta) "
+                      f"THEN json_extract(cb.meta,'$.cobertura') END FROM batches cb WHERE cb.id={alias}.batch_id), 0))")
         return rules
+
+    def _cobertura_kinds(self) -> list[str]:
+        """Etapas habilitadas para o lote de cobertura (lista vazia ou inválida = todas)."""
+        v = self.settings.get("cobertura", "kinds", None)
+        if not isinstance(v, (list, tuple)):
+            return list(COBERTURA_KINDS)
+        ok = [k for k in COBERTURA_KINDS if k in v]
+        return ok or list(COBERTURA_KINDS)
 
     def _next_job(self):
         try:

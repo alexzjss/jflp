@@ -35,6 +35,13 @@
     {% if diminuindo %}<span class="vazio">diminuindo após os bugs atuais ({{ workers_ativos }} ativos, alvo {{ n_workers }})</span>{% endif %}
   </form>
   <p class="vazio cb-dica">{{ dica_maquina }}</p>
+  <form method="post" action="/cobertura/etapas" class="cb-workers cb-etapas">
+    <span>Etapas a rodar:</span>
+    {% for e in etapas %}<label><input type="checkbox" name="etapas" value="{{ e.k }}"{% if e.on %} checked{% endif %}> {{ e.nome }}</label> {% endfor %}
+    <button type="submit">Aplicar</button>
+  </form>
+  {% if aviso_etapas %}<p class="aviso erro">{{ aviso_etapas }}</p>{% endif %}
+  <p class="vazio cb-dica">Etapas desmarcadas ficam na fila (não são puladas): o bug só conta como concluído quando todas rodarem.</p>
   {% if planilha %}
   <p class="cb-planilha {{ 'erro' if planilha.tipo == 'erro' else 'vazio' }}">
     {% if planilha.tipo == 'ok' %}{% if planilha.ha %}Planilha Google sincronizada há {{ planilha.ha }}{% else %}Planilha Google ainda não enviada{% endif %} · {{ planilha.linhas }} linhas

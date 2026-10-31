@@ -914,3 +914,47 @@ class CoberturaDiscoTests(PoolBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EtapasCoberturaTests(Base):
+    """cobertura.kinds: o lote de cobertura só reivindica as etapas ligadas; os outros lotes ignoram."""
+
+    def marca_cobertura(self, bid):
+        self.settings.set("cobertura", "min_livre_gb", 0)     # a guarda de disco não pode pausar o lote do teste
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE batches SET meta=? WHERE id=?", ('{"cobertura": true}', bid))
+
+    def test_so_reivindica_etapas_ligadas(self):
+        bid = jq.create_batch(self.home, "c", self.bugs(2), ["maven", "jaguar1", "jaguar2"], {})
+        self.marca_cobertura(bid)
+        self.settings.set("cobertura", "kinds", ["maven", "jaguar2"])
+        w, vistos = self.worker(), []
+        while (r := w._next_job()) is not None:
+            vistos.append(r[0]["kind"])
+            with contextlib.closing(jq._connect(self.home)) as con, con:
+                con.execute("UPDATE jobs SET state='done' WHERE id=?", (r[0]["id"],))
+        self.assertEqual(sorted(vistos), ["jaguar2", "jaguar2", "maven", "maven"])
+        self.assertEqual(self.states(bid).count("pending"), 2)
+
+    def test_lote_comum_ignora_a_configuracao(self):
+        bid = jq.create_batch(self.home, "n", self.bugs(1), ["maven", "jaguar1"], {})
+        self.settings.set("cobertura", "kinds", ["jaguar2"])
+        w = self.worker()
+        self.assertEqual(w._next_job()[0]["kind"], "maven")
+
+    def test_mudanca_vale_na_proxima_reivindicacao(self):
+        bid = jq.create_batch(self.home, "c", self.bugs(2), ["jaguar1"], {})
+        self.marca_cobertura(bid)
+        self.settings.set("cobertura", "kinds", ["maven"])
+        w = self.worker()
+        self.assertIsNone(w._next_job())
+        self.settings.set("cobertura", "kinds", ["maven", "jaguar1"])
+        self.assertEqual(w._next_job()[0]["kind"], "jaguar1")
+
+    def test_lista_vazia_vale_como_todas_e_nunca_dois_do_mesmo_bug(self):
+        bid = jq.create_batch(self.home, "c", self.bugs(1), ["maven", "jaguar2"], {})
+        self.marca_cobertura(bid)
+        self.settings.set("cobertura", "kinds", [])
+        w = self.worker()
+        self.assertIsNotNone(w._next_job())
+        self.assertIsNone(w._next_job())     # o mesmo bug já tem um job rodando

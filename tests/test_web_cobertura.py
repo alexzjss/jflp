@@ -158,6 +158,21 @@ class TestCobertura(Base):
         self.c.post("/cobertura/workers", data={"workers": "abc"})
         self.worker.set_workers.assert_not_called()
 
+    def test_etapas_salva_ignora_lixo_e_rejeita_vazio(self):
+        self.iniciar()
+        r = self.c.post("/cobertura/etapas", data={"etapas": ["maven", "jaguar2", "xyz"]}, follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/cobertura"))
+        self.assertEqual(self.settings.get("cobertura", "kinds"), ["maven", "jaguar2"])
+        from sbfl.home import load_settings
+        self.assertEqual(load_settings(self.home).get("cobertura", "kinds"), ["maven", "jaguar2"])
+        html = self.c.get("/cobertura").text
+        self.assertRegex(html, r'value="maven" checked')
+        self.assertNotRegex(html, r'value="jaguar1" checked')
+        r = self.c.post("/cobertura/etapas", data={"etapas": ["xyz"]}, follow_redirects=False)
+        self.assertEqual(r.headers["location"], "/cobertura?aviso=etapas")
+        self.assertEqual(self.settings.get("cobertura", "kinds"), ["maven", "jaguar2"])
+        self.assertIn("ao menos uma etapa", self.c.get("/cobertura?aviso=etapas").text)
+
     def test_painel_mostra_controle_e_dica(self):
         self.iniciar()
         self.worker.status.return_value = {"alive": True, "last_error": None, "current": None,
