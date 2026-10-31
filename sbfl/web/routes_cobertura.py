@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import json
 import math
+import os
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,39 @@ CORES = (("ok", "Concluído"), ("parcial", "Parcial"), ("falhou", "Falhou"), ("n
          ("rodando", "Rodando"), ("pendente", "Pendente"))
 ROTULO_KIND = {"maven": "Maven", "jaguar1": "Jaguar 1", "jaguar2": "Jaguar 2"}
 CONCLUIDAS = ("ok", "parcial", "falhou", "nao_executavel")
+
+
+def _ram_gb() -> float | None:
+    """RAM física total em GB (Windows via GlobalMemoryStatusEx); None se não der para medir."""
+    try:
+        import ctypes
+
+        class _Mem(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        m = _Mem()
+        m.dwLength = ctypes.sizeof(_Mem)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):    # type: ignore[attr-defined]
+            return None
+        return m.ullTotalPhys / 1024 ** 3
+    except (AttributeError, OSError, ImportError):
+        return None
+
+
+def dica_maquina() -> str:
+    """Texto de orientação sobre quantos workers cabem nesta máquina."""
+    nucleos = os.cpu_count() or 2
+    ram = _ram_gb()
+    rec = max(1, nucleos // 2)
+    if ram is not None:
+        rec = max(1, min(rec, int(ram) // 3))
+    ate = min(rec + 2, nucleos)
+    maq = f"Esta máquina: {nucleos} núcleos" + (f", {round(ram)} GB de RAM" if ram is not None else "")
+    extra = f"; até {ate} se a RAM livre aguentar" if ate > rec else ""
+    return f"{maq}. Cada worker usa ~1–2 GB (Maven/JVM). Recomendado: {rec}{extra}."
 
 
 def tem_cobertura(request: Request) -> bool:
@@ -105,7 +139,10 @@ def painel_ctx(request: Request, bid: int) -> dict:
         if r["restante_s"] is not None:
             restante = f"{r['restante_s'] / 3600:.1f}".replace(".", ",")
     n_workers = wstatus.get("workers") or len(correntes) or 1
-    return {"r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote_estado == "paused",
+    ativos = wstatus.get("workers_ativos")
+    return {"workers_max": jq.WORKERS_MAX, "workers_ativos": ativos, "dica_maquina": dica_maquina(),
+            "diminuindo": isinstance(ativos, int) and ativos > n_workers,
+            "r": r, "pct": pct, "selo": selo, "selo_cls": selo_cls, "pausado": lote_estado == "paused",
             "concluida": lote_estado == "done", "cancelada": lote_estado == "cancelled", "outra_instancia": outra,
             "rodando": rodando, "ultimos": ultimos, "cores": CORES,
             "n_falhados": r["por_situacao"]["falhou"] + r["por_situacao"]["parcial"],
@@ -151,6 +188,21 @@ def cobertura_iniciar(request: Request, pasta: str = Form("")):
 
 def _voltar() -> RedirectResponse:
     return RedirectResponse("/cobertura", status_code=303)
+
+
+@router.post("/cobertura/workers")
+def cobertura_workers(request: Request, workers: str = Form("")):
+    """Muda o número de workers na hora (sem reiniciar) e guarda a escolha."""
+    st = request.app.state
+    try:
+        n = int(workers.strip())
+    except ValueError:
+        return _voltar()
+    n = max(1, min(jq.WORKERS_MAX, n))
+    st.worker.set_workers(n)
+    st.settings.set("cobertura", "workers", n)
+    st.settings.save()
+    return _voltar()
 
 
 @router.post("/cobertura/pausar")

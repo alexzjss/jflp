@@ -30,6 +30,7 @@ _SCHEMA = (
         kind TEXT, state TEXT, run_rel TEXT, error TEXT, seconds REAL)""",
 )
 LOG_LINES = 500
+WORKERS_MAX = 12      # teto de workers em paralelo
 SUB_MAX = 10000
 DISK_TTL = 60.0         # segundos entre checagens de espaço livre
 FINISH_TRIES = 5        # tentativas do UPDATE que conclui um job
@@ -733,12 +734,49 @@ class WorkerPool:
         self._cancel_req: set[int] = set()       # pedidos compartilhados por todos os workers
         self._interrupt_req: set[int] = set()
         self._disk = DiskGuard(home, settings)
-        self._workers = [Worker(home, settings, index=i, owns_lock=False) for i in range(self.n)]
-        for w in self._workers:
-            w._disk = self._disk
-            w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
-            w._gate, w._on_exit = self._gate, self._worker_exited
-            w.on_bug_change = on_bug_change
+        self._on_bug_change = on_bug_change
+        self._started = False
+        self._stopping = False
+        self._workers = [self._novo_worker(i) for i in range(self.n)]
+
+    def _novo_worker(self, i: int) -> Worker:
+        w = Worker(self.home, self.settings, index=i, owns_lock=False)
+        w._disk = self._disk
+        w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
+        w._gate, w._on_exit = self._gate, self._worker_exited
+        w.on_bug_change = self._on_bug_change
+        return w
+
+    def set_workers(self, n) -> int:
+        """Muda o número de workers com o app rodando (limitado a 1-12) e devolve o alvo. Aumentar inicia
+        workers novos (índices livres, portas próprias). Diminuir aposenta os de maior índice: eles só
+        param de reivindicar e saem DEPOIS do job atual (nunca o matam); o worker 0 nunca sai."""
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = self.n
+        n = max(1, min(WORKERS_MAX, n))
+        with self._plock:
+            if self._stopping:
+                return self.n
+            self._workers = [w for w in self._workers if w.ident is None or w.is_alive()]
+            ativos = sorted((w for w in self._workers if not w._stop_ev.is_set()), key=lambda w: w.index)
+            for w in ativos[n:]:                    # do topo: o 0 (primeiro) fica sempre
+                w._stop_ev.set()                    # sem _abort: o job em andamento termina normalmente
+            usados = {w.index for w in self._workers}
+            novos = []
+            for _ in range(n - len(ativos)):
+                i = next(k for k in range(WORKERS_MAX + len(self._workers) + 1) if k not in usados)
+                usados.add(i)
+                novos.append(self._novo_worker(i))
+            self._workers.extend(novos)
+            self.n = n
+            if self._started:
+                self._live += len(novos)
+        for w in novos:
+            if self._started:
+                w.start()
+        return n
 
     # -- vida --
     def _gate(self) -> bool:
@@ -768,12 +806,17 @@ class WorkerPool:
         except OSError as e:
             self._last_error = repr(e)[-500:]
         with self._plock:
+            self._started = True
             self._live = len(self._workers)
-        for w in self._workers:
+            todos = list(self._workers)
+        for w in todos:
             w.start()
 
     def stop(self, kill: bool = True) -> None:
-        for w in self._workers:
+        with self._plock:
+            self._stopping = True
+            todos = list(self._workers)
+        for w in todos:
             w._stop_ev.set()
             if kill:
                 w._abort.set()
@@ -794,6 +837,7 @@ class WorkerPool:
         errs = [w._last_error for w in self._workers if w._last_error]
         return {"alive": self.is_alive(), "last_error": self._last_error or (errs[-1] if errs else None),
                 "current": self.current(), "other_instance": self._other, "workers": self.n,
+                "workers_ativos": sum(1 for w in list(self._workers) if w.is_alive()),
                 "aviso_disco": self._disk.aviso}
 
     def currents(self) -> list[dict]:

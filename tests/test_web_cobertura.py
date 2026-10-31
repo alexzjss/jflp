@@ -141,6 +141,43 @@ class TestCobertura(Base):
         self.worker.status.return_value = {"alive": False, "last_error": None, "current": None}
         self.assertIn(">Parado<", self.c.get("/cobertura/painel").text)
 
+    def test_workers_ao_vivo_aplica_e_salva(self):
+        self.iniciar()
+        r = self.c.post("/cobertura/workers", data={"workers": "6"}, follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/cobertura"))
+        self.worker.set_workers.assert_called_once_with(6)
+        self.assertEqual(self.settings.get("cobertura", "workers"), 6)
+        from sbfl.home import load_settings
+        self.assertEqual(load_settings(self.home).get("cobertura", "workers"), 6)
+
+    def test_workers_ao_vivo_limita_e_ignora_lixo(self):
+        self.iniciar()
+        self.c.post("/cobertura/workers", data={"workers": "40"})
+        self.worker.set_workers.assert_called_once_with(12)
+        self.worker.set_workers.reset_mock()
+        self.c.post("/cobertura/workers", data={"workers": "abc"})
+        self.worker.set_workers.assert_not_called()
+
+    def test_painel_mostra_controle_e_dica(self):
+        self.iniciar()
+        self.worker.status.return_value = {"alive": True, "last_error": None, "current": None,
+                                           "workers": 2, "workers_ativos": 4}
+        with mock.patch("sbfl.web.routes_cobertura.os.cpu_count", return_value=12), \
+                mock.patch("sbfl.web.routes_cobertura._ram_gb", return_value=16.0):
+            html = self.c.get("/cobertura/painel").text
+        self.assertIn('action="/cobertura/workers"', html)
+        self.assertIn('<option value="2" selected>', html)
+        self.assertIn("Esta máquina: 12 núcleos, 16 GB de RAM.", html)
+        self.assertIn("Recomendado: 5; até 7 se a RAM livre aguentar.", html)
+        self.assertIn("diminuindo após os bugs atuais", html)
+
+    def test_dica_sem_ram(self):
+        from sbfl.web import routes_cobertura as rc
+        with mock.patch.object(rc.os, "cpu_count", return_value=6), mock.patch.object(rc, "_ram_gb", return_value=None):
+            t = rc.dica_maquina()
+        self.assertIn("Esta máquina: 6 núcleos.", t)
+        self.assertIn("Recomendado: 3", t)
+
     def test_pausar_continuar_parar_chamam_pool(self):
         bid = self.iniciar()
         for rota in ("pausar", "continuar", "parar"):

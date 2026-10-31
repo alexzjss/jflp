@@ -28,6 +28,13 @@
     {% for chave, rotulo in cores %}<li><span class="cb-quad cb-{{ chave }}"></span>{{ rotulo }} <b>{{ r.por_situacao[chave] }}</b></li>{% endfor %}
   </ul>
   <p class="vazio">{% if ritmo %}ritmo {{ ritmo }} bugs/h{% if restante %} · faltam ≈ {{ restante }} h{% endif %} · {{ n_workers }} workers{% else %}{{ n_workers }} workers{% endif %}</p>
+  <form method="post" action="/cobertura/workers" class="cb-workers">
+    <label>Workers em paralelo
+      <select name="workers">{% for k in range(1, workers_max + 1) %}<option value="{{ k }}"{% if k == n_workers %} selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+    <button type="submit">Aplicar</button>
+    {% if diminuindo %}<span class="vazio">diminuindo após os bugs atuais ({{ workers_ativos }} ativos, alvo {{ n_workers }})</span>{% endif %}
+  </form>
+  <p class="vazio cb-dica">{{ dica_maquina }}</p>
   {% if planilha %}
   <p class="cb-planilha {{ 'erro' if planilha.tipo == 'erro' else 'vazio' }}">
     {% if planilha.tipo == 'ok' %}{% if planilha.ha %}Planilha Google sincronizada há {{ planilha.ha }}{% else %}Planilha Google ainda não enviada{% endif %} · {{ planilha.linhas }} linhas

@@ -605,6 +605,97 @@ class PoolTests(PoolBase):
         self.assertEqual(state["max"], 1)
 
 
+class PoolResizeTests(PoolBase):
+    def test_aumentar_inicia_workers_novos_que_pegam_jobs(self):
+        started = {str(i): threading.Event() for i in range(3)}
+        release = threading.Event()
+
+        def fake(home, settings, bug, kind, opts):
+            started[bug.bug_id].set()
+            release.wait(15)
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(3), ["maven"], {})
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(1)
+            pool.start()
+            try:
+                self.assertTrue(started["0"].wait(10))
+                time.sleep(0.4)
+                self.assertFalse(started["1"].is_set())       # um worker: os outros esperam
+                self.assertEqual(pool.set_workers(3), 3)
+                self.assertTrue(started["1"].wait(10) and started["2"].wait(10))
+                st = pool.status()
+                self.assertEqual((st["workers"], st["workers_ativos"]), (3, 3))
+                self.assertEqual(sorted(c["index"] for c in pool.currents()), [0, 1, 2])
+            finally:
+                release.set()
+            self.assertTrue(self.batch_done(bid))
+
+    def test_limites_1_a_12(self):
+        pool = self.pool(2)
+        self.assertEqual(pool.set_workers(99), 12)
+        self.assertEqual(pool.set_workers(0), 1)
+        self.assertEqual(pool.set_workers("x"), 1)
+
+    def test_diminuir_deixa_job_em_andamento_terminar_e_o_worker_sai(self):
+        started = {str(i): threading.Event() for i in range(3)}
+        release = {str(i): threading.Event() for i in range(3)}
+
+        def fake(home, settings, bug, kind, opts):
+            started[bug.bug_id].set()
+            release[bug.bug_id].wait(15)
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(3), ["maven"], {})
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(3)
+            pool.start()
+            try:
+                self.assertTrue(all(e.wait(10) for e in started.values()))
+                self.assertEqual(pool.set_workers(1), 1)
+                time.sleep(0.5)
+                st = pool.status()
+                self.assertEqual((st["workers"], st["workers_ativos"]), (1, 3))   # nada foi morto
+                self.assertEqual(len(pool.currents()), 3)
+                self.assertEqual(self.states(bid), ["running"] * 3)
+                for e in release.values():
+                    e.set()
+                self.assertTrue(self.batch_done(bid))
+                self.assertTrue(wait_for(lambda: pool.status()["workers_ativos"] == 1))
+            finally:
+                for e in release.values():
+                    e.set()
+        self.assertEqual(self.states(bid), ["done"] * 3)
+
+    def test_redimensionar_nunca_roda_dois_jobs_do_mesmo_bug(self):
+        fake, state = self.gauge(0.05)
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["maven", "jaguar2", "jaguar1"], {})
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(4)
+            pool.set_workers(2)             # antes de iniciar
+            pool.start()
+            pool.set_workers(3)
+            pool.set_workers(1)
+            self.assertTrue(self.batch_done(bid))
+            self.assertTrue(wait_for(lambda: pool.status()["workers_ativos"] == 1))
+        self.assertEqual(state["max"], 1)
+        self.assertEqual(self.states(bid), ["done"] * 3)
+
+    def test_voltar_a_aumentar_depois_de_diminuir(self):
+        fake, _ = self.gauge(0.01)
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(3)
+            pool.start()
+            pool.set_workers(1)
+            self.assertTrue(wait_for(lambda: pool.status()["workers_ativos"] == 1))
+            pool.set_workers(3)
+            self.assertTrue(wait_for(lambda: pool.status()["workers_ativos"] == 3))
+            bid = jq.create_batch(self.home, "t", self.bugs(4), ["maven"], {})
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(sorted(w.index for w in pool._workers), [0, 1, 2])
+
+
 class PoolCancelTests(PoolBase):
     def test_cancelar_vai_ao_worker_dono_do_job(self):
         started = threading.Event()
