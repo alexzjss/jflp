@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,6 +22,7 @@ NOME_LOTE = "Cobertura bugs-dot-jar"
 JANELA_RITMO_H = 6
 _CHUNK = 500
 _run_cache: dict[tuple[str, str], dict] = {}
+_SYNC = threading.Lock()     # dois cliques em "Começar cobertura" não criam dois lotes
 
 
 def _con(home: Home) -> sqlite3.Connection:
@@ -64,7 +66,8 @@ def sincronizar(home: Home, settings: Settings, root: Path) -> dict:
     total_bugs = sum(len(r) for r in repos)
     n = len(repos)
     novos = 0
-    with contextlib.closing(_con(home)) as con, con:
+    with _SYNC, contextlib.closing(_con(home)) as con, con:
+        con.execute("BEGIN IMMEDIATE")      # trava de escrita antes de procurar o lote (vale entre processos)
         bid = batch_id(home)
         if bid is None:
             opts = {"test_scope": "all", "auto_search": True, "archive_checkout": False,

@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -114,6 +115,40 @@ class TestLoteReativado(Base):
         self.sql("UPDATE batches SET state='done' WHERE id=?", bid)
         self.assertEqual(self.sync()["adicionados"], 0)
         self.assertEqual(jq.get_batch(self.home, bid)["state"], "done")
+
+    def test_sincronizar_simultaneo_cria_um_lote_so(self):
+        # dois cliques em "Começar cobertura": os dois viam "sem lote" e cada um criava o seu
+        import threading
+        barreira = threading.Barrier(2)
+        original = cb.batch_id
+
+        def junto(home):
+            bid = original(home)
+            try:
+                barreira.wait(timeout=2)    # sem a trava, os dois chegam aqui antes de qualquer INSERT
+            except threading.BrokenBarrierError:
+                pass
+            return bid
+
+        erros = []
+
+        def sync():
+            try:
+                self.sync()
+            except Exception as e:      # noqa: BLE001
+                erros.append(e)
+
+        with mock.patch.object(cb, "batch_id", side_effect=junto):
+            ts = [threading.Thread(target=sync) for _ in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(30)
+        self.assertEqual(erros, [])
+        lotes = [b for b in jq.list_batches(self.home) if b["name"] == cb.NOME_LOTE]
+        self.assertEqual(len(lotes), 1)
+        jobs = self.jobs(lotes[0]["id"])
+        self.assertEqual(len(jobs), len({(j["bug_key"], j["kind"]) for j in jobs}))
 
     def test_marcar_nao_executavel_fecha_o_lote(self):
         bid = self.sync()["batch_id"]
