@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from sbfl import cobertura as cb
 from sbfl import compare, importar, store
@@ -145,6 +146,26 @@ class TestImportar(Base):
         for campos, esperado in casos:
             with self.subTest(esperado):
                 self.assertEqual(importar.status_maven(campos, ""), esperado)
+
+    def test_job_que_vira_running_nao_e_sobrescrito(self):
+        # o worker pega o job entre o instantâneo e a marcação: a importação não pode atropelá-lo
+        job = self.job(NOVO, "maven")
+        original = importar._gravar
+
+        def gravar_e_worker_pega(*args, **kwargs):
+            rel = original(*args, **kwargs)
+            with contextlib.closing(jq._connect(self.home)) as con, con:
+                con.execute("UPDATE jobs SET state='running' WHERE id=?", (job["id"],))
+            return rel
+
+        with mock.patch.object(importar, "_gravar", side_effect=gravar_e_worker_pega):
+            r = self.importar()
+        self.assertEqual((r["maven"], r["jaguar1"], r["ignorados"], r["erros"]), (1, 2, 1, []))
+        j = self.job(NOVO, "maven")
+        self.assertEqual((j["state"], j["origem"], j["run_rel"]), ("running", None, None))
+        # a execução órfã foi descartada: só sobram as de ANTIGO (maven + jaguar1) e a de NOVO jaguar1
+        self.assertEqual(len(store.list_runs(self.home, kind="maven")), 1)
+        self.assertEqual(len(list(self.home.runs.rglob("run.json"))), 3)
 
     def test_lote_inexistente(self):
         with contextlib.closing(jq._connect(self.home)) as con, con:

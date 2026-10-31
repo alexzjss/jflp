@@ -124,11 +124,24 @@ def _gravar(home: Home, bug: Bug, kind: str, run: dict, anexos, textos=()) -> st
     return w.rel
 
 
-def _marcar(home: Home, job: dict, rel: str, segundos: float | None) -> None:
+def _marcar(home: Home, job: dict, rel: str, segundos: float | None) -> bool:
+    """Marca o job como feito; False se ele deixou de estar pendente/cancelado (um worker o pegou)."""
     with contextlib.closing(jq._connect(home)) as con, con:
-        con.execute("UPDATE jobs SET state='done', run_rel=?, error=NULL, seconds=?, origem=? WHERE id=?",
-                    (rel, segundos, ORIGEM, job["id"]))
+        cur = con.execute("UPDATE jobs SET state='done', run_rel=?, error=NULL, seconds=?, origem=? "
+                          "WHERE id=? AND state IN ('pending','cancelled')",
+                          (rel, segundos, ORIGEM, job["id"]))
+        if cur.rowcount == 0:
+            return False
         jq._close_if_finished(con, job["batch_id"])
+    return True
+
+
+def _publicar(home: Home, job: dict, rel: str, segundos: float | None) -> bool:
+    """Marca o job; se não pôde (estado mudou depois do instantâneo), descarta a execução recém-gravada."""
+    if _marcar(home, job, rel, segundos):
+        return True
+    store.delete_run(home, rel)
+    return False
 
 
 def _segundos(resumo: dict) -> float | None:
@@ -198,8 +211,10 @@ def _importar_bug(home: Home, chave: str, proj: str, pasta: Path, jobs: dict, re
                    **_base(resumo)}
             rel = _gravar(home, _bug(proj, pasta.name, jm), "maven", run, [],
                           [("outputs/maven-cauda.log", cauda)] if cauda else [])
-            _marcar(home, jm, rel, seg)
-            res["maven"] += 1
+            if _publicar(home, jm, rel, seg):
+                res["maven"] += 1
+            else:
+                res["ignorados"] += 1
     if j1 is not None:
         if not _livre(j1):
             res["ignorados"] += 1
@@ -213,6 +228,8 @@ def _importar_bug(home: Home, chave: str, proj: str, pasta: Path, jobs: dict, re
                "diagnosis": {"status": status, "cause": "", "evidence": [], "suggestions": [], "warnings": avisos},
                **_base(resumo)}
         rel = _gravar(home, _bug(proj, pasta.name, j1), "jaguar1", run, [(xml, "outputs/jaguar1.xml")])
-        _marcar(home, j1, rel, seg)
-        res["jaguar1"] += 1
+        if _publicar(home, j1, rel, seg):
+            res["jaguar1"] += 1
+        else:
+            res["ignorados"] += 1
 
