@@ -1,4 +1,5 @@
 <section class="cb-topo">
+  {% if aviso_disco %}<p class="aviso erro" role="alert">{{ aviso_disco }}</p>{% endif %}
   <div class="cb-selo-linha">
     <span class="cb-selo cb-selo-{{ selo_cls }}">{{ selo }}</span>
     <form method="post" action="/cobertura/sincronizar"><button type="submit" class="cb-sec">Sincronizar pasta</button></form>
@@ -29,9 +30,10 @@
   <p class="vazio">{% if ritmo %}ritmo {{ ritmo }} bugs/h{% if restante %} · faltam ≈ {{ restante }} h{% endif %} · {{ n_workers }} workers{% else %}{{ n_workers }} workers{% endif %}</p>
   {% if planilha %}
   <p class="cb-planilha {{ 'erro' if planilha.tipo == 'erro' else 'vazio' }}">
-    {% if planilha.tipo == 'ok' %}Planilha Google sincronizada há {{ planilha.ha }} · {{ planilha.linhas }} linhas
-    {% elif planilha.tipo == 'erro' %}Planilha sem enviar há {{ planilha.ha }} · {{ planilha.pendentes }} pendentes · {{ planilha.erro }}
+    {% if planilha.tipo == 'ok' %}{% if planilha.ha %}Planilha Google sincronizada há {{ planilha.ha }}{% else %}Planilha Google ainda não enviada{% endif %} · {{ planilha.linhas }} linhas
+    {% elif planilha.tipo == 'erro' %}{% if planilha.ha %}Planilha sem enviar há {{ planilha.ha }}{% else %}Planilha ainda não enviada{% endif %} · {{ planilha.pendentes }} pendentes · {{ planilha.erro }}
     {% else %}Planilha não configurada · <a href="/ambiente#planilha">configurar</a>{% endif %}
+    {% if planilha.tipo != 'nao_configurada' and planilha.falhas %} · <span class="erro">{{ planilha.falhas }} linhas com erro</span>{% endif %}
   </p>
   {% endif %}
 </section>

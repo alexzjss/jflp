@@ -1,6 +1,7 @@
 """Tela Cobertura (painel): o lote único Maven + Jaguar 1 + Jaguar 2 sobre todos os bugs do Bugs.jar."""
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 from collections import Counter
@@ -69,9 +70,13 @@ def _planilha(request: Request) -> dict | None:
     s = env.status()
     if not s.get("configurada"):
         return {"tipo": "nao_configurada"}
+    falhas = int(s.get("falhas_linha") or 0)
+    ultimo = s.get("ultimo_ok")
     if s.get("erro"):
-        return {"tipo": "erro", "pendentes": s.get("pendentes", 0), "erro": s["erro"], "ha": _ha(s.get("ultimo_ok"))}
-    return {"tipo": "ok", "ha": _ha(s.get("ultimo_ok")), "linhas": planilha.linhas_total(request.app.state.home)}
+        return {"tipo": "erro", "pendentes": s.get("pendentes", 0), "erro": s["erro"], "ha": _ha(ultimo), "falhas": falhas}
+    # ha None: nenhuma linha foi enviada ainda (o painel diz "ainda não enviada", sem "há —")
+    return {"tipo": "ok", "ha": _ha(ultimo) if ultimo else None,
+            "linhas": planilha.linhas_total(request.app.state.home), "falhas": falhas}
 
 
 def painel_ctx(request: Request, bid: int) -> dict:
@@ -104,7 +109,8 @@ def painel_ctx(request: Request, bid: int) -> dict:
             "concluida": lote_estado == "done", "cancelada": lote_estado == "cancelled", "outra_instancia": outra,
             "rodando": rodando, "ultimos": ultimos, "cores": CORES,
             "n_falhados": r["por_situacao"]["falhou"] + r["por_situacao"]["parcial"],
-            "ritmo": ritmo, "restante": restante, "n_workers": n_workers, "planilha": _planilha(request)}
+            "ritmo": ritmo, "restante": restante, "n_workers": n_workers, "planilha": _planilha(request),
+            "aviso_disco": wstatus.get("aviso_disco")}
 
 
 @router.get("/cobertura", response_class=HTMLResponse)
@@ -137,6 +143,9 @@ def cobertura_iniciar(request: Request, pasta: str = Form("")):
     if not r["total_bugs"]:
         return _render(request, "cobertura.html", {"page": "cobertura", "bid": None, "pasta": pasta,
                        "erro": "Nenhum bug do Bugs.jar encontrado nessa pasta. " + " ".join(r["avisos"])}, 400)
+    if not st.settings.get("bugsjar", "root", ""):
+        st.settings.set("bugsjar", "root", pasta)
+        st.settings.save()
     return RedirectResponse("/cobertura", status_code=303)
 
 
@@ -171,15 +180,33 @@ def cobertura_refazer(request: Request):
     st = request.app.state
     bid = cb.batch_id(st.home)
     if bid is not None:
-        cb.refazer(st.home, bid)
+        falhados = [b["key"] for b in cb.tabela(st.home, bid) if b["situacao"] in (cb.SIT_FALHOU, cb.SIT_PARCIAL)]
+        if cb.refazer(st.home, bid) and falhados:
+            planilha.enfileirar(st.home, falhados)
+            env = getattr(st, "enviador", None)
+            if env is not None:
+                env.acordar()
     return _voltar()
+
+
+def _pasta_do_lote(home, bid: int | None) -> str:
+    """Pasta do Bugs.jar gravada no lote de cobertura (meta.root); "" se não houver."""
+    if bid is None:
+        return ""
+    with contextlib.closing(cb._con(home)) as con:
+        row = con.execute("SELECT meta FROM batches WHERE id=?", (bid,)).fetchone()
+    try:
+        return str((json.loads(row["meta"] or "{}") if row else {}).get("root") or "")
+    except ValueError:
+        return ""
 
 
 @router.post("/cobertura/sincronizar")
 def cobertura_sincronizar(request: Request):
     st = request.app.state
-    pasta = st.settings.get("bugsjar", "root", "")
-    if pasta and Path(pasta).is_dir():
+    candidatas = (_pasta_do_lote(st.home, cb.batch_id(st.home)), st.settings.get("bugsjar", "root", "") or "")
+    pasta = next((p for p in candidatas if p and Path(p).is_dir()), "")
+    if pasta:
         cb.sincronizar(st.home, st.settings, Path(pasta))
     return _voltar()
 

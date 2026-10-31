@@ -277,6 +277,81 @@ class TestCobertura(Base):
         self.assertEqual(r.status_code, 200)
 
 
+class TestPainelAjustes(Base):
+    def setUp(self):
+        super().setUp()
+        self.env = mock.Mock()
+        self.env.status.return_value = {"configurada": True, "ultimo_ok": None, "pendentes": 0, "erro": None,
+                                        "falhas_linha": 0, "erro_linha": None}
+        self.app.state.enviador = self.env
+
+    def test_iniciar_grava_pasta_no_bugsjar_quando_vazia(self):
+        self.assertFalse(self.settings.get("bugsjar", "root", ""))
+        self.c.post("/cobertura/iniciar", data={"pasta": str(self.root)}, follow_redirects=False)
+        self.assertEqual(self.settings.get("bugsjar", "root"), str(self.root))
+
+    def test_iniciar_nao_troca_pasta_ja_configurada(self):
+        outra = self.tmp / "outra"
+        outra.mkdir()
+        self.settings.set("bugsjar", "root", str(outra))
+        self.c.post("/cobertura/iniciar", data={"pasta": str(self.root)}, follow_redirects=False)
+        self.assertEqual(self.settings.get("bugsjar", "root"), str(outra))
+
+    def test_sincronizar_usa_pasta_do_lote(self):
+        self.iniciar()                                  # meta.root do lote = self.root
+        outra = self.tmp / "outra"
+        outra.mkdir()
+        self.settings.set("bugsjar", "root", str(outra))
+        with mock.patch("sbfl.cobertura.sincronizar", wraps=cb.sincronizar) as m:
+            self.c.post("/cobertura/sincronizar", follow_redirects=False)
+        self.assertEqual(Path(m.call_args.args[2]), self.root)
+
+    def test_sincronizar_sem_lote_usa_pasta_configurada(self):
+        self.settings.set("bugsjar", "root", str(self.root))
+        with mock.patch("sbfl.cobertura.sincronizar", wraps=cb.sincronizar) as m:
+            self.c.post("/cobertura/sincronizar", follow_redirects=False)
+        self.assertEqual(Path(m.call_args.args[2]), self.root)
+
+    def test_refazer_enfileira_linhas_da_planilha_e_acorda_enviador(self):
+        self.iniciar()
+        tabela = [{"key": "k1", "situacao": cb.SIT_FALHOU}, {"key": "k2", "situacao": cb.SIT_OK}]
+        with mock.patch("sbfl.cobertura.tabela", return_value=tabela), \
+                mock.patch("sbfl.cobertura.refazer", return_value=1), \
+                mock.patch("sbfl.planilha.enfileirar") as enf:
+            self.c.post("/cobertura/refazer-falhados", follow_redirects=False)
+        enf.assert_called_once_with(self.home, ["k1"])
+        self.env.acordar.assert_called_once_with()
+
+    def test_painel_linha_da_planilha_sem_envio_e_com_erros(self):
+        self.iniciar()
+        self.env.status.return_value = {"configurada": True, "ultimo_ok": None, "pendentes": 0, "erro": None,
+                                        "falhas_linha": 2, "erro_linha": "x"}
+        html = self.c.get("/cobertura/painel").text
+        self.assertIn("ainda não enviada", html)
+        self.assertNotIn("há —", html)
+        self.assertIn("2 linhas com erro", html)
+
+    def test_painel_sem_falhas_de_linha_nao_mostra_aviso(self):
+        self.iniciar()
+        html = self.c.get("/cobertura/painel").text
+        self.assertNotIn("linhas com erro", html)
+
+    def test_painel_mostra_aviso_de_disco(self):
+        self.iniciar()
+        self.worker.status.return_value = {"alive": True, "last_error": None, "current": None, "workers": 1,
+                                           "aviso_disco": "Pouco espaço em disco: a cobertura foi pausada."}
+        html = self.c.get("/cobertura/painel").text
+        self.assertIn('class="aviso erro"', html)
+        self.assertIn("Pouco espaço em disco: a cobertura foi pausada.", html)
+
+    def test_painel_sem_aviso_de_disco(self):
+        self.iniciar()
+        self.worker.status.return_value = {"alive": True, "last_error": None, "current": None, "workers": 1}
+        html = self.c.get("/cobertura/painel").text
+        self.assertNotIn("Pouco espaço", html)
+        self.assertNotIn('class="aviso erro"', html)
+
+
 class TestTabela(Base):
     def chaves(self, html: str) -> list[str]:
         return re.findall(r'<input type="checkbox" name="keys" value="([^"]+)"', html)
