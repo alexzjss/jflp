@@ -131,19 +131,19 @@ def etapa(job: dict, run: dict | None) -> str:
 
 
 def situacao(etapas: dict) -> str:
+    """Situação do bug a partir das etapas. Só é `parcial` (concluído) quando nenhuma etapa está
+    pendente ou rodando: algumas ok e outras falhadas/não executáveis."""
     v = list(etapas.values())
     if any(e == SIT_RODANDO for e in v):
         return SIT_RODANDO
     if v and all(e == SIT_OK for e in v):
         return SIT_OK
-    if all(e == SIT_PENDENTE for e in v):
+    if any(e == SIT_PENDENTE for e in v):
         return SIT_PENDENTE
     if any(e == SIT_OK for e in v):
         return SIT_PARCIAL
     if all(e == SIT_NAO_EXEC for e in v):
         return SIT_NAO_EXEC
-    if any(e == SIT_PENDENTE for e in v):
-        return SIT_PENDENTE
     return SIT_FALHOU
 
 

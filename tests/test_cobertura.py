@@ -187,7 +187,12 @@ class TestRegras(unittest.TestCase):
         self.assertEqual(s({"a": "ok", "b": "ok"}), "ok")
         self.assertEqual(s({"a": "pendente", "b": "pendente"}), "pendente")
         self.assertEqual(s({"a": "ok", "b": "falhou"}), "parcial")
-        self.assertEqual(s({"a": "ok", "b": "pendente"}), "parcial")
+        self.assertEqual(s({"a": "ok", "b": "pendente"}), "pendente")
+        self.assertEqual(s({"a": "ok", "b": "pendente", "c": "pendente"}), "pendente")
+        self.assertEqual(s({"a": "ok", "b": "falhou", "c": "ok"}), "parcial")
+        self.assertEqual(s({"a": "ok", "b": "nao_executavel"}), "parcial")
+        self.assertEqual(s({"a": "ok", "b": "nao_executavel", "c": "pendente"}), "pendente")
+        self.assertEqual(s({"a": "ok", "b": "rodando", "c": "pendente"}), "rodando")
         self.assertEqual(s({"a": "nao_executavel", "b": "nao_executavel"}), "nao_executavel")
         self.assertEqual(s({"a": "pendente", "b": "falhou"}), "pendente")
         self.assertEqual(s({"a": "falhou", "b": "nao_executavel"}), "falhou")
@@ -250,13 +255,13 @@ class TestAcoes(Base):
 
     def test_bugs_e_filtros(self):
         self.finish(self.k0, {"maven": "ok", "jaguar1": "ok", "jaguar2": "ok"})
-        self.finish(self.k1, {"maven": "ok", "jaguar1": "compilacao_falhou"})
+        self.finish(self.k1, {"maven": "ok", "jaguar1": "compilacao_falhou", "jaguar2": "ok"})
         todos = cb.bugs(self.home, self.bid)
         self.assertEqual(len(todos), 4)
         por = {b["key"]: b for b in todos}
         self.assertEqual(por[self.k0]["situacao"], "ok")
         self.assertEqual(por[self.k1]["situacao"], "parcial")
-        self.assertEqual(por[self.k1]["etapas"]["jaguar2"], "pendente")
+        self.assertEqual(por[self.k1]["etapas"]["jaguar2"], "ok")
         self.assertEqual(por[self.k0]["projeto"], self.k0.split("/")[1])
         self.assertEqual([b["key"] for b in cb.bugs(self.home, self.bid, situacoes=["parcial"])], [self.k1])
         self.assertEqual(len(cb.bugs(self.home, self.bid, projeto="maven")), 2)
@@ -277,6 +282,17 @@ class TestAcoes(Base):
         self.assertEqual(sum(p["ok"] for p in proj.values()), 1)
         self.assertIsNotNone(r["ritmo_h"])
         self.assertGreater(r["restante_s"], 0)
+
+    def test_etapa_pendente_nao_conta_como_concluida_nem_refazer(self):
+        # Maven e Jaguar 1 importados (uma falha), Jaguar 2 ainda na fila: bug pendente, não parcial
+        self.finish(self.k1, {"maven": "ok", "jaguar1": "compilacao_falhou"}, ago_h=1)
+        b = {x["key"]: x for x in cb.bugs(self.home, self.bid)}[self.k1]
+        self.assertEqual(b["situacao"], "pendente")
+        r = cb.resumo(self.home, self.bid)
+        self.assertEqual(r["concluidos"], 0)
+        self.assertEqual(r["por_situacao"]["parcial"], 0)
+        self.assertEqual(cb._chaves_alvo(self.home, self.bid, None), [])
+        self.assertEqual(cb.refazer(self.home, self.bid), 0)
 
     def test_resumo_conta_legado_jdk7_como_nao_executavel(self):
         from sbfl.store import run_dir
