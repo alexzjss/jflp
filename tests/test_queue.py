@@ -574,6 +574,93 @@ class PoolTests(PoolBase):
                 t.join(15)
         self.assertEqual(state["max"], 1)
 
+    def test_remove_pristine_usa_a_trava_do_repo(self):
+        from sbfl import prepare
+        lock, state = threading.Lock(), {"now": 0, "max": 0}
+        barrier = threading.Barrier(2, timeout=10)
+        repo = self.tmp / "repo"
+        repo.mkdir()
+
+        def fake_git(r, *args, check=True):
+            with lock:
+                state["now"] += 1
+                state["max"] = max(state["max"], state["now"])
+            time.sleep(0.1)
+            with lock:
+                state["now"] -= 1
+            return ""
+
+        def work(i):
+            dest = self.tmp / f"p{i}"
+            dest.mkdir()
+            barrier.wait()
+            prepare._remove_pristine(dest, str(repo))
+
+        with mock.patch.object(prepare, "git", fake_git):
+            ts = [threading.Thread(target=work, args=(i,)) for i in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(15)
+        self.assertEqual(state["max"], 1)
+
+
+class PoolCancelTests(PoolBase):
+    def test_cancelar_vai_ao_worker_dono_do_job(self):
+        started = threading.Event()
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", blocking_execute(started)):
+            pool = self.pool(2)
+            pool._workers[0]._next_job = lambda: None     # worker 0 vivo e ocioso: o dono é o 1
+            pool.start()
+            self.assertTrue(started.wait(10))
+            jid = pool.current()["job_id"]
+            self.assertEqual(pool.currents()[0]["index"], 1)
+            t0 = time.monotonic()
+            self.assertEqual(pool.cancel_job(jid), "andamento")
+            self.assertTrue(self.batch_done(bid))
+            self.assertLess(time.monotonic() - t0, 10)     # o processo foi morto, não esperou 60 s
+        self.assertEqual(self.states(bid), ["cancelled"])
+        self.assertEqual(list_runs(self.home), [])
+
+    def test_cancelar_job_reivindicado_antes_de_comecar(self):
+        calls = []
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", lambda *a, **k: calls.append(1) or "rel/x"):
+            pool = self.pool(2)
+            picked = pool._workers[1]._next_job()          # reivindicado, ainda sem `_current`
+            self.assertEqual(pool.cancel_job(picked[0]["id"]), "andamento")
+            pool._workers[1]._run_job(*picked)
+        self.assertEqual(calls, [])
+        self.assertEqual(self.states(bid), ["cancelled"])
+
+    def test_interromper_pausa_e_devolve_tambem_o_reivindicado(self):
+        started, calls = threading.Event(), []
+        slow = blocking_execute(started)
+
+        def fake(home, settings, bug, kind, opts):
+            calls.append(bug.bug_id)
+            return slow(home, settings, bug, kind, opts)
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(1)
+            pool.start()
+            self.assertTrue(started.wait(10))              # job 0 rodando
+            extra = pool._workers[0].__class__(self.home, self.settings, index=9, owns_lock=False)
+            extra._cancel_req, extra._interrupt_req = pool._cancel_req, pool._interrupt_req
+            picked = extra._next_job()                     # job 1 reivindicado, ainda sem `_current`
+            self.assertIsNotNone(picked)
+            self.assertEqual(pool.interromper(), 2)
+            extra._run_job(*picked)
+            self.assertTrue(wait_for(lambda: self.states(bid) == ["pending", "pending"]))
+            time.sleep(0.6)                                # nada é reivindicado de novo
+            self.assertEqual(self.states(bid), ["pending", "pending"])
+            self.assertEqual(jq.get_batch(self.home, bid)["state"], "paused")
+            self.assertEqual(calls, ["0"])
+            pool.resume(bid)
+        self.assertEqual(list_runs(self.home), [])
+
 
 if __name__ == "__main__":
     unittest.main()

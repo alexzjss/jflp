@@ -233,7 +233,8 @@ class Worker(threading.Thread):
         self._gate = None                        # pool: devolve True quando a trava está com o pool
         self._on_exit = None                       # pool: chamado quando a thread termina
         self._wlock = (lock or WorkerLock(home)) if owns_lock else None   # entregue ao worker
-        self._interrupt = threading.Event()        # "Parar agora": mata o job e o devolve à fila
+        self._interrupt_req: set[int] = set()      # jobs com "parar agora" pedido (cobre o intervalo até o início)
+        self._interrupt = threading.Event()      # "Parar agora": mata o job e o devolve à fila
         self._other = False                        # outra instância segura a trava
         self._stop_ev = threading.Event()
         self._abort = threading.Event()            # fechamento do app: mata o Maven e devolve o job à fila
@@ -361,6 +362,9 @@ class Worker(threading.Thread):
         if self._progress is not None and self._current is not None:
             self._progress.finish()
             self._last_progress = (self._current["job_id"], self._progress.to_dict())
+        if self._current is not None:
+            self._cancel_req.discard(self._current["job_id"])
+            self._interrupt_req.discard(self._current["job_id"])
         self._progress = None
         self._current = None
 
@@ -498,6 +502,9 @@ class Worker(threading.Thread):
             self._progress = Progress(job["kind"])
             if job["id"] in self._cancel_req:     # cancelado entre a reivindicação e o início
                 self._cancel.set()
+            if job["id"] in self._interrupt_req:  # "parar agora" entre a reivindicação e o início
+                self._interrupt.set()
+                self._cancel.set()
         t0 = time.monotonic()
         since = datetime.now().isoformat(timespec="seconds")
         rel, error = None, None
@@ -601,8 +608,11 @@ class WorkerPool:
         self._other = False
         self._live = 0
         self._last_error: str | None = None
+        self._cancel_req: set[int] = set()       # pedidos compartilhados por todos os workers
+        self._interrupt_req: set[int] = set()
         self._workers = [Worker(home, settings, index=i, owns_lock=False) for i in range(self.n)]
         for w in self._workers:
+            w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
             w._gate, w._on_exit = self._gate, self._worker_exited
 
     # -- vida --
@@ -710,11 +720,21 @@ class WorkerPool:
 
     # -- controle (as operações são todas SQL: qualquer worker serve) --
     def cancel_job(self, job_id: int) -> str:
-        for w in self._workers:
-            r = w.cancel_job(job_id)
-            if r:
-                return r
-        return ""
+        """Cancela um job: pendente sai da fila; em andamento, só o worker dono o mata. Um job já
+        reivindicado mas ainda sem dono vale pelo pedido compartilhado, que o `_run_job` confere."""
+        if self.remove_pending(job_id):
+            return "pendente"
+        job = get_job(self.home, job_id)
+        if job is None or job["state"] != "running":
+            return ""
+        self._cancel_req.add(job_id)           # antes de procurar o dono: não há janela sem cobertura
+        owner = self._owner(job_id)
+        if owner is not None:
+            r = owner.cancel_job(job_id)
+            if not r:
+                self._cancel_req.discard(job_id)
+            return r
+        return "andamento"                     # reivindicado, ainda sem dono: o `_run_job` vê o pedido
 
     def remove_pending(self, job_id: int) -> bool:
         return self._workers[0].remove_pending(job_id)
@@ -739,5 +759,14 @@ class WorkerPool:
         return n
 
     def interromper(self) -> int:
-        """"Parar agora": mata os jobs em andamento de todos os workers e os devolve à fila."""
-        return sum(1 for w in self._workers if w.interromper_job() is not None)
+        """"Parar agora": pausa os lotes ativos (nada é reivindicado de novo), mata os jobs em andamento,
+        inclusive os reivindicados que ainda não começaram, e os devolve à fila. `resume` recomeça."""
+        with contextlib.closing(_connect(self.home)) as con, con:
+            con.execute("UPDATE batches SET state='paused' WHERE state='active'")
+            ids = [r[0] for r in con.execute("SELECT id FROM jobs WHERE state='running'")]
+        for jid in ids:
+            self._interrupt_req.add(jid)       # antes de procurar o dono: cobre o job sem `_current`
+            owner = self._owner(jid)
+            if owner is not None:
+                owner.interromper_job()
+        return len(ids)

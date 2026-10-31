@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
-import os
 import subprocess
 import threading
 from pathlib import Path
@@ -41,7 +41,7 @@ _REPO_LOCKS: dict[str, threading.Lock] = {}
 _REPO_LOCKS_GUARD = threading.Lock()
 
 
-def _repo_lock(repo) -> threading.Lock:
+def repo_lock(repo) -> threading.Lock:
     """Uma trava por repositório: o git não aceita `worktree add/remove` concorrentes no mesmo repo."""
     key = os.path.normcase(str(repo))
     with _REPO_LOCKS_GUARD:
@@ -49,7 +49,7 @@ def _repo_lock(repo) -> threading.Lock:
 
 
 def add_worktree(repo: Path, wt: Path, ref: str):
-    with _repo_lock(repo):
+    with repo_lock(repo):
         return _add_worktree(repo, wt, ref)
 
 
@@ -64,7 +64,7 @@ def _add_worktree(repo: Path, wt: Path, ref: str):
     git(repo, "worktree", "add", "--detach", "-f", str(wt), ref)
 
     def cleanup():
-        with _repo_lock(repo):
+        with repo_lock(repo):
             git(repo, "worktree", "remove", "--force", str(wt), check=False)
         shutil.rmtree(wt, ignore_errors=True)
 

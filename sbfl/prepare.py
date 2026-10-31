@@ -19,7 +19,7 @@ from pathlib import Path
 from .adapters.base import Bug
 from .diffgt import FaultLine, TEST_PATH_RE, faults_from_hunks, fqcn_from_path, parse_left_hunks
 from .errors import StageError
-from .gitutil import add_worktree, git
+from .gitutil import add_worktree, git, repo_lock
 from .home import Home, Settings
 from .pomgen.pom import chain as pom_chain
 from .proc import NO_WINDOW
@@ -651,10 +651,12 @@ def _remove_pristine(dest: Path, repo: str | None = None) -> None:
         except (OSError, ValueError):
             pass
     if repo and Path(repo).exists() and dest.exists():
-        git(repo, "worktree", "remove", "--force", str(dest), check=False)
+        with repo_lock(repo):
+            git(repo, "worktree", "remove", "--force", str(dest), check=False)
     _rmtree(dest)
     if repo and Path(repo).exists():
-        git(repo, "worktree", "prune", check=False)
+        with repo_lock(repo):
+            git(repo, "worktree", "prune", check=False)
 
 
 def prepare(home: Home, settings: Settings, bug: Bug, log: Path, refresh: bool = False) -> Prepared:
