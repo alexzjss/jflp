@@ -105,17 +105,16 @@ async def stream(request: Request, job_id: int):
                     yield _sse("espera", "na fila")
                     delay = PENDING_POLL
                 else:
-                    cur = worker.current()
-                    if cur and cur.get("job_id") == job_id:
+                    if worker.current_of(job_id):
                         break
                     delay = START_POLL     # running no banco, worker ainda não o reivindicou
                 await asyncio.sleep(delay)
                 if await request.is_disconnected():
                     return
-            sub = worker.subscribe()       # assina antes de ler o buffer: nenhuma linha se perde
+            sub = worker.subscribe(job_id)       # assina antes de ler o buffer: nenhuma linha se perde
             est = await asyncio.to_thread(_estimativa, home, job)
-            cur = worker.current()
-            if cur and cur.get("job_id") == job_id:
+            cur = worker.current_of(job_id)
+            if cur:
                 for line in cur.get("log", []):
                     yield _sse(None, line)
             last = time.monotonic()

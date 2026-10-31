@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from ..home import Home, Settings, apply_work_dir, load_settings
-from ..queue import Worker
+from ..queue import Worker, WorkerPool
 
 COOKIE = "jflp_token"
 _HERE = Path(__file__).parent
@@ -128,7 +128,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     port = port or _free_port()
     token = secrets.token_urlsafe(24)
     home, aviso_work_dir = apply_work_dir(home, settings)
-    worker = Worker(home, settings)
+    worker = WorkerPool(home, settings)
     app = create_app(home, settings, worker, token, port)
     app.state.aviso_work_dir = aviso_work_dir
     url = f"http://127.0.0.1:{port}/?t={token}"

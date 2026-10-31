@@ -10,7 +10,7 @@ import time
 from collections import deque
 from datetime import datetime
 
-from . import compare, proc, store
+from . import compare, jaguar, proc, store
 from .adapters.base import Bug
 from .execute import RunOptions, execute
 from .home import Home, Settings
@@ -61,6 +61,30 @@ def create_batch(home: Home, name: str, bugs: list[Bug], kinds: list[str], opts:
                             (bid, idx, bug.key, json.dumps(bug.extra or {}), kind))
                 idx += 1
     return bid
+
+
+def recover(home: Home) -> list[Exception]:
+    """Recuperação ao abrir (só com a trava): .partial órfãs viram `interrompido`, jobs `running` voltam
+    à fila (ou ficam `cancelled` se o lote foi cancelado) e as cópias de trabalho sobrando são apagadas."""
+    errors: list[Exception] = []
+    try:
+        store.recover_partials(home)
+    except Exception as e:   # a recuperação parcial não pode travar o worker num laço
+        errors.append(e)
+    try:
+        work = home.work / "w"
+        if work.is_dir():
+            for d in work.iterdir():
+                _rmtree(d, strict=False)
+    except Exception as e:
+        errors.append(e)
+    with contextlib.closing(_connect(home)) as con, con:
+        con.execute("UPDATE jobs SET state = CASE WHEN batch_id IN "
+                    "(SELECT id FROM batches WHERE state='cancelled') THEN 'cancelled' ELSE 'pending' END "
+                    "WHERE state='running'")
+        for (bid,) in con.execute("SELECT id FROM batches WHERE state IN ('active','paused')").fetchall():
+            _close_if_finished(con, bid)
+    return errors
 
 
 def _bug_of(settings: Settings, job: dict) -> Bug:
@@ -199,10 +223,17 @@ def batch_status(home: Home, batch_id: int) -> dict:
 class Worker(threading.Thread):
     """Executa os jobs pendentes, um por vez, na ordem de criação."""
 
-    def __init__(self, home: Home, settings: Settings, lock: WorkerLock | None = None):
-        super().__init__(name="jflp-worker", daemon=True)
+    def __init__(self, home: Home, settings: Settings, lock: WorkerLock | None = None, *,
+                 index: int = 0, owns_lock: bool = True):
+        """`owns_lock=False`: worker de um `WorkerPool`; o pool segura a trava e recupera a fila uma vez."""
+        super().__init__(name="jflp-worker" if owns_lock else f"jflp-worker-{index}", daemon=True)
         self.home, self.settings = home, settings
-        self._wlock = lock or WorkerLock(home)     # entregue ao worker: ele a libera ao terminar
+        self.index, self._owns_lock = index, owns_lock
+        self._idle = 1.0 if owns_lock else 0.25    # pool: um job que acaba libera outro bug/Jaguar 1 logo
+        self._gate = None                        # pool: devolve True quando a trava está com o pool
+        self._on_exit = None                       # pool: chamado quando a thread termina
+        self._wlock = (lock or WorkerLock(home)) if owns_lock else None   # entregue ao worker
+        self._interrupt = threading.Event()        # "Parar agora": mata o job e o devolve à fila
         self._other = False                        # outra instância segura a trava
         self._stop_ev = threading.Event()
         self._abort = threading.Event()            # fechamento do app: mata o Maven e devolve o job à fila
@@ -269,6 +300,18 @@ class Worker(threading.Thread):
             proc.kill_thread(self.ident)      # só os processos do worker, a árvore inteira
         return "andamento"
 
+    def interromper_job(self) -> int | None:
+        """"Parar agora": mata o job corrente e o devolve à fila. Devolve o id do job, ou None."""
+        with self._lock:
+            cur = self._current
+            if cur is None or self._settled:
+                return None
+            self._interrupt.set()
+            self._cancel.set()            # nenhum processo novo começa
+        if self.ident is not None:
+            proc.kill_thread(self.ident)
+        return cur["job_id"]
+
     def cancel_pending(self) -> int:
         """Cancela todos os jobs pendentes de todos os lotes; o job em andamento segue."""
         with contextlib.closing(_connect(self.home)) as con, con:
@@ -299,6 +342,11 @@ class Worker(threading.Thread):
             prog = self._progress.to_dict() if self._progress is not None else None
             return {**self._current, "log": list(self._log), "progress": prog}
 
+    def current_of(self, job_id: int) -> dict | None:
+        """O job corrente, se for `job_id`."""
+        cur = self.current()
+        return cur if cur is not None and cur.get("job_id") == job_id else None
+
     def progress_of(self, job_id: int) -> dict | None:
         """Progresso do job corrente ou, logo depois de terminar, o estado final dele."""
         with self._lock:
@@ -316,7 +364,7 @@ class Worker(threading.Thread):
         self._progress = None
         self._current = None
 
-    def subscribe(self) -> _q.Queue:
+    def subscribe(self, job_id: int | None = None) -> _q.Queue:
         q: _q.Queue = _q.Queue(maxsize=SUB_MAX)
         with self._lock:
             self._subs.add(q)
@@ -350,17 +398,29 @@ class Worker(threading.Thread):
     def _after_select(self) -> None:
         """Gancho (só para testes): roda entre o SELECT e a reivindicação do job."""
 
+    def _claim_rules(self, alias: str) -> str:
+        """Condições extras de reivindicação (SQL), escritas para o SELECT e repetidas no UPDATE atômico:
+        nunca dois jobs `running` do mesmo bug e, sem `port_aware`, nunca dois do Jaguar 1."""
+        rules = f" AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.state='running' AND r.bug_key={alias}.bug_key)"
+        if not self.settings.get("jaguar1", "port_aware", False):
+            rules += (f" AND ({alias}.kind <> 'jaguar1' OR NOT EXISTS "
+                      "(SELECT 1 FROM jobs r2 WHERE r2.state='running' AND r2.kind='jaguar1'))")
+        return rules
+
     def _next_job(self):
         with contextlib.closing(_connect(self.home)) as con, con:
             row = con.execute(
                 "SELECT j.* FROM jobs j JOIN batches b ON b.id = j.batch_id "
-                "WHERE j.state='pending' AND b.state='active' ORDER BY j.batch_id, j.idx LIMIT 1").fetchone()
+                "WHERE j.state='pending' AND b.state='active'" + self._claim_rules("j") +
+                " ORDER BY j.batch_id, j.idx LIMIT 1").fetchone()
             if row is None:
                 return None
             self._after_select()
-            # reivindicação atômica: só vale se o job ainda está pendente e o lote ativo
+            # reivindicação atômica: só vale se o job ainda está pendente, o lote ativo e as regras seguem
+            # valendo (o UPDATE roda sob a trava de escrita do SQLite: dois workers nunca passam juntos)
             cur = con.execute("UPDATE jobs SET state='running' WHERE id=? AND state='pending' "
-                              "AND batch_id IN (SELECT id FROM batches WHERE state='active')", (row["id"],))
+                              "AND batch_id IN (SELECT id FROM batches WHERE state='active')"
+                              + self._claim_rules("jobs"), (row["id"],))
             if cur.rowcount == 0:
                 return None
             opts = json.loads(con.execute("SELECT options FROM batches WHERE id=?",
@@ -376,46 +436,41 @@ class Worker(threading.Thread):
 
     def _recover(self) -> None:
         """Só roda com a trava: recupera .partial órfãs, devolve jobs `running` e apaga cópias de trabalho."""
-        try:
-            store.recover_partials(self.home)
-        except Exception as e:   # a recuperação parcial não pode travar o worker num laço
+        for e in recover(self.home):
             self._record_error(e)
-        try:
-            work = self.home.work / "w"
-            if work.is_dir():
-                for d in work.iterdir():
-                    _rmtree(d, strict=False)
-        except Exception as e:
-            self._record_error(e)
-        with contextlib.closing(_connect(self.home)) as con, con:
-            con.execute("UPDATE jobs SET state = CASE WHEN batch_id IN "
-                        "(SELECT id FROM batches WHERE state='cancelled') THEN 'cancelled' ELSE 'pending' END "
-                        "WHERE state='running'")
-            for (bid,) in con.execute("SELECT id FROM batches WHERE state IN ('active','paused')").fetchall():
-                _close_if_finished(con, bid)
 
     def run(self) -> None:
         try:
             self._loop()
         finally:
-            self._wlock.release()
+            if self._wlock is not None:
+                self._wlock.release()
+            if self._on_exit is not None:
+                self._on_exit(self)
 
     def _loop(self) -> None:
         proc.set_abort(self._abort, self._cancel)
+        if not self._owns_lock and self.settings.get("jaguar1", "port_aware", False):
+            jaguar.set_port(jaguar.BASE_PORT + 1 + self.index)    # uma porta do agente por worker
         recovered = False
         while not self._stop_ev.is_set():
             try:
-                if not self._wlock.acquire():     # outra instância processa a fila: só espera
+                if not self._owns_lock:
+                    if self._gate is not None and not self._gate():   # o pool ainda não tem a trava
+                        self._stop_ev.wait(1.0)
+                        continue
+                elif not self._wlock.acquire():   # outra instância processa a fila: só espera
                     self._other = True
                     self._stop_ev.wait(1.0)
                     continue
-                self._other = False
-                if not recovered:
-                    recovered = True              # antes de tentar: uma falha não repete para sempre
-                    self._recover()
+                else:
+                    self._other = False
+                    if not recovered:
+                        recovered = True          # antes de tentar: uma falha não repete para sempre
+                        self._recover()
                 picked = self._next_job()
                 if picked is None:
-                    self._stop_ev.wait(1.0)
+                    self._stop_ev.wait(self._idle)
                     continue
                 self._process(picked)
             except Exception as e:   # nada derruba a thread: registra e tenta de novo
@@ -436,6 +491,7 @@ class Worker(threading.Thread):
         with self._lock:
             self._log.clear()
             self._cancel.clear()
+            self._interrupt.clear()
             self._settled = False
             self._current = {"job_id": job["id"], "batch_id": job["batch_id"],
                              "bug": job["bug_key"], "kind": job["kind"], "started": time.time()}
@@ -454,8 +510,16 @@ class Worker(threading.Thread):
                 error = repr(e)[-1500:]
                 rel = self._find_run(job, since)
         with self._lock:
-            cancelled = self._cancel.is_set() or job["id"] in self._cancel_req
+            interrupted = self._interrupt.is_set()
+            cancelled = job["id"] in self._cancel_req or (self._cancel.is_set() and not interrupted)
             self._settled = True      # a partir daqui um cancelamento não tem mais efeito
+        if interrupted and not cancelled:    # "Parar agora": a execução parcial sai e o job volta à fila
+            self._discard_run(rel or self._find_run(job, since))
+            self._requeue_job(job)
+            with self._lock:
+                self._cancel.clear()
+                self._interrupt.clear()
+            return
         if cancelled:                 # o usuário cancelou: nada do que foi gravado fica
             self._discard_job(job, rel or self._find_run(job, since), time.monotonic() - t0)
             return
@@ -466,15 +530,7 @@ class Worker(threading.Thread):
 
     def _discard_job(self, job: dict, rel: str | None, seconds: float) -> None:
         """Fim de um job cancelado: apaga a execução parcial e a cópia de trabalho e marca `cancelled`."""
-        try:
-            if rel:
-                store.delete_run(self.home, rel)
-            work = self.home.work / "w"
-            if work.is_dir():           # um job por vez: toda cópia de trabalho é deste job
-                for d in work.iterdir():
-                    _rmtree(d, strict=False)
-        except Exception as e:
-            self._record_error(e)
+        self._discard_run(rel)
         try:
             with contextlib.closing(_connect(self.home)) as con, con:
                 con.execute("UPDATE jobs SET state='cancelled', run_rel=NULL, error=NULL, seconds=? WHERE id=?",
@@ -486,6 +542,14 @@ class Worker(threading.Thread):
                 self._end_current()
                 self._cancel.clear()
                 self._cancel_req.discard(job["id"])
+
+    def _discard_run(self, rel: str | None) -> None:
+        """Apaga só a execução deste job (as cópias de trabalho são do `execute`, que as remove)."""
+        try:
+            if rel:
+                store.delete_run(self.home, rel)
+        except Exception as e:
+            self._record_error(e)
 
     def _requeue_job(self, job: dict) -> None:
         try:
@@ -516,3 +580,164 @@ class Worker(threading.Thread):
             self._publish(None)
             with self._lock:
                 self._end_current()
+
+
+class WorkerPool:
+    """Vários `Worker` em paralelo sobre a mesma fila. O pool segura a trava de instância e recupera a
+    fila uma vez; a regra "nunca dois jobs do mesmo bug" mora na reivindicação SQL de cada worker."""
+
+    def __init__(self, home: Home, settings: Settings, n: int | None = None, lock: WorkerLock | None = None):
+        if n is None:
+            n = settings.get("cobertura", "workers", 4)
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            n = 4
+        self.n = max(1, n)
+        self.home, self.settings = home, settings
+        self._wlock = lock or WorkerLock(home)
+        self._plock = threading.Lock()
+        self._have_lock = False
+        self._other = False
+        self._live = 0
+        self._last_error: str | None = None
+        self._workers = [Worker(home, settings, index=i, owns_lock=False) for i in range(self.n)]
+        for w in self._workers:
+            w._gate, w._on_exit = self._gate, self._worker_exited
+
+    # -- vida --
+    def _gate(self) -> bool:
+        """Chamado pelos workers: garante a trava e a recuperação (uma vez) antes de reivindicar jobs."""
+        with self._plock:
+            if self._have_lock:
+                return True
+            if not self._wlock.acquire():
+                self._other = True
+                return False
+            self._other = False
+            self._have_lock = True        # antes de recuperar: uma falha não repete para sempre
+            for e in recover(self.home):
+                self._last_error = repr(e)[-500:]
+            return True
+
+    def _worker_exited(self, _w) -> None:
+        with self._plock:
+            self._live -= 1
+            if self._live <= 0:
+                self._wlock.release()
+                self._have_lock = False
+
+    def start(self) -> None:
+        try:
+            self.home.work.mkdir(parents=True, exist_ok=True)   # a pasta configurada pode não existir ainda
+        except OSError as e:
+            self._last_error = repr(e)[-500:]
+        with self._plock:
+            self._live = len(self._workers)
+        for w in self._workers:
+            w.start()
+
+    def stop(self, kill: bool = True) -> None:
+        for w in self._workers:
+            w._stop_ev.set()
+            if kill:
+                w._abort.set()
+        if kill:
+            proc.kill_all()
+
+    def join(self, timeout: float | None = None) -> None:
+        end = None if timeout is None else time.monotonic() + timeout
+        for w in self._workers:
+            if w.ident is not None:
+                w.join(None if end is None else max(0.0, end - time.monotonic()))
+
+    def is_alive(self) -> bool:
+        return any(w.is_alive() for w in self._workers)
+
+    # -- observação --
+    def status(self) -> dict:
+        errs = [w._last_error for w in self._workers if w._last_error]
+        return {"alive": self.is_alive(), "last_error": self._last_error or (errs[-1] if errs else None),
+                "current": self.current(), "other_instance": self._other, "workers": self.n}
+
+    def currents(self) -> list[dict]:
+        out = []
+        for w in self._workers:
+            cur = w.current()
+            if cur is not None:
+                out.append({**cur, "index": w.index})
+        return out
+
+    def current(self) -> dict | None:
+        cur = self.currents()
+        return cur[0] if cur else None
+
+    def current_of(self, job_id: int) -> dict | None:
+        for c in self.currents():
+            if c.get("job_id") == job_id:
+                return c
+        return None
+
+    def progress_of(self, job_id: int) -> dict | None:
+        for w in self._workers:
+            prog = w.progress_of(job_id)
+            if prog is not None:
+                return prog
+        return None
+
+    def _owner(self, job_id: int) -> Worker | None:
+        for w in self._workers:
+            with w._lock:
+                cur = w._current
+            if cur is not None and cur.get("job_id") == job_id:
+                return w
+        return None
+
+    def subscribe(self, job_id: int | None = None) -> _q.Queue:
+        """Fila de linhas do worker que roda `job_id`; sem ele (ou se ninguém o roda), de todos."""
+        owner = self._owner(job_id) if job_id is not None else None
+        workers = [owner] if owner is not None else list(self._workers)
+        q: _q.Queue = _q.Queue(maxsize=SUB_MAX)
+        for w in workers:
+            with w._lock:
+                w._subs.add(q)
+        q._jflp_workers = workers      # type: ignore[attr-defined]
+        return q
+
+    def unsubscribe(self, q: _q.Queue) -> None:
+        for w in getattr(q, "_jflp_workers", self._workers):
+            w.unsubscribe(q)
+
+    # -- controle (as operações são todas SQL: qualquer worker serve) --
+    def cancel_job(self, job_id: int) -> str:
+        for w in self._workers:
+            r = w.cancel_job(job_id)
+            if r:
+                return r
+        return ""
+
+    def remove_pending(self, job_id: int) -> bool:
+        return self._workers[0].remove_pending(job_id)
+
+    def cancel(self, batch_id: int) -> None:
+        self._workers[0].cancel(batch_id)
+
+    def pause(self, batch_id: int) -> None:
+        self._workers[0].pause(batch_id)
+
+    def resume(self, batch_id: int) -> None:
+        self._workers[0].resume(batch_id)
+
+    def cancel_pending(self) -> int:
+        return self._workers[0].cancel_pending()
+
+    def cancel_everything(self) -> int:
+        n = self.cancel_pending()
+        for cur in self.currents():
+            if self.cancel_job(cur["job_id"]):
+                n += 1
+        return n
+
+    def interromper(self) -> int:
+        """"Parar agora": mata os jobs em andamento de todos os workers e os devolve à fila."""
+        return sum(1 for w in self._workers if w.interromper_job() is not None)

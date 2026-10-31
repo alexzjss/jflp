@@ -225,13 +225,16 @@ def blocking_execute(started: threading.Event):
 
     def fake(home, settings, bug, kind, opts):
         with RW(home, bug, kind) as w:
-            (home.work / "w" / "copia").mkdir(parents=True, exist_ok=True)
+            copia = home.work / "w" / f"copia-{bug.bug_id}-{kind}"
+            copia.mkdir(parents=True, exist_ok=True)
             started.set()
             try:
                 proc.run([sys.executable, "-c", "import time; time.sleep(60)"])
                 w.finish({"status": "ok"})
             except proc.Aborted:
                 w.finish({"status": st.INTERROMPIDO})
+            finally:
+                shutil.rmtree(copia, ignore_errors=True)    # o `execute` de verdade remove a própria cópia
         return w.rel
     return fake
 
@@ -390,6 +393,186 @@ class ProgressTests(Base):
             self.assertTrue(self.batch_done(bid))
         ids = [j["id"] for j in jq.batch_jobs(self.home, bid)]
         self.assertEqual(w.progress_of(ids[-1])["testes"]["rodados"], 3)   # não acumulou os 6
+
+
+# -- WorkerPool: vários workers em paralelo --
+
+class PoolBase(Base):
+    def pool(self, n):
+        p = jq.WorkerPool(self.home, self.settings, n)
+        self.addCleanup(self._stop_pool, p)
+        return p
+
+    @staticmethod
+    def _stop_pool(p):
+        p.stop()
+        p.join(5)
+
+    def gauge(self, hold: float = 0.05):
+        """Execute falso que mede quantos jobs rodam ao mesmo tempo."""
+        lock, state = threading.Lock(), {"now": 0, "max": 0}
+
+        def fake(home, settings, bug, kind, opts):
+            with lock:
+                state["now"] += 1
+                state["max"] = max(state["max"], state["now"])
+            time.sleep(hold)
+            with lock:
+                state["now"] -= 1
+            return f"rel/{bug.bug_id}/{kind}"
+        return fake, state
+
+
+class PoolTests(PoolBase):
+    def test_pool_roda_em_paralelo(self):
+        started = {"0": threading.Event(), "1": threading.Event()}
+        release = threading.Event()
+
+        def fake(home, settings, bug, kind, opts):
+            started[bug.bug_id].set()
+            release.wait(15)
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["maven"], {})
+        with mock.patch.object(jq, "execute", fake):
+            pool = self.pool(2)
+            pool.start()
+            try:
+                self.assertTrue(started["0"].wait(10) and started["1"].wait(10))   # os dois ao mesmo tempo
+                self.assertTrue(wait_for(lambda: len(pool.currents()) == 2))
+                self.assertEqual(sorted(c["index"] for c in pool.currents()), [0, 1])
+                self.assertEqual(pool.status()["workers"], 2)
+            finally:
+                release.set()
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(self.states(bid), ["done", "done"])
+
+    def test_pool_nunca_dois_jobs_do_mesmo_bug(self):
+        fake, state = self.gauge()
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["maven", "jaguar2", "jaguar1"], {})
+        with mock.patch.object(jq, "execute", fake):
+            self.pool(3).start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(state["max"], 1)
+        self.assertEqual(self.states(bid), ["done"] * 3)
+
+    def test_jaguar1_serializado_sem_port_aware(self):
+        fake, state = self.gauge()
+        bid = jq.create_batch(self.home, "t", self.bugs(3), ["jaguar1"], {})
+        with mock.patch.object(jq, "execute", fake):
+            self.pool(3).start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(state["max"], 1)
+
+    def test_jaguar1_paralelo_com_port_aware(self):
+        from types import SimpleNamespace
+        from sbfl import jaguar
+        self.settings.set("jaguar1", "port_aware", True)
+        ports, ready = {}, threading.Barrier(2, timeout=10)
+
+        def fake(home, settings, bug, kind, opts):
+            cmd = jaguar.build_cmd(
+                SimpleNamespace(lib="/lib", java="java", jvm_args=[], output_type="xml", log_level="INFO"),
+                SimpleNamespace(classes_dir="c", tests_dir="t", extra_cp=[]), Path("tf"), "out", "ochiai")
+            ports[bug.bug_id] = next(c for c in cmd if c.startswith("-javaagent"))
+            ready.wait()                  # só passa se os dois jobs estiverem rodando juntos
+            return "rel/" + bug.bug_id
+
+        bid = jq.create_batch(self.home, "t", self.bugs(2), ["jaguar1"], {})
+        with mock.patch.object(jq, "execute", fake):
+            self.pool(2).start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(len(ports), 2)
+        self.assertEqual(len(set(ports.values())), 2)       # uma porta por worker
+        self.assertTrue(all("port=63" in v for v in ports.values()))
+
+    def test_build_cmd_porta_padrao(self):
+        from types import SimpleNamespace
+        from sbfl import jaguar
+        jaguar.set_port(None)
+        cmd = jaguar.build_cmd(
+            SimpleNamespace(lib="/lib", java="java", jvm_args=[], output_type="xml", log_level="INFO"),
+            SimpleNamespace(classes_dir="c", tests_dir="t", extra_cp=[]), Path("tf"), "out", "ochiai")
+        self.assertTrue(any(c.endswith("port=6300") for c in cmd))
+        self.assertFalse(any(c.startswith("-Djaguar.port") for c in cmd))
+
+    def test_interromper_devolve_a_fila(self):
+        started = threading.Event()
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", blocking_execute(started)):
+            pool = self.pool(2)
+            pool.start()
+            self.assertTrue(started.wait(10))
+            pool.pause(bid)                  # senão o worker pegaria o job de volta na hora
+            t0 = time.monotonic()
+            self.assertEqual(pool.interromper(), 1)
+            self.assertTrue(wait_for(lambda: self.states(bid) == ["pending"]))
+            self.assertLess(time.monotonic() - t0, 10)
+        self.assertEqual(list_runs(self.home), [])
+        self.assertEqual(list(self.home.runs.rglob("*.partial")), [])
+        self.assertIsNone(jq.batch_jobs(self.home, bid)[0]["run_rel"])
+
+    def test_reabrir_recupera_running(self):
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='running'")
+        calls = []
+
+        def fake(home, settings, bug, kind, opts):
+            calls.append(bug.bug_id)
+            return "rel/novo"
+
+        with mock.patch.object(jq, "execute", fake):
+            self.pool(3).start()
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(calls, ["0"])
+
+    def test_start_cria_a_pasta_de_trabalho(self):
+        import dataclasses
+        alvo = self.tmp / "nova" / "pasta"
+        pool = jq.WorkerPool(dataclasses.replace(self.home, work_root=alvo), self.settings, 1)
+        self.addCleanup(self._stop_pool, pool)
+        pool.start()
+        self.assertTrue(alvo.is_dir())
+
+    def test_cancelar_job_em_andamento_no_pool(self):
+        started = threading.Event()
+        bid = jq.create_batch(self.home, "t", self.bugs(1), ["jaguar2"], {})
+        with mock.patch.object(jq, "execute", blocking_execute(started)):
+            pool = self.pool(2)
+            pool.start()
+            self.assertTrue(started.wait(10))
+            jid = pool.current()["job_id"]
+            self.assertEqual(pool.cancel_job(jid), "andamento")
+            self.assertTrue(self.batch_done(bid))
+        self.assertEqual(self.states(bid), ["cancelled"])
+
+    def test_add_worktree_serializado(self):
+        from sbfl import gitutil
+        lock, state = threading.Lock(), {"now": 0, "max": 0}
+        barrier = threading.Barrier(2, timeout=10)
+
+        def fake_git(repo, *args, check=True):
+            with lock:
+                state["now"] += 1
+                state["max"] = max(state["max"], state["now"])
+            time.sleep(0.1)
+            with lock:
+                state["now"] -= 1
+            return ""
+
+        def work(i):
+            barrier.wait()
+            gitutil.add_worktree(self.tmp / "repo", self.tmp / f"wt{i}", "HEAD")
+
+        with mock.patch.object(gitutil, "git", fake_git), \
+                mock.patch.object(gitutil.subprocess, "run", lambda *a, **k: mock.Mock(returncode=0)):
+            ts = [threading.Thread(target=work, args=(i,)) for i in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join(15)
+        self.assertEqual(state["max"], 1)
 
 
 if __name__ == "__main__":

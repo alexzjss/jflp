@@ -21,7 +21,7 @@ from .home import Home, Settings, load_settings
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
 from .proc import NO_WINDOW
-from .queue import Worker, active_batch_ids, batch_status, create_batch, delete_batch
+from .queue import Worker, WorkerPool, active_batch_ids, batch_status, create_batch, delete_batch
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
 from .toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
@@ -339,7 +339,7 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
     if not lock.acquire():
         print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
         return 1
-    worker = Worker(home, settings, lock)     # a trava passa para o worker
+    worker = WorkerPool(home, settings, getattr(args, "workers", None) or 1, lock)   # a trava passa para o pool
     seen: set[int] = set()
     worker.start()
     try:
@@ -521,7 +521,8 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("name")
     c.add_argument("kinds", help="tipos separados por vírgula, ex.: maven,jaguar2")
     c.add_argument("bugs", nargs="+")
-    bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
+    r = bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
+    r.add_argument("--workers", type=int, default=None, help="jobs em paralelo (padrão: 1)")
     s = bs.add_parser("status", help="situação de um lote")
     s.add_argument("id", type=int)
     s = bs.add_parser("cancel", help="cancela os jobs pendentes de um lote")
