@@ -21,7 +21,7 @@ from .execute import RunOptions, execute
 from .home import Home, Settings, apply_work_dir, load_settings
 from .importar import importar_pipeline
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
-from .planilha import Enviador, enfileirar_todos, linhas_total, pendentes
+from .planilha import Enviador, enfileirar_todos, garantir_token, linhas_total, pendentes
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
 from .proc import NO_WINDOW
 from .queue import Worker, WorkerPool, active_batch_ids, batch_status, create_batch, delete_batch
@@ -311,6 +311,9 @@ def _print_batch(s: dict) -> None:
 
 
 def cmd_batch(home: Home, settings: Settings, args) -> int:
+    home, aviso = apply_work_dir(home, settings)     # o worker usa a mesma pasta de trabalho da interface
+    if aviso:
+        print(f"aviso: {aviso}")
     if args.action == "create":
         kinds = [k for k in args.kinds.split(",") if k]
         bad = [k for k in kinds if k not in KINDS]
@@ -397,6 +400,9 @@ def cmd_cobertura(home: Home, settings: Settings, args) -> int:
         if not pasta:
             print("erro: informe a pasta da coleção ou defina bugsjar.root no config.toml.", file=sys.stderr)
             return 1
+        if not Path(pasta).expanduser().is_dir():
+            print(f"erro: a pasta da coleção não existe: {pasta}", file=sys.stderr)
+            return 1
         r = cb.sincronizar(home, settings, Path(pasta).expanduser())
         for av in r["avisos"]:
             print(f"aviso: {av}")
@@ -437,6 +443,8 @@ def cmd_cobertura(home: Home, settings: Settings, args) -> int:
 def _cobertura_planilha(home: Home, settings: Settings, args) -> int:
     url = (settings.get("planilha", "url", "") or "").strip()
     if not args.reenviar:
+        token = garantir_token(settings)
+        print(f"Token (propriedade JFLP_TOKEN no Apps Script): {token or '(ainda não gerado)'}")
         print("Planilha: " + ("URL configurada" if url else "URL não configurada (tela Ambiente)"))
         print(f"Linhas na caixa de saída: {linhas_total(home)}; pendentes de envio: {pendentes(home)}")
         return 0
@@ -449,6 +457,7 @@ def _cobertura_planilha(home: Home, settings: Settings, args) -> int:
     n = enfileirar_todos(home)
     print(f"{n} linha(s) na fila de envio; enviando...")
     envio = Enviador(home, settings)
+    anterior, parados = pendentes(home), 0
     while True:
         envio.ciclo()           # um ciclo manda até LOTE linhas; sem espera entre eles
         erro = envio.status()["erro"]
@@ -457,8 +466,14 @@ def _cobertura_planilha(home: Home, settings: Settings, args) -> int:
             print(f"Ainda faltam {pendentes(home)} linha(s); rode o comando de novo depois de corrigir.",
                   file=sys.stderr)
             return 1
-        if pendentes(home) == 0:
+        atual = pendentes(home)
+        if atual == 0:
             break
+        parados = 0 if atual < anterior else parados + 1
+        if parados >= 3:        # três ciclos seguidos sem andar: para em vez de girar à toa
+            print(f"erro: o envio não avançou em 3 ciclos seguidos; faltam {atual} linha(s).", file=sys.stderr)
+            return 1
+        anterior = atual
     print(f"[OK] {n} linha(s) enviada(s) para a planilha")
     return 0
 

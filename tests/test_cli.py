@@ -266,19 +266,75 @@ class CoberturaCliTests(unittest.TestCase):
         self.assertIn("sincronizar", err)
 
     def test_cli_cobertura_refazer(self):
+        from sbfl import cobertura as cb
         self._sincronizar()
+        bid = cb.batch_id(Home(self.h))
         with mock.patch("sbfl.cobertura.refazer", return_value=2) as rf:
             rc, out, err = _run_main(["cobertura", "refazer"], self.h)
             self.assertEqual(rc, 0, err)
+            self.assertEqual(rf.call_args.args[1:3], (bid, None))
             self.assertTrue(rf.call_args.kwargs["so_falhas"])
             self.assertIn("2", out)
             rc, out, err = _run_main(["cobertura", "refazer", "--todos"], self.h)
+            self.assertEqual(rf.call_args.args[1:3], (bid, None))
             self.assertFalse(rf.call_args.kwargs["so_falhas"])
 
     def test_cli_cobertura_importar_sem_lote_informa_erro(self):
         rc, out, err = _run_main(["cobertura", "importar", str(self.root)], self.h)
         self.assertEqual(rc, 1)
         self.assertIn("sincronize", out + err)
+
+    def test_cli_cobertura_importar_ok(self):
+        res = {"maven": 2, "jaguar1": 1, "ignorados": 3, "erros": []}
+        with mock.patch("sbfl.cli.importar_pipeline", return_value=res) as imp:
+            rc, out, err = _run_main(["cobertura", "importar", str(self.root)], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("2 Maven", out)
+        self.assertIn("1 Jaguar 1", out)
+        self.assertEqual(imp.call_args.args[2], self.root)
+
+    def test_cli_cobertura_importar_com_erros_sai_com_1(self):
+        res = {"maven": 0, "jaguar1": 0, "ignorados": 0, "erros": ["bugsjar/maven/A-1: quebrou"]}
+        with mock.patch("sbfl.cli.importar_pipeline", return_value=res):
+            rc, out, err = _run_main(["cobertura", "importar", str(self.root)], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("quebrou", err)
+
+    def test_cli_cobertura_sincronizar_pasta_inexistente(self):
+        rc, out, err = _run_main(["cobertura", "sincronizar", str(self.tmp / "nao_existe")], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("não existe", err)
+        from sbfl import cobertura as cb
+        self.assertIsNone(cb.batch_id(Home(self.h)))
+
+    def test_cli_cobertura_planilha_sem_flag_mostra_token(self):
+        with mock.patch("sbfl.cli.garantir_token", return_value="TOKEN-XYZ"):
+            rc, out, err = _run_main(["cobertura", "planilha"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("TOKEN-XYZ", out)
+        self.assertIn("URL não configurada", out)
+
+    def test_cli_cobertura_planilha_reenviar_sem_progresso(self):
+        from sbfl.planilha import Enviador
+        self._com_url()
+        with mock.patch.object(Enviador, "ciclo", return_value=0) as ciclo:
+            rc, out, err = _run_main(["cobertura", "planilha", "--reenviar"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertEqual(ciclo.call_count, 3)
+        self.assertIn("não avançou", err)
+
+    def test_batch_run_aplica_pasta_de_trabalho(self):
+        from sbfl.home import Home as H
+        H(self.h).ensure()
+        outra = H(self.h)
+        with mock.patch("sbfl.cli.apply_work_dir", return_value=(outra, "aviso de unidade")) as apl, \
+                mock.patch("sbfl.cli.WorkerPool") as pool:
+            pool.return_value.status.return_value = {"last_error": None}
+            rc, out, err = _run_main(["batch", "run"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("aviso de unidade", out)
+        self.assertIs(pool.call_args.args[0], outra)
+        apl.assert_called_once()
 
     def _com_url(self, url="https://script.example/exec"):
         self._sincronizar()

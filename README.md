@@ -348,17 +348,17 @@ A planilha recebe os dados por um pequeno script do Apps Script, publicado como 
 2. No menu da planilha, abra **Extensões > Apps Script**.
 3. Apague o conteúdo do arquivo `Code.gs` e cole o conteúdo inteiro de `tools/planilha/Code.gs`.
 4. Clique em **Salvar**.
-5. Abra **Configurações do projeto** (ícone de engrenagem) > **Propriedades do script** e adicione a propriedade `JFLP_TOKEN` com o token mostrado na tela **Ambiente** do JFLP Studio (campo da planilha).
-6. Clique em **Implantar > Nova implantação**.
-7. Em tipo, escolha **App da web**. Em **Executar como**, escolha **Eu**. Em **Quem pode acessar**, escolha **Qualquer pessoa**.
-8. Clique em **Implantar** e autorize o acesso quando o Google pedir.
+5. Abra **Configurações do projeto** (ícone de engrenagem) > **Propriedades do script** e adicione a propriedade `JFLP_TOKEN` com o token. O token aparece na tela **Ambiente** do JFLP Studio (seção Planilha) ou no comando `jflp cobertura planilha`.
+6. No canto superior direito, clique em **Implantar** e depois em **Nova implantação**.
+7. Clique no ícone de engrenagem ao lado de **Selecionar tipo** e escolha **App da web**. Em **Executar como**, escolha **Eu**. Em **Quem pode acessar**, escolha **Qualquer pessoa**.
+8. Clique em **Implantar** e depois em **Autorizar acesso**. Escolha a sua conta. Na tela "O Google não verificou este app", clique em **Avançado**, depois em **Acessar <nome do projeto> (não seguro)** e em **Permitir**. Esse aviso aparece porque o script é seu e não passou pela verificação do Google.
 9. Copie a **URL do app da web**.
 10. No JFLP Studio, abra a tela **Ambiente**, vá ao campo da **Planilha**, cole a URL e salve.
 11. Ainda na tela **Ambiente**, clique em **Reenviar tudo** para mandar todas as linhas da cobertura. Pela linha de comando, `jflp cobertura planilha --reenviar` faz o mesmo e espera o envio terminar.
 
 O token protege a planilha: quem não souber o token não consegue gravar nela. Não o compartilhe.
 
-Depois de alterar o `Code.gs`, publique a mudança com **Implantar > Gerenciar implantações > Editar > Nova versão**; a URL continua a mesma.
+Depois de alterar o `Code.gs`, não crie outra implantação: use **Implantar > Gerenciar implantações**, clique no lápis (editar) da implantação, escolha **Nova versão** e clique em **Implantar**. A URL continua a mesma, então a planilha não precisa ser religada.
 
 ## 10. Layout da pasta de execução
 
@@ -424,7 +424,7 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 | `jflp cobertura status` | resumo da cobertura: concluídos, bugs por situação e por projeto, ritmo e tempo restante |
 | `jflp cobertura importar <pasta>` | importa os resultados do pipeline PowerShell (`relatorios_cobertura`) para o lote |
 | `jflp cobertura refazer [--todos]` | devolve à fila as etapas com falha (`--todos`: todas as concluídas); depois rode `jflp batch run` |
-| `jflp cobertura planilha [--reenviar]` | sem opção, mostra o estado da caixa de saída; `--reenviar` manda todas as linhas da cobertura para a planilha e espera o envio terminar |
+| `jflp cobertura planilha [--reenviar]` | sem opção, mostra o token (para o passo 5 do Apps Script), a situação da URL e da caixa de saída; `--reenviar` manda todas as linhas da cobertura para a planilha e espera o envio terminar |
 | `jflp export <nome> [bug...] [--batch ID]` | exporta o dataset (informe `--batch` **ou** bugs) |
 | `jflp recipes [benchmark/projeto]` | lista as receitas, ou mostra a de um projeto |
 | `jflp reindex` | reconstrói o índice varrendo `runs/` |
