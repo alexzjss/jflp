@@ -24,8 +24,8 @@ DEFAULTS = {
                 "compiler": "3.8.0", "junit": "4.12"},
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": [], "port_aware": False},
     "cobertura": {"workers": 4, "work_dir": "", "legado": True, "legado_offline": True,
-                  "min_livre_gb": 5,
-                  "kinds": ["maven", "jaguar1", "jaguar2"]},   # etapas que a cobertura roda; as outras ficam na fila    # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
+                  "min_livre_gb": 5,      # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
+                  "kinds": ["maven", "jaguar1", "jaguar2"]},    # etapas que a cobertura roda; as outras ficam na fila
     "planilha": {"url": "", "token": ""},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
