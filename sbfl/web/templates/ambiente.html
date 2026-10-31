@@ -72,10 +72,16 @@
   <form method="post" action="/ambiente/cobertura" class="cb-form">
     <label>Workers em paralelo (1 a {{ workers_max }})
       <input type="number" name="workers" min="1" max="{{ workers_max }}" value="{{ cobertura.workers }}"></label>
-    <label>Pasta de trabalho (vazio = padrão do JFLP Studio)
+    <label>Pasta de trabalho (vazio = E:\JFLP\cobertura se o disco E: existir; senão, a pasta do JFLP Studio)
       <input type="text" name="work_dir" value="{{ cobertura.work_dir }}" placeholder="E:\JFLP\cobertura" autocomplete="off"></label>
+    <p class="vazio">Pasta de trabalho em uso: {{ cobertura.em_uso }}</p>
+    <label>Espaço mínimo livre no disco (1 a {{ espaco_max_gb }} GB)
+      <input type="number" name="min_livre_gb" min="1" max="{{ espaco_max_gb }}" value="{{ cobertura.min_livre_gb }}"></label>
+    <p class="vazio">Com menos espaço livre que isso, a cobertura pausa sozinha e avisa o motivo.</p>
     <label><input type="checkbox" name="legado" {{ 'checked' if cobertura.legado }}> Usar o perfil legado (JDK 7 + Maven 3.0.5) quando o bug pedir</label>
     <label><input type="checkbox" name="legado_offline" {{ 'checked' if cobertura.legado_offline }}> Legado offline (dependências antes, num JDK 8)</label>
+    <label><input type="checkbox" name="jaguar1_paralelo" {{ 'checked' if cobertura.paralelo_j1 }}> Jaguar 1 em paralelo (o jar do Jaguar 1 aceita -Djaguar.port)</label>
+    <p class="vazio">Desligado, os jobs do Jaguar 1 rodam um de cada vez. Ligue só depois de confirmar que o jar aceita -Djaguar.port (ver o README, seção Cobertura).</p>
     <button type="submit">Salvar</button>
   </form>
   <p class="vazio">Workers e pasta de trabalho valem depois de reiniciar o JFLP Studio.</p>

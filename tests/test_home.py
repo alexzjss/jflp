@@ -4,7 +4,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sbfl.home import SKIP_FLAGS
-from sbfl.home import DEFAULTS, Home, apply_work_dir, load_settings
+from sbfl.home import DEFAULTS, Home, apply_work_dir, load_settings, pasta_padrao_cobertura
 
 
 class HomeTests(unittest.TestCase):
@@ -135,9 +135,36 @@ class HomeTests(unittest.TestCase):
     def test_apply_work_dir_vazio(self):
         home = Home(self.tmp / "h")
         s = load_settings(home)
-        out, aviso = apply_work_dir(home, s)
+        with mock.patch("sbfl.home.pasta_padrao_cobertura", return_value=None):
+            out, aviso = apply_work_dir(home, s)
         self.assertIs(out, home)
         self.assertIsNone(aviso)
+
+    def test_apply_work_dir_padrao_e_quando_o_disco_e_existe(self):
+        home = Home(self.tmp / "h")
+        s = load_settings(home)
+        with mock.patch("sbfl.home.pasta_padrao_cobertura", return_value="E:\\JFLP\\cobertura"):
+            out, aviso = apply_work_dir(home, s)
+        self.assertIsNone(aviso)
+        self.assertEqual(str(out.work), "E:\\JFLP\\cobertura")
+        self.assertEqual(s.get("cobertura", "work_dir"), "")     # o config.toml continua vazio
+
+    def test_pasta_padrao_cobertura_so_no_windows_com_e(self):
+        with mock.patch("sbfl.home.os.name", "nt"), mock.patch("sbfl.home.os.path.exists", return_value=True):
+            self.assertEqual(pasta_padrao_cobertura(), "E:\\JFLP\\cobertura")
+        with mock.patch("sbfl.home.os.name", "nt"), mock.patch("sbfl.home.os.path.exists", return_value=False):
+            self.assertIsNone(pasta_padrao_cobertura())
+        with mock.patch("sbfl.home.os.name", "posix"), mock.patch("sbfl.home.os.path.exists", return_value=True):
+            self.assertIsNone(pasta_padrao_cobertura())
+
+    def test_pasta_configurada_vence_o_padrao_e(self):
+        home = Home(self.tmp / "h")
+        s = load_settings(home)
+        wd = self.tmp / "minha"
+        s.set("cobertura", "work_dir", str(wd))
+        with mock.patch("sbfl.home.pasta_padrao_cobertura", return_value="E:\\JFLP\\cobertura"):
+            out, _ = apply_work_dir(home, s)
+        self.assertEqual(out.work, Path(str(wd)))
 
     def test_apply_work_dir_ok(self):
         home = Home(self.tmp / "h")
@@ -171,6 +198,7 @@ class HomeTests(unittest.TestCase):
         self.assertEqual(s.get("planilha", "url"), "")
         self.assertEqual(s.get("planilha", "token"), "")
         self.assertIs(s.get("jaguar1", "port_aware"), False)
+        self.assertEqual(s.get("cobertura", "min_livre_gb"), 5)
 
 
 if __name__ == "__main__":

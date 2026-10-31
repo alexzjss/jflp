@@ -23,7 +23,8 @@ DEFAULTS = {
     "jaguar2": {"version": "0.0.2", "jacoco": "0.8.7", "surefire": "3.5.3",
                 "compiler": "3.8.0", "junit": "4.12"},
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": [], "port_aware": False},
-    "cobertura": {"workers": 4, "work_dir": "", "legado": True, "legado_offline": True},
+    "cobertura": {"workers": 4, "work_dir": "", "legado": True, "legado_offline": True,
+                  "min_livre_gb": 5},    # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
     "planilha": {"url": "", "token": ""},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
@@ -153,10 +154,24 @@ class Home:
         return self
 
 
+PASTA_PADRAO_E = "E:\\JFLP\\cobertura"
+
+
+def pasta_padrao_cobertura() -> str | None:
+    """Pasta de trabalho quando `cobertura.work_dir` está vazio: E:\\JFLP\\cobertura se o Windows tem o
+    disco E: (spec §4a); None = segue na pasta do JFLP Studio."""
+    if os.name == "nt" and os.path.exists("E:\\"):
+        return PASTA_PADRAO_E
+    return None
+
+
 def apply_work_dir(home: Home, settings: Settings) -> tuple[Home, str | None]:
-    """Aplica `cobertura.work_dir` ao Home. Devolve (home, aviso): aviso só quando a pasta
-    configurada está num disco que não existe; nesse caso o Home fica como estava."""
+    """Aplica `cobertura.work_dir` ao Home (vazio = padrão E:\\JFLP\\cobertura, se houver E:). Devolve
+    (home, aviso): aviso só quando a pasta configurada está num disco que não existe; nesse caso o
+    Home fica como estava."""
     wd = str(settings.get("cobertura", "work_dir", "") or "").strip()
+    if not wd:
+        wd = pasta_padrao_cobertura() or ""
     if not wd:
         return home, None
     anchor = Path(wd).anchor

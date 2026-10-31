@@ -168,6 +168,7 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `jaguar1.timeout_s` | `3600` | tempo limite do Jaguar 1 |
 | `jaguar1.max_retries` | `6` | recuperações de crash da JVM do Jaguar 1 |
 | `jaguar1.jvm_args` | `[]` | argumentos extras da JVM do Jaguar 1 |
+| `jaguar1.port_aware` | `false` | `true` roda jobs do Jaguar 1 em paralelo (o jar precisa aceitar `-Djaguar.port`); `false` roda um de cada vez |
 | `run.test_scope` | `relevant` | `relevant` (só testes relevantes) ou `all` (suíte inteira) |
 | `run.timeout_s` | `7200` | tempo limite de cada processo Maven |
 | `run.archive_checkout` | `true` | arquiva o checkout inteiro na pasta da execução (pode ocupar muito disco) |
@@ -178,9 +179,10 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `bugsjar.projects` | `[]` | projetos do Bugs.jar usados por `fetch` e pela listagem |
 | `bugsjar.url_template` | `https://github.com/bugs-dot-jar/{project}.git` | URL de clone |
 | `cobertura.workers` | `4` | jobs da cobertura rodando em paralelo na interface; na linha de comando, use `jflp batch run --workers N` |
-| `cobertura.work_dir` | `""` | pasta de trabalho dos checkouts da cobertura (ex.: `E:/JFLP/cobertura`); vazio = `work` dentro da pasta do JFLP |
+| `cobertura.work_dir` | `""` | pasta de trabalho dos checkouts da cobertura; vazio = `E:\JFLP\cobertura` se o disco E: existir, senão `work` dentro da pasta do JFLP |
 | `cobertura.legado` | `true` | tenta o perfil legado (JDK 7, Maven 3.0.5) nos bugs Maven |
 | `cobertura.legado_offline` | `true` | inclui a versão offline do perfil legado |
+| `cobertura.min_livre_gb` | `5` | espaço livre mínimo (GB) no disco da pasta do JFLP e da pasta de trabalho; abaixo disso, a cobertura pausa |
 | `planilha.url` | `""` | URL do app da web do Apps Script (seção 9) |
 | `planilha.token` | `""` | token que o script confere (propriedade `JFLP_TOKEN`); gerado pelo JFLP |
 | `defects4j.home` | `""` | instalação do Defects4J (dentro do WSL no Windows) |
@@ -310,6 +312,7 @@ Fluxo típico:
 ```text
 jflp fetch                       # clona/atualiza os projetos (bugsjar.root e bugsjar.projects)
 jflp cobertura sincronizar       # cria o lote, ou acrescenta o que faltar (usa bugsjar.root)
+jflp cobertura importar <pasta>  # só se houver resultados do pipeline PowerShell: ANTES dos workers (ver abaixo)
 jflp batch run --workers 4       # roda a fila em primeiro plano até esvaziar
 jflp cobertura status            # bugs por situação e por projeto, ritmo e tempo restante
 jflp cobertura refazer           # devolve à fila as etapas com falha (--todos: todas)
@@ -331,8 +334,23 @@ Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo r
 **Configuração** (seção `[cobertura]` do `config.toml`, veja a seção 4):
 
 - `workers` (padrão `4`): quantos jobs rodam em paralelo. Cada job roda um Maven ou um Jaguar inteiro, então reduza o valor se a máquina ficar sem memória.
-- `work_dir`: pasta de trabalho dos checkouts e arquivos temporários. Para não encher o disco do sistema, aponte para outra unidade, por exemplo `work_dir = 'E:/JFLP/cobertura'`. Se a unidade não estiver disponível, o JFLP avisa e usa a pasta padrão. As execuções (`runs/`) e o banco `jflp.db` continuam na pasta do JFLP.
+- `work_dir`: pasta de trabalho dos checkouts e arquivos temporários. Vazio (padrão) = `E:\JFLP\cobertura` quando o Windows tem o disco E:; sem E:, fica em `work` dentro da pasta do JFLP. Para usar outra pasta, informe um caminho absoluto, por exemplo `work_dir = 'E:/JFLP/cobertura'`. Se a unidade configurada não estiver disponível, o JFLP avisa e usa a pasta padrão. A tela **Ambiente** mostra a pasta que está em uso.
+- `min_livre_gb` (padrão `5`): espaço livre mínimo, em GB, no disco da pasta do JFLP e no da pasta de trabalho. Com menos que isso, a cobertura pausa sozinha e mostra o motivo; depois de liberar espaço, clique em **Continuar**.
+- `port_aware` (em `[jaguar1]`, padrão `false`): veja **Jaguar 1 em paralelo** abaixo.
 - `legado` e `legado_offline` (padrão `true`): nos bugs Maven da cobertura, quando o perfil moderno falha, o JFLP tenta o perfil legado (JDK 7 e Maven 3.0.5); com `legado_offline`, também a versão offline desse perfil. Desligue se não quiser esses perfis.
+
+**Disco.** A pasta de trabalho vai para `E:\JFLP\cobertura`, mas as execuções (`runs/`, com os XMLs do Jaguar, que chegam a dezenas de GB na cobertura completa), o `m2` e o banco `jflp.db` ficam na pasta do JFLP, que é `%LOCALAPPDATA%\jflp` (no C:). Para levar tudo para o E::
+
+1. feche o JFLP Studio;
+2. copie a pasta `%LOCALAPPDATA%\jflp` inteira para `E:\JFLP\home`;
+3. grave a variável de ambiente do usuário: `setx JFLP_HOME E:\JFLP\home`;
+4. reabra o terminal e o JFLP Studio (o `setx` só vale para programas abertos depois dele).
+
+Confira que o JFLP abre com o lote e as execuções anteriores antes de apagar a cópia antiga em `%LOCALAPPDATA%\jflp`.
+
+**Jaguar 1 em paralelo.** Por padrão os jobs do Jaguar 1 rodam **um de cada vez**: sem `port_aware`, dois jobs em paralelo disputam a mesma porta do jar e um deles falha. Se o jar do Jaguar 1 que você usa aceita `-Djaguar.port`, ligue **Jaguar 1 em paralelo** na tela Ambiente (seção Cobertura). Para conferir no piloto: com a opção ligada e pelo menos dois bugs do Jaguar 1 na fila, dois jobs do Jaguar 1 devem aparecer **rodando** ao mesmo tempo no Painel, sem erro de porta (algo como `Address already in use`) no log de nenhum deles. Se aparecer erro de porta, desligue a opção: os jobs voltam a rodar um de cada vez.
+
+**Ordem com a importação.** `jflp cobertura importar <pasta>` deve rodar logo depois de `jflp cobertura sincronizar` e **antes** de iniciar a cobertura, ou com ela pausada. Se os workers já estiverem pegando jobs, eles podem executar os mesmos bugs que a importação está marcando, e o lote fica misturado.
 
 Quando o lote termina, `jflp cobertura refazer` reenfileira só o que falhou; depois de corrigir um problema do ambiente (um JDK ou Maven que faltava, por exemplo), esse é o jeito de rodar de novo sem refazer o que já deu certo.
 

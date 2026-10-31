@@ -28,6 +28,7 @@ MAVEN_OPTIONS = ("3.6.3", "3.9.9")
 JDK_LEGADO = (7,)
 MAVEN_LEGADO = ("3.0.5",)
 WORKERS_MAX = 12
+ESPACO_MAX_GB = 500
 KIND_LABEL = {"jaguar2": "Jaguar 2", "jaguar1": "Jaguar 1", "maven": "Maven puro"}
 # versão de Maven oferecida no botão quando falta um Maven para o perfil
 MAVEN_DOWNLOAD = {"maven": "3.6.3", "jaguar1": "3.6.3", "jaguar2": "3.9.9"}
@@ -166,6 +167,9 @@ def _cobertura_ctx(request: Request) -> dict:
     cob = st.settings.section("cobertura")
     return {"workers": cob.get("workers", 4), "work_dir": cob.get("work_dir", "") or "",
             "legado": bool(cob.get("legado", True)), "legado_offline": bool(cob.get("legado_offline", True)),
+            "min_livre_gb": cob.get("min_livre_gb", 5),
+            "paralelo_j1": bool(st.settings.get("jaguar1", "port_aware", False)),
+            "em_uso": str(st.home.work),          # a pasta que a execução usa agora (já com o padrão aplicado)
             "aviso": getattr(st, "aviso_work_dir", None)}
 
 
@@ -185,7 +189,7 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
         "jdk_options": JDK_OPTIONS, "maven_options": MAVEN_OPTIONS,
         "jdk_legado": JDK_LEGADO, "maven_legado": MAVEN_LEGADO,
         "planilha": _planilha_ctx(request), "cobertura": _cobertura_ctx(request),
-        "workers_max": WORKERS_MAX,
+        "workers_max": WORKERS_MAX, "espaco_max_gb": ESPACO_MAX_GB,
     }
 
 
@@ -362,9 +366,11 @@ def reenviar_planilha(request: Request):
 
 @router.post("/ambiente/cobertura", response_class=HTMLResponse)
 def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str = Form(""),
-                     legado: bool = Form(False), legado_offline: bool = Form(False)):
+                     legado: bool = Form(False), legado_offline: bool = Form(False),
+                     min_livre_gb: str = Form("5"), jaguar1_paralelo: bool = Form(False)):
     st = request.app.state
-    valores = {"workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline}
+    valores = {"workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline,
+               "min_livre_gb": min_livre_gb, "paralelo_j1": jaguar1_paralelo}
     try:
         n = int(workers.strip())
     except ValueError:
@@ -372,6 +378,13 @@ def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str =
     if not 1 <= n <= WORKERS_MAX:
         return _erro_ambiente(request, "cobertura", f"Os workers vão de 1 a {WORKERS_MAX}: digite um número inteiro.",
                               valores)
+    try:
+        gb = int(min_livre_gb.strip())
+    except ValueError:
+        gb = 0
+    if not 1 <= gb <= ESPACO_MAX_GB:
+        return _erro_ambiente(request, "cobertura",
+                              f"O espaço mínimo vai de 1 a {ESPACO_MAX_GB} GB: digite um número inteiro.", valores)
     wd = work_dir.strip().strip('"')
     if wd and not Path(wd).is_absolute():
         return _erro_ambiente(request, "cobertura", "A pasta de trabalho precisa de um caminho absoluto.", valores)
@@ -380,6 +393,8 @@ def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str =
     settings.set("cobertura", "work_dir", wd)
     settings.set("cobertura", "legado", bool(legado))
     settings.set("cobertura", "legado_offline", bool(legado_offline))
+    settings.set("cobertura", "min_livre_gb", gb)
+    settings.set("jaguar1", "port_aware", bool(jaguar1_paralelo))
     settings.save()
     return _volta("cobertura", "Configuração salva. Workers e pasta de trabalho valem depois de reiniciar "
                                "o JFLP Studio.")
