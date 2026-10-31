@@ -4,18 +4,20 @@ from __future__ import annotations
 import contextlib
 import json
 import queue as _q
+import shutil
 import sqlite3
 import threading
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 from . import compare, jaguar, proc, store
 from .adapters.base import Bug
 from .execute import RunOptions, execute
 from .home import Home, Settings
 from .instance import WorkerLock
-from .prepare import _rmtree
+from .prepare import _rmtree, remove_pristine
 from .power import keep_awake
 from .progress import Progress
 from .prepare import bug_from_key
@@ -29,12 +31,74 @@ _SCHEMA = (
 )
 LOG_LINES = 500
 SUB_MAX = 10000
+DISK_TTL = 60.0         # segundos entre checagens de espaço livre
+FINISH_TRIES = 5        # tentativas do UPDATE que conclui um job
+
+
+def _disk_usage(path):
+    """Ponto único de `shutil.disk_usage` (os testes trocam por um falso)."""
+    return shutil.disk_usage(str(path))
+
+
+class DiskGuard:
+    """Checa o espaço livre de `home.root` e `home.work` (no máximo a cada `ttl` s). Abaixo do mínimo
+    (`cobertura.min_livre_gb`, 5 GB), os lotes de cobertura são pausados e `aviso` diz por quê."""
+
+    def __init__(self, home: Home, settings: Settings, ttl: float = DISK_TTL):
+        self.home, self.settings, self.ttl = home, settings, ttl
+        self.aviso: str | None = None
+        self._at: float | None = None
+        self._lock = threading.Lock()
+
+    def _check(self) -> str | None:
+        try:
+            minimo = float(self.settings.get("cobertura", "min_livre_gb", 5))
+        except (TypeError, ValueError):
+            minimo = 5.0
+        for path in (self.home.root, self.home.work):
+            try:
+                livre = _disk_usage(path).free / 1024 ** 3
+            except OSError:      # a pasta ainda não existe: sem o que medir
+                continue
+            if livre < minimo:
+                unidade = Path(path).anchor or str(path)
+                gb = f"{livre:.1f}".replace(".", ",")
+                return f"Pouco espaço em {unidade} ({gb} GB livres; mínimo {minimo:g} GB). Cobertura pausada."
+        return None
+
+    def verificar(self) -> str | None:
+        """Devolve o aviso atual (None se há espaço), pausando a cobertura quando falta."""
+        with self._lock:
+            agora = time.monotonic()
+            if self._at is not None and agora - self._at < self.ttl:
+                return self.aviso
+            self._at = agora
+            self.aviso = self._check()
+            aviso = self.aviso
+        if aviso:
+            try:
+                _pausar_cobertura(self.home)
+            except Exception:     # noqa: BLE001  # o aviso vale mesmo que a pausa falhe
+                pass
+        return aviso
+
+
+def _pausar_cobertura(home: Home) -> None:
+    """Pausa os lotes ativos de cobertura (meta.cobertura); os demais lotes seguem."""
+    with contextlib.closing(_connect(home)) as con, con:
+        for r in con.execute("SELECT id, meta FROM batches WHERE state='active'").fetchall():
+            if (json.loads(r["meta"] or "{}")).get("cobertura"):
+                con.execute("UPDATE batches SET state='paused' WHERE id=? AND state='active'", (r["id"],))
 
 
 def _connect(home: Home) -> sqlite3.Connection:
     home.db_path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(str(home.db_path), timeout=30)
     con.row_factory = sqlite3.Row
+    try:
+        con.execute("PRAGMA journal_mode=WAL")      # leitores não bloqueiam o escritor (persiste no arquivo)
+    except sqlite3.OperationalError:                # banco ocupado: fica no modo atual
+        pass
     for sql in _SCHEMA:
         con.execute(sql)
     for tabela, coluna in (("jobs", "origem"), ("jobs", "forcado"), ("batches", "meta")):
@@ -249,6 +313,7 @@ class Worker(threading.Thread):
         self._progress: Progress | None = None     # progresso do job corrente (alimentado por _on_line)
         self._last_progress: tuple[int, dict] | None = None   # (job, estado final) do último job
         self._last_error: str | None = None
+        self._disk = DiskGuard(home, settings)     # pool: compartilhado entre os workers
 
     # -- controle --
     def _set_batch(self, batch_id: int, frm: tuple, to: str) -> None:
@@ -413,6 +478,10 @@ class Worker(threading.Thread):
         return rules
 
     def _next_job(self):
+        try:
+            self._disk.verificar()      # sem espaço, a cobertura é pausada antes de reivindicar
+        except Exception as e:      # noqa: BLE001
+            self._record_error(e)
         with contextlib.closing(_connect(self.home)) as con, con:
             row = con.execute(
                 "SELECT j.* FROM jobs j JOIN batches b ON b.id = j.batch_id "
@@ -437,7 +506,7 @@ class Worker(threading.Thread):
 
     def status(self) -> dict:
         return {"alive": self.is_alive(), "last_error": self._last_error, "current": self.current(),
-                "other_instance": self._other}
+                "other_instance": self._other, "aviso_disco": self._disk.aviso}
 
     def _recover(self) -> None:
         """Só roda com a trava: recupera .partial órfãs, devolve jobs `running` e apaga cópias de trabalho."""
@@ -532,6 +601,7 @@ class Worker(threading.Thread):
             self._discard_job(job, rel or self._find_run(job, since), time.monotonic() - t0)
             return
         if self._abort.is_set():   # app fechando: o job é refeito na próxima abertura
+            self._discard_run(rel or self._find_run(job, since))    # a execução parcial não fica órfã
             self._requeue_job(job)
             return
         self._finish_job(job, rel, error, time.monotonic() - t0)
@@ -540,17 +610,48 @@ class Worker(threading.Thread):
         """Fim de um job cancelado: apaga a execução parcial e a cópia de trabalho e marca `cancelled`."""
         self._discard_run(rel)
         try:
-            with contextlib.closing(_connect(self.home)) as con, con:
+            def gravar(con):
                 con.execute("UPDATE jobs SET state='cancelled', run_rel=NULL, error=NULL, seconds=? WHERE id=?",
                             (round(seconds, 3), job["id"]))
                 _close_if_finished(con, job["batch_id"])
+            self._gravar_com_retry(gravar)
         finally:
             self._publish(None)
             with self._lock:
                 self._end_current()
                 self._cancel.clear()
                 self._cancel_req.discard(job["id"])
+        self._limpar_checkout(job)
         self._avisar_bug(job)
+
+    def _gravar_com_retry(self, fn) -> None:
+        """Roda `fn(con)` numa transação, repetindo com espera curta se o banco estiver ocupado
+        (senão o job ficaria `running` para sempre e travaria as outras etapas do bug)."""
+        for tentativa in range(FINISH_TRIES):
+            try:
+                with contextlib.closing(_connect(self.home)) as con, con:
+                    fn(con)
+                return
+            except sqlite3.OperationalError:
+                if tentativa == FINISH_TRIES - 1:
+                    raise
+                time.sleep(0.2 * (tentativa + 1))
+
+    def _limpar_checkout(self, job: dict) -> None:
+        """Fim de um bug da cobertura: apaga o checkout cacheado se nenhuma outra etapa dele está pendente
+        ou em andamento no lote. Um erro aqui só é registrado."""
+        try:
+            with contextlib.closing(_connect(self.home)) as con:
+                r = con.execute("SELECT meta FROM batches WHERE id=?", (job["batch_id"],)).fetchone()
+                if not (r and (json.loads(r["meta"] or "{}")).get("cobertura")):
+                    return
+                resta = con.execute("SELECT COUNT(*) FROM jobs WHERE batch_id=? AND bug_key=? AND id<>? "
+                                    "AND state IN ('pending','running')",
+                                    (job["batch_id"], job["bug_key"], job["id"])).fetchone()[0]
+            if not resta:
+                remove_pristine(self.home, _bug_of(self.settings, job))
+        except Exception as e:      # noqa: BLE001
+            self._record_error(e)
 
     def _discard_run(self, rel: str | None) -> None:
         """Apaga só a execução deste job (as cópias de trabalho são do `execute`, que as remove)."""
@@ -582,14 +683,16 @@ class Worker(threading.Thread):
 
     def _finish_job(self, job: dict, rel, error, seconds: float) -> None:
         try:
-            with contextlib.closing(_connect(self.home)) as con, con:
+            def gravar(con):
                 con.execute("UPDATE jobs SET state='done', run_rel=?, error=?, seconds=? WHERE id=?",
                             (rel, error, round(seconds, 3), job["id"]))
                 _close_if_finished(con, job["batch_id"])
+            self._gravar_com_retry(gravar)
         finally:
             self._publish(None)
             with self._lock:
                 self._end_current()
+        self._limpar_checkout(job)
         self._avisar_bug(job)
 
     def _avisar_bug(self, job: dict) -> None:
@@ -629,8 +732,10 @@ class WorkerPool:
         self._last_error: str | None = None
         self._cancel_req: set[int] = set()       # pedidos compartilhados por todos os workers
         self._interrupt_req: set[int] = set()
+        self._disk = DiskGuard(home, settings)
         self._workers = [Worker(home, settings, index=i, owns_lock=False) for i in range(self.n)]
         for w in self._workers:
+            w._disk = self._disk
             w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
             w._gate, w._on_exit = self._gate, self._worker_exited
             w.on_bug_change = on_bug_change
@@ -688,7 +793,8 @@ class WorkerPool:
     def status(self) -> dict:
         errs = [w._last_error for w in self._workers if w._last_error]
         return {"alive": self.is_alive(), "last_error": self._last_error or (errs[-1] if errs else None),
-                "current": self.current(), "other_instance": self._other, "workers": self.n}
+                "current": self.current(), "other_instance": self._other, "workers": self.n,
+                "aviso_disco": self._disk.aviso}
 
     def currents(self) -> list[dict]:
         out = []

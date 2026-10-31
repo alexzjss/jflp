@@ -662,5 +662,164 @@ class PoolCancelTests(PoolBase):
         self.assertEqual(list_runs(self.home), [])
 
 
+# -- cobertura: checkouts, espaço em disco, nova tentativa --
+
+class CoberturaDiscoTests(PoolBase):
+    def setUp(self):
+        super().setUp()
+        folga = type("Uso", (), {"free": 500 * 1024 ** 3})      # por padrão sobra espaço, qualquer que seja o disco
+        p = mock.patch.object(jq, "_disk_usage", lambda path: folga())
+        p.start()
+        self.addCleanup(p.stop)
+
+    def cob_batch(self, n=1, kinds=("maven", "jaguar2"), cobertura=True):
+        bid = jq.create_batch(self.home, "cob", self.bugs(n), list(kinds), {})
+        if cobertura:
+            with contextlib.closing(jq._connect(self.home)) as con, con:
+                con.execute("UPDATE batches SET meta=? WHERE id=?", ('{"cobertura": true}', bid))
+        return bid
+
+    @staticmethod
+    def fake_exec(home, settings, bug, kind, opts):
+        return f"rel/{bug.bug_id}/{kind}"
+
+    def test_apaga_o_checkout_so_quando_o_bug_acaba(self):
+        bid = self.cob_batch(n=2)
+        chamadas = []
+        with mock.patch.object(jq, "execute", self.fake_exec), \
+                mock.patch.object(jq, "remove_pristine", lambda h, b: chamadas.append(b.key)):
+            self.pool(1).start()
+            self.assertTrue(self.batch_done(bid))
+            self.assertTrue(wait_for(lambda: len(chamadas) == 2))
+        self.assertEqual(sorted(chamadas), ["local/p/0", "local/p/1"])     # uma vez por bug, não por etapa
+
+    def test_checkout_fica_enquanto_ha_etapa_pendente(self):
+        self.cob_batch(n=1, kinds=("maven", "jaguar2"))
+        w = self.worker()
+        chamadas = []
+        with mock.patch.object(jq, "remove_pristine", lambda h, b: chamadas.append(b.key)):
+            job, _ = w._next_job()
+            w._finish_job(job, "rel/a", None, 0.1)
+            self.assertEqual(chamadas, [])            # a segunda etapa ainda está pendente
+            job, _ = w._next_job()
+            w._finish_job(job, "rel/b", None, 0.1)
+            self.assertEqual(chamadas, ["local/p/0"])
+
+    def test_nao_apaga_em_lote_comum(self):
+        bid = self.cob_batch(cobertura=False)
+        with mock.patch.object(jq, "execute", self.fake_exec), \
+                mock.patch.object(jq, "remove_pristine") as rp:
+            self.pool(1).start()
+            self.assertTrue(self.batch_done(bid))
+            time.sleep(0.2)
+        rp.assert_not_called()
+
+    def test_descartar_job_apaga_o_checkout(self):
+        self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        job, _ = w._next_job()
+        with mock.patch.object(jq, "remove_pristine") as rp:
+            w._discard_job(job, None, 0.1)
+        rp.assert_called_once()
+
+    def test_requeue_nao_apaga_o_checkout(self):
+        self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        job, _ = w._next_job()
+        with mock.patch.object(jq, "remove_pristine") as rp:
+            w._requeue_job(job)
+        rp.assert_not_called()
+
+    def test_erro_ao_apagar_so_e_registrado(self):
+        bid = self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        job, _ = w._next_job()
+        with mock.patch.object(jq, "remove_pristine", side_effect=OSError("preso")):
+            w._finish_job(job, "rel/a", None, 0.1)
+        self.assertEqual(self.states(bid), ["done"])
+        self.assertIn("preso", w._last_error)
+
+    def test_pouco_espaco_pausa_so_a_cobertura(self):
+        cob = self.cob_batch(n=1, kinds=("maven",))
+        comum = self.cob_batch(n=1, kinds=("maven",), cobertura=False)
+        uso = type("Uso", (), {"free": 3.2 * 1024 ** 3})
+        with mock.patch.object(jq, "_disk_usage", lambda p: uso()), \
+                mock.patch.object(jq, "execute", self.fake_exec):
+            pool = self.pool(1)
+            pool.start()
+            self.assertTrue(wait_for(lambda: jq.batch_status(self.home, comum)["state"] == "done"))
+            self.assertEqual(jq.batch_status(self.home, cob)["state"], "paused")
+            self.assertEqual(self.states(cob), ["pending"])
+            aviso = pool.status()["aviso_disco"]
+        self.assertIn("3,2 GB livres", aviso)
+        self.assertIn("mínimo 5 GB", aviso)
+        self.assertIn("Cobertura pausada", aviso)
+
+    def test_com_espaco_nao_ha_aviso(self):
+        bid = self.cob_batch(n=1, kinds=("maven",))
+        uso = type("Uso", (), {"free": 50 * 1024 ** 3})
+        with mock.patch.object(jq, "_disk_usage", lambda p: uso()), \
+                mock.patch.object(jq, "execute", self.fake_exec), \
+                mock.patch.object(jq, "remove_pristine"):
+            pool = self.pool(1)
+            pool.start()
+            self.assertTrue(self.batch_done(bid))
+            self.assertIsNone(pool.status()["aviso_disco"])
+
+    def test_minimo_vem_da_configuracao_e_checagem_e_cacheada(self):
+        self.settings.set("cobertura", "min_livre_gb", 1)
+        chamadas = []
+
+        def uso(p):
+            chamadas.append(p)
+            return type("Uso", (), {"free": 2 * 1024 ** 3})()
+        guard = jq.DiskGuard(self.home, self.settings, ttl=60)
+        with mock.patch.object(jq, "_disk_usage", uso):
+            self.assertIsNone(guard.verificar())
+            self.assertIsNone(guard.verificar())
+        self.assertEqual(len(chamadas), 2)       # uma checagem (root e work); a segunda veio do cache
+
+    def test_concluir_tenta_de_novo_com_banco_ocupado(self):
+        bid = self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        job, _ = w._next_job()
+        real, falhas = jq._connect, {"n": 2}
+
+        def conectar(home):
+            if falhas["n"] > 0:
+                falhas["n"] -= 1
+                raise sqlite3.OperationalError("database is locked")
+            return real(home)
+        with mock.patch.object(jq, "_connect", conectar), mock.patch.object(jq.time, "sleep"), \
+                mock.patch.object(jq, "remove_pristine"):
+            w._finish_job(job, "rel/a", None, 0.1)
+        self.assertEqual(self.states(bid), ["done"])
+
+    def test_concluir_desiste_depois_das_tentativas(self):
+        self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        job, _ = w._next_job()
+        with mock.patch.object(jq, "_connect", side_effect=sqlite3.OperationalError("locked")), \
+                mock.patch.object(jq.time, "sleep"):
+            with self.assertRaises(sqlite3.OperationalError):
+                w._finish_job(job, "rel/a", None, 0.1)
+
+    def test_banco_usa_wal(self):
+        with contextlib.closing(jq._connect(self.home)) as con:
+            self.assertEqual(con.execute("PRAGMA journal_mode").fetchone()[0].lower(), "wal")
+
+    def test_fechar_o_app_apaga_a_execucao_parcial(self):
+        self.cob_batch(n=1, kinds=("maven",))
+        w = self.worker()
+        picked = w._next_job()
+        w._abort.set()
+        with mock.patch.object(jq, "execute", self.fake_exec), \
+                mock.patch.object(jq.store, "delete_run") as dr, mock.patch.object(jq, "remove_pristine") as rp:
+            w._run_job(*picked)
+        dr.assert_called_once_with(self.home, "rel/0/maven")
+        rp.assert_not_called()
+        self.assertEqual(jq.get_job(self.home, picked[0]["id"])["state"], "pending")
+
+
 if __name__ == "__main__":
     unittest.main()

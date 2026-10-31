@@ -659,6 +659,17 @@ def _remove_pristine(dest: Path, repo: str | None = None) -> None:
             git(repo, "worktree", "prune", check=False)
 
 
+def remove_pristine(home: Home, bug: Bug) -> None:
+    """Apaga o checkout cacheado do bug (e faz `git worktree prune` no repositório de origem).
+    Sem nada para apagar, não faz nada. Pode levantar se a pasta não puder ser apagada."""
+    dest = _pristine_dir(home, bug)
+    with _LOCKS_GUARD:
+        lock = _LOCKS.setdefault(str(dest), threading.Lock())
+    with lock:      # não apaga no meio de um `prepare` do mesmo bug
+        if dest.exists():
+            _remove_pristine(dest)      # remove o worktree e roda `worktree prune`, ambos sob `repo_lock`
+
+
 def prepare(home: Home, settings: Settings, bug: Bug, log: Path, refresh: bool = False) -> Prepared:
     dest = _pristine_dir(home, bug)
     with _LOCKS_GUARD:
