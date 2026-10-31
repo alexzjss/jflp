@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import secrets
 import sqlite3
 import threading
+import time
 import urllib.request
 from datetime import datetime
 
@@ -31,6 +33,7 @@ TIMEOUT_S = 60
 ESPERA_INICIAL_S = 30
 ESPERA_MAXIMA_S = 900
 ESPERA_OCIOSA_S = 60
+RECONCILIAR_S = 600
 _SITUACAO = {cb.SIT_OK: "OK", cb.SIT_PARCIAL: "parcial", cb.SIT_FALHOU: "falhou", cb.SIT_NAO_EXEC: "não executável",
              cb.SIT_RODANDO: "rodando", cb.SIT_PENDENTE: "pendente"}
 _MAX_TXT = 500
@@ -97,7 +100,9 @@ def linha(home: Home, bug: dict, resumo: str | None = None) -> list:
             falhas = []
         falhas_txt = "; ".join(falhas)[:_MAX_TXT]
         rodou = st.is_success(b.status("maven") or "") or b.status("maven") == st.SEM_TESTE_FALHANDO
-        if rodou and not falhas:
+        if not rodou:
+            bate = ""       # o Maven não chegou a rodar os testes: não há o que comparar
+        elif not falhas:
             bate = "não reproduziu"
         else:
             cat = b.catalogo()
@@ -130,11 +135,44 @@ def linha(home: Home, bug: dict, resumo: str | None = None) -> list:
 
 # ------------------------------------------------------------------ caixa de saída
 
+_log = logging.getLogger("jflp.planilha")
+_falhas: dict[str, dict[str, str]] = {}     # por banco: chave do bug -> erro ao montar a linha
+_falhas_lock = threading.Lock()
+
+
 def _con(home: Home) -> sqlite3.Connection:
     con = jq._connect(home)
     con.execute("CREATE TABLE IF NOT EXISTS planilha_outbox("
-                "bug_key TEXT PRIMARY KEY, linha TEXT, atualizado TEXT, enviado TEXT)")
+                "bug_key TEXT PRIMARY KEY, linha TEXT, atualizado TEXT, enviado TEXT, assinatura TEXT)")
+    if "assinatura" not in {r[1] for r in con.execute("PRAGMA table_info(planilha_outbox)")}:
+        try:
+            con.execute("ALTER TABLE planilha_outbox ADD COLUMN assinatura TEXT")
+        except sqlite3.OperationalError:    # outra conexão migrou primeiro
+            pass
     return con
+
+
+def assinatura(bug: dict) -> str:
+    """Impressão digital barata do estado de um bug (situação + etapas + origem): muda quando a linha deve mudar."""
+    return json.dumps([bug["situacao"], sorted(bug["etapas"].items()), bug.get("origem") or ""],
+                      ensure_ascii=False)
+
+
+def falhas_linha(home: Home) -> dict:
+    """{"n": bugs cuja linha não pôde ser montada, "erro": último motivo}."""
+    with _falhas_lock:
+        f = _falhas.get(str(home.db_path)) or {}
+        return {"n": len(f), "erro": next(reversed(f.values()), None)}
+
+
+def _registrar_falha(home: Home, chave: str, e: BaseException | None) -> None:
+    with _falhas_lock:
+        f = _falhas.setdefault(str(home.db_path), {})
+        f.pop(chave, None)
+        if e is not None:
+            f[chave] = f"{chave}: {e!r}"[-300:]
+    if e is not None:
+        _log.warning("não foi possível montar a linha de %s: %r", chave, e)
 
 
 def _bugs_do_lote(home: Home, chaves: list[str] | None) -> list[dict]:
@@ -170,24 +208,65 @@ def _bugs_do_lote(home: Home, chaves: list[str] | None) -> list[dict]:
     return list(por_bug.values())
 
 
-def _gravar(home: Home, bugs: list[dict]) -> int:
-    agora = datetime.now().isoformat()
+def _ler(home: Home, chaves: list[str]) -> dict[str, tuple[str, str]]:
+    """{chave: (linha, atualizado)} das linhas já na caixa de saída (só as pedidas)."""
+    out = {}
+    with contextlib.closing(_con(home)) as con:
+        for i in range(0, len(chaves), 500):
+            bloco = chaves[i:i + 500]
+            marks = ",".join("?" * len(bloco))
+            for r in con.execute(f"SELECT bug_key, linha, atualizado FROM planilha_outbox WHERE bug_key IN ({marks})",
+                                 bloco):
+                out[r[0]] = (r[1], r[2])
+    return out
+
+
+def _gravar(home: Home, bugs: list[dict], tentativas: int = 3) -> int:
+    """Monta as linhas SEM transação de escrita aberta e grava em transações curtas (blocos de 100).
+
+    Anti-sobrescrita: cada gravação só vale se `atualizado` ainda é o que foi lido antes de montar a linha; se outro
+    escritor mexeu no meio, o bug é remontado a partir do estado atual (na última tentativa grava de qualquer jeito)."""
+    pend = {b["key"]: b for b in bugs}
     n = 0
-    with contextlib.closing(_con(home)) as con, con:
-        antigas = {r[0]: r[1] for r in con.execute("SELECT bug_key, linha FROM planilha_outbox")}
-        for i, bug in enumerate(bugs):
+    for t in range(tentativas):
+        if not pend:
+            break
+        ultima = t == tentativas - 1
+        ant = _ler(home, list(pend))
+        prontas = []
+        for chave, bug in pend.items():
             try:
-                anterior = json.loads(antigas[bug["key"]])[2] if bug["key"] in antigas else None
+                anterior = json.loads(ant[chave][0])[2] if chave in ant else None
             except (ValueError, IndexError, TypeError):
                 anterior = None
             try:
                 row = linha(home, bug, resumo=anterior or None)
-            except Exception:       # noqa: BLE001 - uma linha impossível de montar não trava as outras
+            except Exception as e:      # noqa: BLE001 - uma linha impossível de montar não trava as outras
+                _registrar_falha(home, chave, e)
                 continue
-            con.execute("INSERT INTO planilha_outbox(bug_key, linha, atualizado, enviado) VALUES(?,?,?,NULL) "
-                        "ON CONFLICT(bug_key) DO UPDATE SET linha=excluded.linha, atualizado=excluded.atualizado, "
-                        "enviado=NULL", (bug["key"], json.dumps(row, ensure_ascii=False), f"{agora}#{i:06d}"))
-            n += 1
+            _registrar_falha(home, chave, None)
+            prontas.append((chave, json.dumps(row, ensure_ascii=False), assinatura(bug)))
+        conflitos = []
+        agora = datetime.now().isoformat()
+        for i in range(0, len(prontas), LOTE):
+            with contextlib.closing(_con(home)) as con, con:
+                for j, (chave, texto, ass) in enumerate(prontas[i:i + LOTE]):
+                    marca, velho = f"{agora}#{i + j:06d}", ant.get(chave, (None, None))[1]
+                    if velho is None:
+                        cur = con.execute("INSERT OR IGNORE INTO planilha_outbox(bug_key, linha, atualizado, enviado, "
+                                          "assinatura) VALUES(?,?,?,NULL,?)", (chave, texto, marca, ass))
+                    elif ultima:
+                        cur = con.execute("UPDATE planilha_outbox SET linha=?, atualizado=?, enviado=NULL, "
+                                          "assinatura=? WHERE bug_key=?", (texto, marca, ass, chave))
+                    else:
+                        cur = con.execute("UPDATE planilha_outbox SET linha=?, atualizado=?, enviado=NULL, "
+                                          "assinatura=? WHERE bug_key=? AND atualizado=?",
+                                          (texto, marca, ass, chave, velho))
+                    if cur.rowcount:
+                        n += 1
+                    else:
+                        conflitos.append(chave)
+        pend = {b["key"]: b for b in _bugs_do_lote(home, conflitos)} if conflitos else {}
     return n
 
 
@@ -197,9 +276,23 @@ def enfileirar(home: Home, bug_keys: list[str]) -> None:
         _gravar(home, _bugs_do_lote(home, list(bug_keys)))
 
 
+def _em_blocos(home: Home, bugs: list[dict]) -> int:
+    return sum(_gravar(home, bugs[i:i + LOTE]) for i in range(0, len(bugs), LOTE))
+
+
 def enfileirar_todos(home: Home) -> int:
     """Reenvio completo: todas as linhas do lote de cobertura voltam à caixa de saída. Devolve quantas."""
-    return _gravar(home, _bugs_do_lote(home, None))
+    return _em_blocos(home, _bugs_do_lote(home, None))
+
+
+def reconciliar(home: Home) -> int:
+    """Enfileira os bugs que ainda não estão na caixa de saída ou cujo estado (situação, etapas, origem) mudou
+    desde a última linha gravada: cobre a carga inicial (todos os bugs, os não rodados como pendente) e mudanças
+    feitas fora dos workers (importação, refazer, cancelar)."""
+    lista = _bugs_do_lote(home, None)
+    with contextlib.closing(_con(home)) as con:
+        atuais = {r[0]: r[1] for r in con.execute("SELECT bug_key, assinatura FROM planilha_outbox")}
+    return _em_blocos(home, [b for b in lista if atuais.get(b["key"]) != assinatura(b)])
 
 
 def pendentes(home: Home) -> int:
@@ -250,23 +343,33 @@ def post_http(url: str, body: dict) -> dict:
 
 
 class Enviador(threading.Thread):
-    """Manda em segundo plano as linhas pendentes da caixa de saída; falha nunca perde linha nem derruba o app."""
+    """Manda em segundo plano as linhas pendentes da caixa de saída; falha nunca perde linha nem derruba o app.
+
+    Ao começar (com a URL configurada) e a cada `reconciliar_cada` segundos, enfileira os bugs que faltam ou mudaram."""
 
     def __init__(self, home: Home, settings: Settings, post=None, *, espera_inicial: float = ESPERA_INICIAL_S,
-                 espera_maxima: float = ESPERA_MAXIMA_S, espera_ociosa: float = ESPERA_OCIOSA_S):
+                 espera_maxima: float = ESPERA_MAXIMA_S, espera_ociosa: float = ESPERA_OCIOSA_S,
+                 reconciliar_cada: float | None = RECONCILIAR_S, relogio=time.monotonic):
         super().__init__(name="jflp-planilha", daemon=True)
         self.home, self.settings = home, settings
         self.post = post or post_http
         self._inicial, self._maxima, self._ociosa = espera_inicial, espera_maxima, espera_ociosa
+        self._recon_cada, self._relogio = reconciliar_cada, relogio
         self._espera = espera_inicial
+        self._proximo = 0.0         # antes disso (relógio monotônico) não reenvia, salvo `acordar(forcar=True)`
+        self._prox_recon = 0.0
+        self._forcar = False
         self._ev = threading.Event()
         self._parar = threading.Event()
         self._lock = threading.Lock()
         self._ultimo_ok: str | None = None
         self._erro: str | None = None
+        self._erro_recon: str | None = None
 
-    def acordar(self) -> None:
-        """Manda agora, sem esperar o próximo ciclo."""
+    def acordar(self, forcar: bool = False) -> None:
+        """Manda agora. Em espera por falha, só `forcar=True` (ex.: "Reenviar tudo") ignora o prazo da espera."""
+        if forcar:
+            self._forcar = True
         self._ev.set()
 
     def stop(self) -> None:
@@ -278,15 +381,35 @@ class Enviador(threading.Thread):
             n = pendentes(self.home)
         except sqlite3.Error:
             n = 0
+        f = falhas_linha(self.home)
         with self._lock:
             return {"ultimo_ok": self._ultimo_ok, "pendentes": n, "erro": self._erro,
-                    "configurada": bool(self.settings.get("planilha", "url", ""))}
+                    "configurada": bool(self.settings.get("planilha", "url", "")),
+                    "falhas_linha": f["n"], "erro_linha": self._erro_recon or f["erro"]}
+
+    def _reconciliar(self, agora: float) -> None:
+        if not self._recon_cada or agora < self._prox_recon:
+            return
+        self._prox_recon = agora + self._recon_cada
+        try:
+            reconciliar(self.home)
+            erro = None
+        except Exception as e:      # noqa: BLE001 - não impede o envio do que já está na fila
+            erro = (str(e) or repr(e))[-300:]
+            _log.warning("reconciliação da planilha falhou: %r", e)
+        with self._lock:
+            self._erro_recon = erro
 
     def ciclo(self) -> float:
         """Um passo de envio. Devolve quantos segundos esperar antes do próximo (0 = há mais para mandar)."""
         url = (self.settings.get("planilha", "url", "") or "").strip()
         if not url:
             return self._ociosa
+        agora = self._relogio()
+        forcar, self._forcar = self._forcar, False
+        if not forcar and agora < self._proximo:
+            return self._proximo - agora
+        self._reconciliar(agora)
         try:
             token = garantir_token(self.settings)
             with contextlib.closing(_con(self.home)) as con:
@@ -304,14 +427,15 @@ class Enviador(threading.Thread):
             with self._lock:
                 self._erro = (str(e) or repr(e))[-300:]
                 espera, self._espera = self._espera, min(self._espera * 2, self._maxima)
+                self._proximo = self._relogio() + espera
             return espera
-        agora = datetime.now().isoformat(timespec="seconds")
+        agora_iso = datetime.now().isoformat(timespec="seconds")
         with contextlib.closing(_con(self.home)) as con, con:
             for r in rows:      # só marca se a linha não mudou durante o envio
                 con.execute("UPDATE planilha_outbox SET enviado=? WHERE bug_key=? AND atualizado=?",
-                            (agora, r["bug_key"], r["atualizado"]))
+                            (agora_iso, r["bug_key"], r["atualizado"]))
         with self._lock:
-            self._ultimo_ok, self._erro, self._espera = agora, None, self._inicial
+            self._ultimo_ok, self._erro, self._espera, self._proximo = agora_iso, None, self._inicial, 0.0
         return 0 if len(rows) >= LOTE else self._ociosa
 
     def run(self) -> None:
