@@ -25,11 +25,13 @@ Licença: veja [LICENSE](LICENSE).
 5. [Como o Jaguar 2 é executado](#5-como-o-jaguar-2-é-executado)
 6. [Status e diagnóstico](#6-status-e-diagnóstico)
 7. [Busca automática e receitas](#7-busca-automática-e-receitas)
-8. [Layout da pasta de execução](#8-layout-da-pasta-de-execução)
-9. [Layout do dataset exportado](#9-layout-do-dataset-exportado)
-10. [Referência da linha de comando](#10-referência-da-linha-de-comando)
-11. [Solução de problemas](#11-solução-de-problemas)
-12. [Desenvolvimento](#12-desenvolvimento)
+8. [Cobertura do bugs-dot-jar](#8-cobertura-do-bugs-dot-jar)
+9. [Planilha do Google](#9-planilha-do-google)
+10. [Layout da pasta de execução](#10-layout-da-pasta-de-execução)
+11. [Layout do dataset exportado](#11-layout-do-dataset-exportado)
+12. [Referência da linha de comando](#12-referência-da-linha-de-comando)
+13. [Solução de problemas](#13-solução-de-problemas)
+14. [Desenvolvimento](#14-desenvolvimento)
 
 ## 1. Instalação
 
@@ -74,14 +76,14 @@ cd jflp
 .\jflp.ps1 ui        # ou ./jflp.sh ui
 ```
 
-O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem três telas: **Rodar** (a página inicial), **Resultados** e **Ambiente**. Receitas, exportação do dataset e lotes continuam na linha de comando (seção 10).
+O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem três telas: **Cobertura** (a página inicial), **Resultados** e **Ambiente**. Receitas, exportação do dataset e lotes continuam na linha de comando (seção 12).
 
 **Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, a página inicial abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
 
 **Rodar** (página inicial). Usar a ferramenta é um fluxo só, na mesma tela:
 
 1. **Pasta.** Cole o caminho (ou clique em **Escolher pasta…**, onde o seletor de pastas estiver disponível) de uma destas opções: a pasta do repositório bugs-dot-jar (com vários projetos dentro), um projeto dela (um repositório só) ou um projeto Maven. As pastas usadas recentemente aparecem como botões logo abaixo. Ao abrir uma pasta de coleção do Bugs.jar, ela passa a ser a `bugsjar.root` (a tela avisa "Pasta salva como raiz do Bugs.jar").
-2. **Projetos e bugs.** Numa coleção, cada projeto é uma seção recolhível com seus bugs; "Abrir todos os projetos" abre todos de uma vez. Cada bug aparece com o ID (ex.: `LANG-7`) e o **resumo do JIRA**, que chega logo depois de abrir o projeto (o resumo é lido do git, por isso vem à parte). Você pode buscar por ID ou resumo, marcar e desmarcar os bugs visíveis e filtrar pelo último resultado (nunca rodados, com falha ou OK). A seleção vale entre projetos, e o contador mostra "N bugs em M projetos". Um único envio cria um lote com todos. Os projetos precisam estar clonados: a tela não faz `fetch`, então rode `jflp fetch` antes quando for preciso (seção 10). Em projeto Maven, esta etapa vira a escolha do **Módulo** (ver abaixo).
+2. **Projetos e bugs.** Numa coleção, cada projeto é uma seção recolhível com seus bugs; "Abrir todos os projetos" abre todos de uma vez. Cada bug aparece com o ID (ex.: `LANG-7`) e o **resumo do JIRA**, que chega logo depois de abrir o projeto (o resumo é lido do git, por isso vem à parte). Você pode buscar por ID ou resumo, marcar e desmarcar os bugs visíveis e filtrar pelo último resultado (nunca rodados, com falha ou OK). A seleção vale entre projetos, e o contador mostra "N bugs em M projetos". Um único envio cria um lote com todos. Os projetos precisam estar clonados: a tela não faz `fetch`, então rode `jflp fetch` antes quando for preciso (seção 12). Em projeto Maven, esta etapa vira a escolha do **Módulo** (ver abaixo).
 3. **Ferramentas.** **Maven** e **Jaguar 2** vêm marcados; **Jaguar 1** vem desmarcado. Os testes são os **relevantes do catálogo** (padrão) ou **todos**.
 4. **Opções** (recolhidas). **Busca automática de correções**, ligada por padrão.
 5. **Rodar.** A página não muda de tela: o formulário recolhe numa linha ("12 bugs em 3 projetos · Maven, Jaguar 2") com o botão **Alterar**, e logo abaixo aparece a vista do lote. A URL vira `/rodar?lote=N`; recarregar a página mostra o mesmo lote.
@@ -175,6 +177,12 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `bugsjar.root` | `""` | pasta onde ficam os clones do Bugs.jar (um por projeto) |
 | `bugsjar.projects` | `[]` | projetos do Bugs.jar usados por `fetch` e pela listagem |
 | `bugsjar.url_template` | `https://github.com/bugs-dot-jar/{project}.git` | URL de clone |
+| `cobertura.workers` | `4` | jobs da cobertura rodando em paralelo na interface; na linha de comando, use `jflp batch run --workers N` |
+| `cobertura.work_dir` | `""` | pasta de trabalho dos checkouts da cobertura (ex.: `E:/JFLP/cobertura`); vazio = `work` dentro da pasta do JFLP |
+| `cobertura.legado` | `true` | tenta o perfil legado (JDK 7, Maven 3.0.5) nos bugs Maven |
+| `cobertura.legado_offline` | `true` | inclui a versão offline do perfil legado |
+| `planilha.url` | `""` | URL do app da web do Apps Script (seção 9) |
+| `planilha.token` | `""` | token que o script confere (propriedade `JFLP_TOKEN`); gerado pelo JFLP |
 | `defects4j.home` | `""` | instalação do Defects4J (dentro do WSL no Windows) |
 | `defects4j.wsl_distro` | `""` | distribuição WSL (seção 3) |
 | `defects4j.projects` | Lang, Math, Time, Chart, Closure, Mockito, Jsoup | projetos listados por `jflp bugs d4j` |
@@ -291,7 +299,68 @@ Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale 
 
 `--fix ID` **acrescenta** à lista detectada (não a substitui). "Tentar de novo com esta correção" na página de detalhes da execução também parte das correções detectadas na última tentativa (menos as desligadas) e soma a sugestão. `jflp recipes` lista; `jflp recipes <benchmark>/<projeto>` mostra o arquivo.
 
-## 8. Layout da pasta de execução
+## 8. Cobertura do bugs-dot-jar
+
+A cobertura roda **Maven, Jaguar 1 e Jaguar 2** em **todos os bugs** de uma coleção do Bugs.jar (uma pasta com um clone por projeto), num só lote. Cada bug vira três etapas, uma por ferramenta, e a cobertura mostra o que cada uma achou.
+
+Uma cobertura só existe por vez. `jflp cobertura sincronizar` cria o lote na primeira vez e, nas seguintes, só **acrescenta** os bugs e etapas que ainda não existem: nada é apagado, e rodar de novo não duplica. Se a coleção ganhou projetos, basta sincronizar outra vez.
+
+Fluxo típico:
+
+```text
+jflp fetch                       # clona/atualiza os projetos (bugsjar.root e bugsjar.projects)
+jflp cobertura sincronizar       # cria o lote, ou acrescenta o que faltar (usa bugsjar.root)
+jflp batch run --workers 4       # roda a fila em primeiro plano até esvaziar
+jflp cobertura status            # bugs por situação e por projeto, ritmo e tempo restante
+jflp cobertura refazer           # devolve à fila as etapas com falha (--todos: todas)
+jflp batch run                   # processa o que foi devolvido
+```
+
+Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo restante e o estado da planilha) e a **Tabela** (um bug por linha, filtrável por projeto, situação ou texto). Pausar, parar, continuar e refazer ficam nessa tela. Pausar deixa o job atual terminar; parar encerra os processos em andamento e devolve os jobs à fila. Ao abrir o JFLP Studio de novo, execuções que ficaram pela metade voltam a pendentes, e a cobertura retoma sozinha se estava rodando quando o programa fechou.
+
+**Situação de cada bug:**
+
+| Situação | Significado |
+|---|---|
+| OK | as três etapas passaram |
+| parcial | algumas etapas passaram e outras falharam |
+| falhou | nenhuma etapa passou |
+| não executável | o projeto é inválido ou só roda com um perfil legado indisponível |
+| rodando / pendente | em andamento ou ainda na fila |
+
+**Configuração** (seção `[cobertura]` do `config.toml`, veja a seção 4):
+
+- `workers` (padrão `4`): quantos jobs rodam em paralelo. Cada job roda um Maven ou um Jaguar inteiro, então reduza o valor se a máquina ficar sem memória.
+- `work_dir`: pasta de trabalho dos checkouts e arquivos temporários. Para não encher o disco do sistema, aponte para outra unidade, por exemplo `work_dir = 'E:/JFLP/cobertura'`. Se a unidade não estiver disponível, o JFLP avisa e usa a pasta padrão. As execuções (`runs/`) e o banco `jflp.db` continuam na pasta do JFLP.
+- `legado` e `legado_offline` (padrão `true`): nos bugs Maven da cobertura, quando o perfil moderno falha, o JFLP tenta o perfil legado (JDK 7 e Maven 3.0.5); com `legado_offline`, também a versão offline desse perfil. Desligue se não quiser esses perfis.
+
+Quando o lote termina, `jflp cobertura refazer` reenfileira só o que falhou; depois de corrigir um problema do ambiente (um JDK ou Maven que faltava, por exemplo), esse é o jeito de rodar de novo sem refazer o que já deu certo.
+
+**Importar resultados do pipeline PowerShell.** Se você já rodou o pipeline avulso, `jflp cobertura importar <pasta>` (pasta `relatorios_cobertura`, com `<projeto>/<bug>/summary.json`) traz os resultados de Maven e Jaguar 1 para o lote. Os bugs importados aparecem marcados como importados, com o Jaguar 2 ainda pendente. Importar de novo não duplica.
+
+## 9. Planilha do Google
+
+A cobertura pode ir sendo enviada para uma **planilha do Google**: cada bug concluído vira uma linha na aba **Bugs** (atualizada no lugar, sem duplicar), e a aba **Resumo** é recalculada com totais por projeto. O envio roda em segundo plano, com nova tentativa e espera crescente quando falha (sem internet ou cota do Apps Script). As linhas ficam numa caixa de saída no banco, então nada se perde se o programa fechar. Quando algo falha, a tela Cobertura mostra o erro e há quanto tempo a planilha não recebe dados.
+
+A planilha recebe os dados por um pequeno script do Apps Script, publicado como **app da web**. O script está em `tools/planilha/Code.gs`. Para ligar:
+
+1. Crie uma planilha em branco no Google Sheets.
+2. No menu da planilha, abra **Extensões > Apps Script**.
+3. Apague o conteúdo do arquivo `Code.gs` e cole o conteúdo inteiro de `tools/planilha/Code.gs`.
+4. Clique em **Salvar**.
+5. Abra **Configurações do projeto** (ícone de engrenagem) > **Propriedades do script** e adicione a propriedade `JFLP_TOKEN` com o token mostrado na tela **Ambiente** do JFLP Studio (campo da planilha).
+6. Clique em **Implantar > Nova implantação**.
+7. Em tipo, escolha **App da web**. Em **Executar como**, escolha **Eu**. Em **Quem pode acessar**, escolha **Qualquer pessoa**.
+8. Clique em **Implantar** e autorize o acesso quando o Google pedir.
+9. Copie a **URL do app da web**.
+10. No JFLP Studio, abra a tela **Ambiente**, vá ao campo da **Planilha**, cole a URL e salve.
+11. Ainda na tela **Ambiente**, clique em **Reenviar tudo** para mandar todas as linhas da cobertura. Pela linha de comando, `jflp cobertura planilha --reenviar` faz o mesmo e espera o envio terminar.
+
+O token protege a planilha: quem não souber o token não consegue gravar nela. Não o compartilhe.
+
+Depois de alterar o `Code.gs`, publique a mudança com **Implantar > Gerenciar implantações > Editar > Nova versão**; a URL continua a mesma.
+
+## 10. Layout da pasta de execução
 
 Cada execução é uma pasta nova (nunca sobrescrita). Ela é gravada em `.<nome>.partial/`, renomeada ao final e seus arquivos viram somente leitura. A pasta é a fonte da verdade; o índice (`jflp.db`) pode ser reconstruído com `jflp reindex`. Execuções que ficaram pela metade viram `interrompido` quando a fila (interface ou `jflp batch run`) é iniciada.
 
@@ -313,7 +382,7 @@ runs/<benchmark>/<projeto>/<bug>/<AAAAMMDD-HHMMSS>-<tipo>/
 
 `jaguar2.csv` **não tem linha de cabeçalho**: colunas `classe,linha,cef,cnf,cep,cnp,susp` (só linhas com `susp > 0`). Para apagar uma execução à mão, remova antes o atributo somente leitura dos arquivos.
 
-## 9. Layout do dataset exportado
+## 11. Layout do dataset exportado
 
 `jflp export` pega, para cada bug da seleção, a **última execução Jaguar 2 bem-sucedida** (`ok` ou `ok_testes_falhando`) e monta, em `datasets/<nome>/` (o nome não pode já existir):
 
@@ -329,7 +398,7 @@ O `jaguar2.csv` exportado também **não tem linha de cabeçalho** (colunas `cla
 
 Colunas do manifest: `benchmark, project, bug, status, test_scope, n_tests, n_failed, jdk, maven, jaguar2_version, recipe, path`. Bugs sem execução bem-sucedida entram com o status da última tentativa e `path` vazio, para a taxa de sucesso ficar explícita; além dos status da seção 6, o manifest usa `sem_execucao`, `cancelado` e `desconhecido` (job que terminou com erro, sem execução gravada). `jaguar2_version` vem do plano do POM da execução usada (se não houver registro, da configuração no momento da exportação). Os arquivos copiados para o dataset são graváveis (as execuções originais continuam somente leitura).
 
-## 10. Referência da linha de comando
+## 12. Referência da linha de comando
 
 Toda ação da interface tem um comando equivalente. Use `jflp <comando> --help` para ver o uso. Em lançadores: `.\jflp.ps1 <comando>` / `./jflp.sh <comando>`.
 
@@ -351,6 +420,11 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 | `jflp batch create <nome> <tipos> <bug>...` | cria um lote; `tipos` separados por vírgula (`maven,jaguar2`) |
 | `jflp batch run` | roda a fila em primeiro plano até esvaziar (Ctrl+C espera o job atual; um 2º Ctrl+C mata o Maven e devolve o job à fila). Recusa se outra instância (`jflp ui`) já processa a fila |
 | `jflp batch status <id>` | situação e resumo por projeto |
+| `jflp cobertura sincronizar [pasta]` | cria o lote de cobertura ou acrescenta os bugs e etapas que faltam; sem `pasta`, usa `bugsjar.root` |
+| `jflp cobertura status` | resumo da cobertura: concluídos, bugs por situação e por projeto, ritmo e tempo restante |
+| `jflp cobertura importar <pasta>` | importa os resultados do pipeline PowerShell (`relatorios_cobertura`) para o lote |
+| `jflp cobertura refazer [--todos]` | devolve à fila as etapas com falha (`--todos`: todas as concluídas); depois rode `jflp batch run` |
+| `jflp cobertura planilha [--reenviar]` | sem opção, mostra o estado da caixa de saída; `--reenviar` manda todas as linhas da cobertura para a planilha e espera o envio terminar |
 | `jflp export <nome> [bug...] [--batch ID]` | exporta o dataset (informe `--batch` **ou** bugs) |
 | `jflp recipes [benchmark/projeto]` | lista as receitas, ou mostra a de um projeto |
 | `jflp reindex` | reconstrói o índice varrendo `runs/` |
@@ -373,7 +447,7 @@ jflp export meu-dataset --batch 1
 
 Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 
-## 11. Solução de problemas
+## 13. Solução de problemas
 
 - **"JDK N não encontrado"** (`jdk_incompativel` com causa de ferramenta ausente): baixe o JDK na tela Ambiente (`jflp tools get jdk 11`) ou aponte-o em `tools.jdks`. O Jaguar 2 usa JDK 11; o Jaguar 1, JDK 8.
 - **Maven bloqueia repositório `http`** ("Blocked mirror for repositories", `maven-default-http-blocker`): projetos antigos usam repositórios `http://`, que o Maven ≥ 3.8.1 bloqueia. O diagnóstico sugere primeiro a correção **`unblock-http`** (funciona também com o Maven ≥ 3.9.9 que o Jaguar 2 exige) e depois o **Maven 3.6.3** (`--maven 3.6.3`, ou receita com `maven = "3.6.3"`). Baixe-o em `jflp tools get maven 3.6.3`.
@@ -396,7 +470,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 - **Falha ao instalar com `[full]`** (pywebview/zstandard sem wheel): o lançador instala sem o extra; `--window` não funcionará, e o checkout sai em `.zip`.
 - **A interface não abre**: rode `jflp ui --no-browser` e abra o endereço mostrado; a porta fixa é `--port` ou `ui.port`.
 
-## 12. Desenvolvimento
+## 14. Desenvolvimento
 
 ```text
 python -m venv .venv

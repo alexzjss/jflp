@@ -1,6 +1,7 @@
 import contextlib
 import io
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -12,6 +13,9 @@ from sbfl import cli
 from sbfl.adapters.base import Bug
 from sbfl.home import Home, load_settings
 from sbfl.toolchain.profiles import MissingTool
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from bugsjar_fixture import make_bugsjar_git
 
 
 def _run_main(argv, home_dir):
@@ -202,6 +206,113 @@ class CliTests(unittest.TestCase):
         rc, out, _ = _run_main(["reindex"], h.root)
         self.assertEqual(rc, 0)
         self.assertIn("0", out)
+
+
+class CoberturaCliTests(unittest.TestCase):
+    """Comandos `jflp cobertura ...`: uma colecao falsa do Bugs.jar com um projeto e dois bugs (6 jobs)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.base = Path(tempfile.mkdtemp(prefix="jflp_cobmolde_"))
+        (cls.base / "colecao").mkdir()
+        repo = make_bugsjar_git(cls.base / "src", ids=("A-1", "A-2"))
+        shutil.move(str(repo), str(cls.base / "colecao" / "maven"))
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.base, ignore_errors=True)
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="jflp_cobcli_"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.h = self.tmp / "h"
+        self.root = self.tmp / "colecao"
+        shutil.copytree(self.base / "colecao", self.root)
+
+    def _sincronizar(self):
+        return _run_main(["cobertura", "sincronizar", str(self.root)], self.h)
+
+    def test_cli_cobertura_sincronizar(self):
+        rc, out, err = self._sincronizar()
+        self.assertEqual(rc, 0, err)
+        self.assertIn("2 bugs", out)
+        self.assertIn("6 jobs novos", out)
+        rc, out, _ = self._sincronizar()
+        self.assertEqual(rc, 0)
+        self.assertIn("0 jobs novos", out)
+
+    def test_cli_cobertura_sincronizar_usa_bugsjar_root(self):
+        self.h.mkdir(parents=True)
+        (self.h / "config.toml").write_text(f"[bugsjar]\nroot = '{self.root}'\n", encoding="utf-8")
+        rc, out, err = _run_main(["cobertura", "sincronizar"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("2 bugs", out)
+
+    def test_cli_cobertura_sincronizar_sem_pasta_recusa(self):
+        rc, out, err = _run_main(["cobertura", "sincronizar"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("bugsjar.root", err)
+
+    def test_cli_cobertura_status(self):
+        self._sincronizar()
+        rc, out, err = _run_main(["cobertura", "status"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("0 de 2 bugs concluídos", out)
+        self.assertIn("pendente", out)
+
+    def test_cli_cobertura_status_sem_lote(self):
+        rc, out, err = _run_main(["cobertura", "status"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("sincronizar", err)
+
+    def test_cli_cobertura_refazer(self):
+        self._sincronizar()
+        with mock.patch("sbfl.cobertura.refazer", return_value=2) as rf:
+            rc, out, err = _run_main(["cobertura", "refazer"], self.h)
+            self.assertEqual(rc, 0, err)
+            self.assertTrue(rf.call_args.kwargs["so_falhas"])
+            self.assertIn("2", out)
+            rc, out, err = _run_main(["cobertura", "refazer", "--todos"], self.h)
+            self.assertFalse(rf.call_args.kwargs["so_falhas"])
+
+    def test_cli_cobertura_importar_sem_lote_informa_erro(self):
+        rc, out, err = _run_main(["cobertura", "importar", str(self.root)], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("sincronize", out + err)
+
+    def _com_url(self, url="https://script.example/exec"):
+        self._sincronizar()
+        cfg = load_settings(Home(self.h).ensure())
+        cfg.set("planilha", "url", url)
+        cfg.save()
+
+    def test_cli_cobertura_planilha_reenviar(self):
+        from sbfl import planilha as pl
+        self._com_url()
+        enviados = []
+
+        def post(url, body):
+            enviados.append(body)
+            return {"ok": True, "n": len(body["linhas"])}
+        with mock.patch("sbfl.planilha.post_http", side_effect=post):
+            rc, out, err = _run_main(["cobertura", "planilha", "--reenviar"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(sum(len(b["linhas"]) for b in enviados), 2)
+        self.assertEqual(pl.pendentes(Home(self.h)), 0)
+        self.assertIn("2 linha(s)", out)
+
+    def test_cli_cobertura_planilha_reenviar_sem_url(self):
+        self._sincronizar()
+        rc, out, err = _run_main(["cobertura", "planilha", "--reenviar"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("URL", err)
+
+    def test_cli_cobertura_planilha_reenviar_erro_do_app(self):
+        self._com_url()
+        with mock.patch("sbfl.planilha.post_http", return_value={"ok": False, "erro": "token"}):
+            rc, out, err = _run_main(["cobertura", "planilha", "--reenviar"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("recusou", err)
 
 
 if __name__ == "__main__":
