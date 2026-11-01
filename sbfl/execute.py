@@ -16,7 +16,7 @@ from . import proc, recipes
 from .proc import NO_WINDOW
 from . import status as st
 from .adapters.base import Bug
-from .autosearch import candidates, deep_merge, effective_jdk_maven, effective_key
+from .autosearch import attempt_cap, candidates, deep_merge, effective_jdk_maven, effective_key
 from .diagnose import Diagnosis, _read_tail, classify
 from .errors import StageError
 from .home import Home, Settings
@@ -214,8 +214,8 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
 
         recipe = recipes.find(home, bug, kind)
         first = _first_config(settings, recipe, opts)
-        if first.params.get("max_attempts"):     # ex.: lote de cobertura pede mais tentativas (perfis legados)
-            max_attempts = max(max_attempts, int(first.params["max_attempts"]))
+        # lote de cobertura: Maven pede mais tentativas (perfis legados); os Jaguar usam cobertura.max_tentativas_jaguar
+        max_attempts = attempt_cap(settings, first.params, kind)
         if opts.tests:
             first = replace(first, test_scope="relevant")
         if opts.fixes_add:

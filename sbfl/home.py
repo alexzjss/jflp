@@ -25,7 +25,8 @@ DEFAULTS = {
     "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": [], "port_aware": False},
     "cobertura": {"workers": 4, "work_dir": "", "legado": True, "legado_offline": True,
                   "min_livre_gb": 5,      # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
-                  "kinds": ["maven", "jaguar1", "jaguar2"]},    # etapas que a cobertura roda; as outras ficam na fila
+                  "kinds": ["maven", "jaguar1", "jaguar2"],    # etapas que a cobertura roda; as outras ficam na fila
+                  "max_tentativas_jaguar": 4},    # tentativas por bug nos Jaguar (1 a 8); o Maven segue com 8 (legado)
     "planilha": {"url": "", "token": ""},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",

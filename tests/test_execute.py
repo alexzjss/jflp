@@ -11,7 +11,7 @@ from unittest import mock
 from sbfl import execute as ex
 from sbfl import recipes
 from sbfl.adapters.base import Bug
-from sbfl.autosearch import candidates
+from sbfl.autosearch import attempt_cap, candidates
 from sbfl.diagnose import Diagnosis, Suggestion
 from sbfl.diffgt import FaultLine
 from sbfl.errors import StageError
@@ -534,6 +534,57 @@ class LegadoCandidatesTest(Base):
             more = candidates(AttemptConfig(params={"cobertura": True, "max_attempts": 8}), Diagnosis("x"), "maven", self.settings)
         self.assertEqual(len(few), 3)
         self.assertEqual(more[-1].jdk, 7)
+
+
+class TentativasCoberturaTest(Base):
+    """Jobs de cobertura: os Jaguar usam cobertura.max_tentativas_jaguar; o Maven segue com o do lote."""
+
+    def cob(self):
+        return ex.RunOptions(params={"cobertura": True, "max_attempts": 8})
+
+    def test_jaguar2_cobertura_para_em_4_mesmo_com_lote_pedindo_8(self):
+        _, run = self.go(lambda n, c: "sniffer", self.cob())
+        self.assertEqual(run["attempts"], 4)
+        self.assertEqual(len(self.cfgs), 4)
+
+    def test_setting_muda_o_limite_na_hora(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        _, run = self.go(lambda n, c: "sniffer", self.cob())
+        self.assertEqual(run["attempts"], 2)
+
+    def test_setting_e_limitado_de_1_a_8(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 50)
+        self.assertEqual(attempt_cap(self.settings, {"cobertura": True}, "jaguar2"), 8)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 0)
+        self.assertEqual(attempt_cap(self.settings, {"cobertura": True}, "jaguar1"), 1)
+
+    def test_maven_cobertura_continua_com_8(self):
+        params = {"cobertura": True, "max_attempts": 8}
+        self.assertEqual(attempt_cap(self.settings, params, "maven"), 8)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.assertEqual(attempt_cap(self.settings, params, "maven"), 8)
+
+    def test_maven_cobertura_roda_ate_8_tentativas(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.settings.set("cobertura", "legado", False)
+        with mock.patch.object(ex, "run_maven", self.fake_runner(lambda n, c: "sniffer")), \
+                mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch("sbfl.autosearch.JDKS", (8, 11, 17, 21, 6, 5, 4, 3, 2, 1)):
+            ex.execute(self.home, self.settings, BUG, "maven", self.cob())
+        self.assertGreater(len(self.cfgs), 2)
+        self.assertLessEqual(len(self.cfgs), 8)
+
+    def test_fora_da_cobertura_vale_run_max_attempts(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        _, run = self.go(lambda n, c: "sniffer")
+        self.assertEqual(run["attempts"], 6)
+        self.assertEqual(attempt_cap(self.settings, {}, "jaguar2"), 6)
+
+    def test_candidates_nao_monta_lista_maior_que_o_limite(self):
+        first = AttemptConfig(params={"cobertura": True, "max_attempts": 8})
+        self.assertEqual(len(candidates(first, Diagnosis("x"), "jaguar2", self.settings)), 3)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.assertEqual(len(candidates(first, Diagnosis("x"), "jaguar2", self.settings)), 1)
 
 
 if __name__ == "__main__":

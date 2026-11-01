@@ -95,6 +95,19 @@ def _legacy(first: AttemptConfig, kind: str, settings) -> list[AttemptConfig]:
     return out
 
 
+def attempt_cap(settings, params: dict, kind: str) -> int:
+    """Máximo de tentativas por bug. Cobertura nos Jaguar usa `cobertura.max_tentativas_jaguar` (1 a 8; as
+    finais quase nunca resolvem); o Maven mantém o do lote (perfis legados); fora da cobertura vale run.max_attempts."""
+    base = int(settings.get("run", "max_attempts", 6))
+    if params.get("cobertura") and kind in ("jaguar1", "jaguar2"):
+        try:
+            n = int(settings.get("cobertura", "max_tentativas_jaguar", 4))
+        except (TypeError, ValueError):
+            n = 4
+        return min(8, max(1, n))
+    return max(base, int(params.get("max_attempts") or 0))
+
+
 def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
                detected: set[str] | None = None, toolenv: dict | None = None) -> list[AttemptConfig]:
     """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir (pela configuração efetiva,
@@ -119,6 +132,6 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
         if k not in seen:
             seen.add(k)
             result.append(c)
-    cap = max(int(settings.get("run", "max_attempts", 6)), int(first.params.get("max_attempts") or 0))
+    cap = attempt_cap(settings, first.params, kind)
     limit = max(0, cap - 1)
     return result[:limit]

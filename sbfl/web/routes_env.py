@@ -29,6 +29,7 @@ JDK_LEGADO = (7,)
 MAVEN_LEGADO = ("3.0.5",)
 WORKERS_MAX = 12
 ESPACO_MAX_GB = 500
+TENTATIVAS_MAX = 8
 KIND_LABEL = {"jaguar2": "Jaguar 2", "jaguar1": "Jaguar 1", "maven": "Maven puro"}
 # versão de Maven oferecida no botão quando falta um Maven para o perfil
 MAVEN_DOWNLOAD = {"maven": "3.6.3", "jaguar1": "3.6.3", "jaguar2": "3.9.9"}
@@ -168,6 +169,7 @@ def _cobertura_ctx(request: Request) -> dict:
     return {"workers": cob.get("workers", 4), "work_dir": cob.get("work_dir", "") or "",
             "legado": bool(cob.get("legado", True)), "legado_offline": bool(cob.get("legado_offline", True)),
             "min_livre_gb": cob.get("min_livre_gb", 5),
+            "max_tentativas_jaguar": cob.get("max_tentativas_jaguar", 4),
             "paralelo_j1": bool(st.settings.get("jaguar1", "port_aware", False)),
             "em_uso": str(st.home.work),          # a pasta que a execução usa agora (já com o padrão aplicado)
             "aviso": getattr(st, "aviso_work_dir", None)}
@@ -189,7 +191,7 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
         "jdk_options": JDK_OPTIONS, "maven_options": MAVEN_OPTIONS,
         "jdk_legado": JDK_LEGADO, "maven_legado": MAVEN_LEGADO,
         "planilha": _planilha_ctx(request), "cobertura": _cobertura_ctx(request),
-        "workers_max": WORKERS_MAX, "espaco_max_gb": ESPACO_MAX_GB,
+        "workers_max": WORKERS_MAX, "tentativas_max": TENTATIVAS_MAX, "espaco_max_gb": ESPACO_MAX_GB,
     }
 
 
@@ -367,9 +369,12 @@ def reenviar_planilha(request: Request):
 @router.post("/ambiente/cobertura", response_class=HTMLResponse)
 def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str = Form(""),
                      legado: bool = Form(False), legado_offline: bool = Form(False),
-                     min_livre_gb: str = Form("5"), jaguar1_paralelo: bool = Form(False)):
+                     min_livre_gb: str = Form("5"), jaguar1_paralelo: bool = Form(False),
+                     max_tentativas_jaguar: str | None = Form(None)):
     st = request.app.state
-    valores = {"workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline,
+    if max_tentativas_jaguar is None:     # formulário sem o campo: mantém o valor atual
+        max_tentativas_jaguar = str(st.settings.get("cobertura", "max_tentativas_jaguar", 4))
+    valores = {"max_tentativas_jaguar": max_tentativas_jaguar, "workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline,
                "min_livre_gb": min_livre_gb, "paralelo_j1": jaguar1_paralelo}
     try:
         n = int(workers.strip())
@@ -385,6 +390,13 @@ def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str =
     if not 1 <= gb <= ESPACO_MAX_GB:
         return _erro_ambiente(request, "cobertura",
                               f"O espaço mínimo vai de 1 a {ESPACO_MAX_GB} GB: digite um número inteiro.", valores)
+    try:
+        tent = int(max_tentativas_jaguar.strip())
+    except ValueError:
+        tent = 0
+    if not 1 <= tent <= TENTATIVAS_MAX:
+        return _erro_ambiente(request, "cobertura", f"As tentativas por bug vão de 1 a {TENTATIVAS_MAX}: "
+                                                    "digite um número inteiro.", valores)
     wd = work_dir.strip().strip('"')
     if wd and not Path(wd).is_absolute():
         return _erro_ambiente(request, "cobertura", "A pasta de trabalho precisa de um caminho absoluto.", valores)
@@ -394,6 +406,7 @@ def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str =
     settings.set("cobertura", "legado", bool(legado))
     settings.set("cobertura", "legado_offline", bool(legado_offline))
     settings.set("cobertura", "min_livre_gb", gb)
+    settings.set("cobertura", "max_tentativas_jaguar", tent)
     settings.set("jaguar1", "port_aware", bool(jaguar1_paralelo))
     settings.save()
     return _volta("cobertura", "Configuração salva. Workers e pasta de trabalho valem depois de reiniciar "

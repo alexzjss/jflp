@@ -78,6 +78,9 @@
     <label>Espaço mínimo livre no disco (1 a {{ espaco_max_gb }} GB)
       <input type="number" name="min_livre_gb" min="1" max="{{ espaco_max_gb }}" value="{{ cobertura.min_livre_gb }}"></label>
     <p class="vazio">Com menos espaço livre que isso, a cobertura pausa sozinha e avisa o motivo.</p>
+    <label>Tentativas por bug nos Jaguar (1 a {{ tentativas_max }})
+      <input type="number" name="max_tentativas_jaguar" min="1" max="{{ tentativas_max }}" value="{{ cobertura.max_tentativas_jaguar }}"></label>
+    <p class="vazio">Menos tentativas = mais rápido; as tentativas finais quase nunca resolvem. O Maven continua com até 8 (perfis legados).</p>
     <label><input type="checkbox" name="legado" {{ 'checked' if cobertura.legado }}> Usar o perfil legado (JDK 7 + Maven 3.0.5) quando o bug pedir</label>
     <label><input type="checkbox" name="legado_offline" {{ 'checked' if cobertura.legado_offline }}> Legado offline (dependências antes, num JDK 8)</label>
     <label><input type="checkbox" name="jaguar1_paralelo" {{ 'checked' if cobertura.paralelo_j1 }}> Jaguar 1 em paralelo (o jar do Jaguar 1 aceita -Djaguar.port)</label>
