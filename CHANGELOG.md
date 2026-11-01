@@ -20,7 +20,7 @@ Todas as mudanças relevantes deste projeto estão aqui. O formato segue o [Keep
 
 ### Alterado
 
-- A página inicial passa a ser a **Cobertura**; as telas antigas (Painel, Executar, Bugs, Lotes, Fila, Comparar, Receitas, Exportar) foram removidas em favor de Cobertura, Resultados e Ambiente.
+- A página inicial passa a ser a **Cobertura**. Na barra lateral, a Cobertura toma o lugar do link "Rodar" (a tela de execução avulsa continua em `/rodar`); Resultados e Ambiente seguem.
 - Menos tentativas nos Jaguar da cobertura (de 8 para 4): na medição, a maior parte do tempo ia para bugs que não se recuperavam.
 - O Jaguar 1 da cobertura roda um job por vez por padrão (`jaguar1.port_aware = false`), porque o jar 0.0.6 não aceita escolher a porta.
 - O checkout de cada bug é apagado ao fim do bug, e o banco usa WAL, para a cobertura caber no disco.

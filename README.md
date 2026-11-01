@@ -1,4 +1,6 @@
-# JFLP Studio
+<p align="center"><img src="docs/img/logo.png" alt="Logotipo do JFLP Studio" width="112"></p>
+
+<h1 align="center">JFLP Studio</h1>
 
 Ferramenta local (Windows e Arch Linux) para rodar **Maven puro**, **Jaguar 2** (principal) e **Jaguar 1** (compatibilidade) sobre versões defeituosas de projetos Java, guardar os **resultados brutos** de cada execução e compará-los. Serve para gerar, em escala, dados de cobertura de linhas (espectros) com o Jaguar 2 a partir de benchmarks como Defects4J e Bugs.jar.
 
