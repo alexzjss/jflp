@@ -2,6 +2,8 @@
 
 Ferramenta local (Windows e Arch Linux) para rodar **Maven puro**, **Jaguar 2** (principal) e **Jaguar 1** (compatibilidade) sobre versões defeituosas de projetos Java, guardar os **resultados brutos** de cada execução e compará-los. Serve para gerar, em escala, dados de cobertura de linhas (espectros) com o Jaguar 2 a partir de benchmarks como Defects4J e Bugs.jar.
 
+O uso principal hoje é a **cobertura do bugs-dot-jar** (seção 8): Maven, Jaguar 1 e Jaguar 2 sobre todos os bugs da coleção, com vários workers em paralelo, retomável e com os resultados indo sozinhos para uma planilha do Google (seção 9). Para onde o projeto vai: [docs/ROADMAP.md](docs/ROADMAP.md). O que mudou em cada versão: [CHANGELOG.md](CHANGELOG.md).
+
 O que ela faz:
 
 - roda o Maven e o Jaguar 2 "limpos": o Jaguar 2 usa um POM gerado (`jaguar2-pom.xml`) ao lado do original, que nunca é alterado;
@@ -9,7 +11,7 @@ O que ela faz:
 - distingue **falha de teste** (é o bug, é dado) de **falha de infraestrutura** (build, JDK, plugin, Jaguar), diagnostica a segunda em português e tenta a busca automática de correções;
 - grava cada execução numa pasta imutável (logs completos, saídas puras, ambiente exato, checkout);
 - mostra, por bug, o que o Maven, o Jaguar 1 e o Jaguar 2 acusaram, com o veredito contra o defeito catalogado no Bugs.jar e a concordância entre os dois Jaguar;
-- roda lotes em fila sequencial, retomável após fechar o programa;
+- roda lotes numa fila com N workers em paralelo (a cobertura usa vários; um lote comum, por padrão, um só), retomável após fechar o programa;
 - exporta um dataset (saídas puras do Jaguar 2 + `manifest.csv/json`) pronto para publicar, pela linha de comando.
 
 A ferramenta **não calcula** fórmulas SBFL nem EXAM: o score de cada linha é o que o próprio Jaguar grava.
@@ -76,7 +78,7 @@ cd jflp
 .\jflp.ps1 ui        # ou ./jflp.sh ui
 ```
 
-O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem três telas: **Cobertura** (a página inicial), **Resultados** e **Ambiente**. Receitas, exportação do dataset e lotes continuam na linha de comando (seção 12).
+O servidor sobe em `127.0.0.1` (porta livre, ou `--port`) e abre o navegador; `--no-browser` não abre, `--window` usa uma janela própria (pywebview). `--app` abre uma janela de app do Edge/Chrome/Chromium (sem barra de endereço) e encerra o servidor quando você a fecha; se o app já estiver aberto, só abre a janela dele. A barra lateral tem três telas: **Cobertura** (a página inicial), **Resultados** e **Ambiente**. Receitas, exportação do dataset e lotes comuns continuam na linha de comando (seção 12); a cobertura tem tela própria (seção 8).
 
 **Assistente de primeiro uso** (`/bem-vindo`). Enquanto o perfil do Jaguar 2 não estiver completo, a página inicial abre o assistente. Ele mostra o que já existe (Git, perfis Jaguar 2, Maven puro e Jaguar 1, dependências do Jaguar 2 no `m2/`) e o botão **Preparar tudo** (ou **Só o essencial**). Antes de baixar, a tela lista o endereço, o tamanho e o destino de cada item. Depois baixa tudo em sequência, pula o que já existe e, se um item falhar, segue para os outros. "Pular por agora" dispensa o assistente, e ele continua acessível pela tela Ambiente.
 
@@ -168,7 +170,7 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `jaguar1.timeout_s` | `3600` | tempo limite do Jaguar 1 |
 | `jaguar1.max_retries` | `6` | recuperações de crash da JVM do Jaguar 1 |
 | `jaguar1.jvm_args` | `[]` | argumentos extras da JVM do Jaguar 1 |
-| `jaguar1.port_aware` | `false` | `true` roda jobs do Jaguar 1 em paralelo (o jar precisa aceitar `-Djaguar.port`); `false` roda um de cada vez |
+| `jaguar1.port_aware` | `false` | `true` roda jobs do Jaguar 1 em paralelo, e o jar precisa aceitar `-Djaguar.port`. **O jar atual (0.0.6) não aceita**, então deixe `false`: o Jaguar 1 roda um job de cada vez |
 | `run.test_scope` | `relevant` | `relevant` (só testes relevantes) ou `all` (suíte inteira) |
 | `run.timeout_s` | `7200` | tempo limite de cada processo Maven |
 | `run.archive_checkout` | `true` | arquiva o checkout inteiro na pasta da execução (pode ocupar muito disco) |
@@ -178,7 +180,9 @@ Fica em `<pasta do JFLP>/config.toml`; a tela Ambiente também grava nele. **O a
 | `bugsjar.root` | `""` | pasta onde ficam os clones do Bugs.jar (um por projeto) |
 | `bugsjar.projects` | `[]` | projetos do Bugs.jar usados por `fetch` e pela listagem |
 | `bugsjar.url_template` | `https://github.com/bugs-dot-jar/{project}.git` | URL de clone |
-| `cobertura.workers` | `4` | jobs da cobertura rodando em paralelo na interface; na linha de comando, use `jflp batch run --workers N` |
+| `cobertura.workers` | `4` | jobs da cobertura rodando em paralelo na interface; muda ao vivo no Painel (de 1 a 12), sem reiniciar. Na linha de comando, use `jflp batch run --workers N` |
+| `cobertura.kinds` | `["maven", "jaguar1", "jaguar2"]` | etapas que a cobertura roda (escolhidas em "Etapas a rodar" no Painel); as desmarcadas ficam na fila |
+| `cobertura.max_tentativas_jaguar` | `4` | tentativas por bug nos Jaguar da cobertura (1 a 8); o Maven segue com até 8 por causa dos perfis legados |
 | `cobertura.work_dir` | `""` | pasta de trabalho dos checkouts da cobertura; vazio = `E:\JFLP\cobertura` se o disco E: existir, senão `work` dentro da pasta do JFLP |
 | `cobertura.legado` | `true` | tenta o perfil legado (JDK 7, Maven 3.0.5) nos bugs Maven |
 | `cobertura.legado_offline` | `true` | inclui a versão offline do perfil legado |
@@ -305,6 +309,28 @@ Prioridade: **bug (id exato) > glob > projeto (`*`) > padrão**; em empate vale 
 
 A cobertura roda **Maven, Jaguar 1 e Jaguar 2** em **todos os bugs** de uma coleção do Bugs.jar (uma pasta com um clone por projeto), num só lote. Cada bug vira três etapas, uma por ferramenta, e a cobertura mostra o que cada uma achou.
 
+### Capturas de tela
+
+![Painel da cobertura no tema claro: bugs concluídos, barra por situação, ritmo, workers e estado da planilha](docs/img/painel.png)
+
+*Painel (tema claro): progresso da cobertura, ritmo, tempo restante, workers e estado da planilha.*
+
+![Painel da cobertura no tema escuro](docs/img/painel-escuro.png)
+
+*Painel no tema escuro.*
+
+![Tabela dos bugs da cobertura, uma linha por bug, com filtros por projeto, situação e texto](docs/img/tabela.png)
+
+*Tabela dos bugs: um bug por linha, com a situação de cada etapa e filtros.*
+
+![Detalhe de um bug da cobertura com o resultado de Maven, Jaguar 1 e Jaguar 2](docs/img/detalhe.png)
+
+*Detalhe de um bug: o que cada ferramenta achou e links para as execuções.*
+
+![Tela Ambiente com a configuração da planilha e da cobertura](docs/img/ambiente.png)
+
+*Ambiente: planilha do Google e configuração da cobertura.*
+
 Uma cobertura só existe por vez. `jflp cobertura sincronizar` cria o lote na primeira vez e, nas seguintes, só **acrescenta** os bugs e etapas que ainda não existem: nada é apagado, e rodar de novo não duplica. Se a coleção ganhou projetos, basta sincronizar outra vez.
 
 Fluxo típico:
@@ -319,7 +345,16 @@ jflp cobertura refazer           # devolve à fila as etapas com falha (--todos:
 jflp batch run                   # processa o que foi devolvido
 ```
 
-Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo restante e o estado da planilha) e a **Tabela** (um bug por linha, filtrável por projeto, situação ou texto). Pausar, parar, continuar e refazer ficam nessa tela. Pausar deixa o job atual terminar; parar encerra os processos em andamento e devolve os jobs à fila. Ao abrir o JFLP Studio de novo, execuções que ficaram pela metade voltam a pendentes, e a cobertura retoma sozinha se estava rodando quando o programa fechou.
+### Painel e Tabela
+
+Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo restante e o estado da planilha) e a **Tabela** (um bug por linha, filtrável por projeto, situação ou texto). Pausar, parar, continuar e refazer ficam nessa tela. Outros controles do Painel:
+
+- **Workers em paralelo**: seletor de 1 a 12 com o botão **Aplicar**; vale ao vivo. Ao diminuir, os bugs em andamento terminam e o Painel mostra "diminuindo após os bugs atuais". O valor fica salvo em `cobertura.workers`.
+- **Etapas a rodar**: caixas Maven, Jaguar 1 e Jaguar 2 (`cobertura.kinds`). Etapa desmarcada fica na fila, não é pulada: o bug só conta como concluído quando todas rodarem.
+- **Aviso de disco**: se o espaço livre cair abaixo de `cobertura.min_livre_gb`, a cobertura pausa e o Painel mostra o motivo. Depois de liberar espaço, clique em **Continuar** (ela não retoma sozinha).
+- **Planilha**: estado do envio (última sincronização, linhas, pendentes, erros) e link para configurar.
+
+ Pausar deixa o job atual terminar; parar encerra os processos em andamento e devolve os jobs à fila. Ao abrir o JFLP Studio de novo, execuções que ficaram pela metade voltam a pendentes, e a cobertura retoma sozinha se estava rodando quando o programa fechou.
 
 **Situação de cada bug:**
 
@@ -336,7 +371,8 @@ Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo r
 - `workers` (padrão `4`): quantos jobs rodam em paralelo. Cada job roda um Maven ou um Jaguar inteiro, então reduza o valor se a máquina ficar sem memória.
 - `work_dir`: pasta de trabalho dos checkouts e arquivos temporários. Vazio (padrão) = `E:\JFLP\cobertura` quando o Windows tem o disco E:; sem E:, fica em `work` dentro da pasta do JFLP. Para usar outra pasta, informe um caminho absoluto, por exemplo `work_dir = 'E:/JFLP/cobertura'`. Se a unidade configurada não estiver disponível, o JFLP avisa e usa a pasta padrão. A tela **Ambiente** mostra a pasta que está em uso.
 - `min_livre_gb` (padrão `5`): espaço livre mínimo, em GB, no disco da pasta do JFLP e no da pasta de trabalho. Com menos que isso, a cobertura pausa sozinha e mostra o motivo; depois de liberar espaço, clique em **Continuar**.
-- `port_aware` (em `[jaguar1]`, padrão `false`): veja **Jaguar 1 em paralelo** abaixo.
+- `kinds`: etapas que rodam (padrão: as três). `max_tentativas_jaguar` (padrão `4`): tentativas por bug nos Jaguar; mais que isso quase nunca recupera um bug e gasta a maior parte do tempo.
+- `port_aware` (em `[jaguar1]`, padrão `false`): veja **Jaguar 1 em paralelo** abaixo. **O jar 0.0.6 do Jaguar 1 não aceita escolher a porta**; deixe desligado.
 - `legado` e `legado_offline` (padrão `true`): nos bugs Maven da cobertura, quando o perfil moderno falha, o JFLP tenta o perfil legado (JDK 7 e Maven 3.0.5); com `legado_offline`, também a versão offline desse perfil. Desligue se não quiser esses perfis.
 
 **Disco.** A pasta de trabalho vai para `E:\JFLP\cobertura`, mas as execuções (`runs/`, com os XMLs do Jaguar, que chegam a dezenas de GB na cobertura completa), o `m2` e o banco `jflp.db` ficam na pasta do JFLP, que é `%LOCALAPPDATA%\jflp` (no C:). Para levar tudo para o E::
@@ -348,7 +384,7 @@ Pela interface, a tela **Cobertura** mostra o **Painel** (resumo, ritmo, tempo r
 
 Confira que o JFLP abre com o lote e as execuções anteriores antes de apagar a cópia antiga em `%LOCALAPPDATA%\jflp`.
 
-**Jaguar 1 em paralelo.** Por padrão os jobs do Jaguar 1 rodam **um de cada vez**: sem `port_aware`, dois jobs em paralelo disputam a mesma porta do jar e um deles falha. Se o jar do Jaguar 1 que você usa aceita `-Djaguar.port`, ligue **Jaguar 1 em paralelo** na tela Ambiente (seção Cobertura). Para conferir no piloto: com a opção ligada e pelo menos dois bugs do Jaguar 1 na fila, dois jobs do Jaguar 1 devem aparecer **rodando** ao mesmo tempo no Painel, sem erro de porta (algo como `Address already in use`) no log de nenhum deles. Se aparecer erro de porta, desligue a opção: os jobs voltam a rodar um de cada vez.
+**Jaguar 1 em paralelo.** Por padrão os jobs do Jaguar 1 rodam **um de cada vez**: sem `port_aware`, dois jobs em paralelo disputam a mesma porta do jar e um deles falha. O jar 0.0.6 não tem a propriedade `jaguar.port`, então hoje o Jaguar 1 fica sempre em fila única, mesmo com vários workers. Se o jar do Jaguar 1 que você usa (um jar diferente do 0.0.6) aceita `-Djaguar.port`, ligue **Jaguar 1 em paralelo** na tela Ambiente (seção Cobertura). Para conferir no piloto: com a opção ligada e pelo menos dois bugs do Jaguar 1 na fila, dois jobs do Jaguar 1 devem aparecer **rodando** ao mesmo tempo no Painel, sem erro de porta (algo como `Address already in use`) no log de nenhum deles. Se aparecer erro de porta, desligue a opção: os jobs voltam a rodar um de cada vez.
 
 **Ordem com a importação.** `jflp cobertura importar <pasta>` deve rodar logo depois de `jflp cobertura sincronizar` e **antes** de iniciar a cobertura, ou com ela pausada. Se os workers já estiverem pegando jobs, eles podem executar os mesmos bugs que a importação está marcando, e o lote fica misturado.
 
@@ -494,8 +530,21 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 python -m venv .venv
 .venv\Scripts\activate          # Linux: source .venv/bin/activate
 pip install -e .[dev]           # [dev] traz httpx, usado nos testes da interface
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -q
 ```
+
+Rode os testes a partir da raiz do repositório; a suíte inteira leva cerca de 7 minutos. Um arquivo só: `python -m unittest discover -s tests -p "test_home.py" -q`.
+
+Módulos da cobertura:
+
+| Arquivo | Papel |
+|---|---|
+| `sbfl/cobertura.py` | lote de cobertura: sincronizar, situação de cada bug a partir das etapas, resumo do Painel, refazer, marcar não executável |
+| `sbfl/planilha.py` | planilha do Google: linha de cada bug, caixa de saída no SQLite, `Enviador` (thread com nova tentativa, espera crescente e reconciliação) |
+| `sbfl/importar.py` | importação dos resultados do pipeline PowerShell (`jflp cobertura importar`) |
+| `sbfl/queue.py` | fila SQLite; `Worker` executa um job e `WorkerPool` roda N workers sobre a mesma fila, com a trava de instância, a regra de nunca dois jobs do mesmo bug e a guarda de disco (`DiskGuard`) |
+| `sbfl/web/routes_cobertura.py` | telas Painel e Tabela da cobertura |
+| `tools/planilha/Code.gs` | script do Apps Script que recebe os dados e grava a planilha (seção 9) |
 
 Os testes usam `unittest` (não pytest) e Maven/Java falsos; a integração real é validada por `jflp selftest` e pelos casos de aceitação. O pacote é `sbfl/` (comando `jflp` → `sbfl.cli:main`); a interface web (FastAPI + Jinja2 + htmx vendorizado, sem CDN) está em `sbfl/web/`. Dependências de execução: `fastapi`, `uvicorn`, `jinja2`, `python-multipart`; extra `full`: `zstandard`, `pywebview`.
 
