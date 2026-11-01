@@ -275,9 +275,9 @@ class TelasRemovidas(WebFixture, unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(c.get(path).status_code, 404)
 
-    def test_barra_lateral_so_tem_rodar_resultados_e_ambiente(self):
+    def test_barra_lateral_so_tem_cobertura_resultados_e_ambiente(self):
         html = self.authed().get("/rodar").text
         nav = html[html.index('<nav class="lateral">'):html.index("</nav>")]
-        self.assertEqual(re.findall(r'<a href="(/[^"]*)"', nav), ["/rodar", "/resultados", "/ambiente"])
+        self.assertEqual(re.findall(r'<a href="(/[^"]*)"', nav), ["/cobertura", "/resultados", "/ambiente"])
         self.assertNotIn("<details", nav)
         self.assertNotIn("Mais", nav)

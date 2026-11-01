@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Cobertura - JFLP Studio{% endblock %}
+{% block content %}
+<div class="cb">
+<h1>Cobertura</h1>
+{% if erro %}<p class="aviso erro" role="alert">{{ erro }}</p>{% endif %}
+{% if bid is none %}
+<section>
+  <p class="vazio">Rode Maven, Jaguar 1 e Jaguar 2 em todos os bugs do Bugs.jar de uma vez. Escolha a pasta que contém os repositórios.</p>
+  <form method="post" action="/cobertura/iniciar" class="linha">
+    <input type="text" name="pasta" value="{{ pasta }}" autocomplete="off" placeholder="C:\caminho\da\pasta" required>
+    <button type="submit">Começar cobertura</button>
+  </form>
+</section>
+{% else %}
+<div id="cb-painel" hx-get="/cobertura/painel" hx-trigger="every 5s" hx-swap="innerHTML">
+{% include "_cobertura_painel.html" %}
+</div>
+{% endif %}
+</div>
+{% endblock %}

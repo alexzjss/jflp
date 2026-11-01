@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,17 +77,28 @@ def write_logback(config: Path, test_log: Path) -> None:
                       encoding="utf-8", newline="\n")
 
 
+BASE_PORT = 6300
+_PORT = threading.local()
+
+
+def set_port(port: int | None) -> None:
+    """Porta do agente JaCoCo da thread atual (cada worker do pool usa a sua); None volta ao padrão 6300."""
+    _PORT.value = port
+
+
 def build_cmd(opts: JaguarOptions, ctx, tf: Path, out_base: str, heuristic: str,
               logback: Path | None = None, test_dir: Path | None = None) -> list:
     """`test_dir`: pasta da seleção (`write_test_selection`) passada em `-t`; os testes de verdade seguem no classpath."""
     lib = Path(opts.lib)
     sep = os.pathsep
+    port = getattr(_PORT, "value", None) or BASE_PORT
     cp = sep.join([str(lib / "*"), ctx.classes_dir, ctx.tests_dir, *ctx.extra_cp])
     return [
         opts.java,
         *opts.jvm_args,
         *([f"-Dlogback.configurationFile={logback.resolve().as_posix()}"] if logback else []),
-        f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port=6300",
+        *([f"-Djaguar.port={port}"] if port != BASE_PORT else []),
+        f"-javaagent:{lib / 'jacocoagent.jar'}=output=tcpserver,port={port}",
         "-cp", cp,
         "br.usp.each.saeg.jaguar.core.cli.JaguarRunner",
         "-p", ".", "-c", ctx.classes_dir, "-t", str(test_dir) if test_dir else ctx.tests_dir,

@@ -11,7 +11,7 @@ from unittest import mock
 from sbfl import execute as ex
 from sbfl import recipes
 from sbfl.adapters.base import Bug
-from sbfl.autosearch import candidates
+from sbfl.autosearch import attempt_cap, candidates
 from sbfl.diagnose import Diagnosis, Suggestion
 from sbfl.diffgt import FaultLine
 from sbfl.errors import StageError
@@ -328,7 +328,7 @@ class ExecuteTest(Base):
         (self.prep.pristine / "pom.xml").unlink()
         rel, run = self.go(lambda n, c: "ok")
         self.assertEqual(self.cfgs, [])
-        self.assertEqual(run["status"], "desconhecido")
+        self.assertEqual(run["status"], "projeto_invalido")
         self.assertEqual(run["diagnosis"]["cause"], "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)")
         self.assertEqual(run["attempts"], 0)
 
@@ -336,7 +336,7 @@ class ExecuteTest(Base):
         self.prep.info["jaguar2_suportado"] = False
         rel, run = self.go(lambda n, c: "ok")
         self.assertEqual(self.cfgs, [])
-        self.assertEqual(run["status"], "desconhecido")
+        self.assertEqual(run["status"], "projeto_invalido")
 
     def test_maven_kind_without_pom_still_runs(self):
         (self.prep.pristine / "pom.xml").unlink()
@@ -398,6 +398,20 @@ class ProjetoInvalidoTest(Base):
         self.assertEqual(len(calls), 1)
         self.assertEqual(run["status"], "projeto_invalido")
         self.assertEqual(run["attempts"], 1)
+
+    def test_jaguar1_sem_pom_e_projeto_invalido(self):
+        (self.prep.pristine / "pom.xml").unlink()
+        log_text = ("[ERROR] The goal you specified requires a project to execute but there is no POM in "
+                    "this directory (C:\\w). MissingProjectException\n")
+
+        def runner(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(log_text, encoding="utf-8")
+            return AttemptResult(1, False, 1.0, log, {}, {}, ["mvn"], {}, {})
+
+        with mock.patch.object(ex, "prepare", return_value=self.prep),                 mock.patch.object(ex, "run_jaguar1", runner):
+            rel = ex.execute(self.home, self.settings, BUG, "jaguar1", ex.RunOptions())
+        self.assertEqual(load_run(self.home, rel)["status"], "projeto_invalido")
 
 
 class ProcOnLineTest(Base):
@@ -473,6 +487,104 @@ class CandidatesTest(Base):
         self.assertEqual([c.jdk for c in out], [8, 17, 11])
         j1 = candidates(AttemptConfig(), Diagnosis("x"), "jaguar1", self.settings)
         self.assertEqual([c.jdk for c in j1], [17, 11])
+
+
+class LegadoCandidatesTest(Base):
+    def _tools(self, jdk7=True, mvn305=True):
+        from sbfl.toolchain.detect import Jdk, Maven
+        jdks = [Jdk(Path("j7"), 7, "1.7.0_352", "managed")] if jdk7 else []
+        mvns = [Maven(Path("m"), (3, 0, 5), "managed")] if mvn305 else []
+        return mock.patch.multiple("sbfl.autosearch", find_jdks=lambda *a: jdks, find_mavens=lambda *a: mvns)
+
+    def _cands(self, kind="maven", **tools):
+        self.settings.set("run", "max_attempts", 20)
+        self.settings.set("cobertura", "legado", True)
+        self.settings.set("cobertura", "legado_offline", False)
+        with self._tools(**tools):
+            return candidates(AttemptConfig(params={"cobertura": True}), Diagnosis("x"), kind, self.settings)
+
+    def test_candidates_incluem_legado_quando_ferramentas_existem(self):
+        out = self._cands()
+        self.assertEqual((out[-1].jdk, out[-1].maven), (7, "3.0.5"))
+        self.assertFalse(out[-1].params.get("offline"))
+        self.assertEqual(len([c for c in out if c.jdk == 7]), 1)
+        self.settings.set("cobertura", "legado_offline", True)
+        with self._tools():
+            out = candidates(AttemptConfig(params={"cobertura": True}), Diagnosis("x"), "maven", self.settings)
+        self.assertEqual([(c.jdk, c.maven, c.params.get("offline")) for c in out[-2:]],
+                         [(7, "3.0.5", None), (7, "3.0.5", True)])
+        self.assertTrue(out[-1].params["cobertura"])
+
+    def test_candidates_sem_legado_sem_jdk7(self):
+        self.assertFalse(any(c.jdk == 7 for c in self._cands(jdk7=False)))
+        self.assertFalse(any(c.maven == "3.0.5" for c in self._cands(mvn305=False)))
+        self.assertFalse(any(c.jdk == 7 for c in self._cands(kind="jaguar1")))
+
+    def test_legado_so_na_cobertura(self):
+        self.settings.set("run", "max_attempts", 20)
+        with self._tools():
+            out = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
+        self.assertFalse(any(c.jdk == 7 for c in out))
+
+    def test_legado_respeita_max_attempts_e_params(self):
+        self.settings.set("cobertura", "legado", True)
+        self.settings.set("run", "max_attempts", 4)
+        with self._tools():
+            few = candidates(AttemptConfig(), Diagnosis("x"), "maven", self.settings)
+            more = candidates(AttemptConfig(params={"cobertura": True, "max_attempts": 8}), Diagnosis("x"), "maven", self.settings)
+        self.assertEqual(len(few), 3)
+        self.assertEqual(more[-1].jdk, 7)
+
+
+class TentativasCoberturaTest(Base):
+    """Jobs de cobertura: os Jaguar usam cobertura.max_tentativas_jaguar; o Maven segue com o do lote."""
+
+    def cob(self):
+        return ex.RunOptions(params={"cobertura": True, "max_attempts": 8})
+
+    def test_jaguar2_cobertura_para_em_4_mesmo_com_lote_pedindo_8(self):
+        _, run = self.go(lambda n, c: "sniffer", self.cob())
+        self.assertEqual(run["attempts"], 4)
+        self.assertEqual(len(self.cfgs), 4)
+
+    def test_setting_muda_o_limite_na_hora(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        _, run = self.go(lambda n, c: "sniffer", self.cob())
+        self.assertEqual(run["attempts"], 2)
+
+    def test_setting_e_limitado_de_1_a_8(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 50)
+        self.assertEqual(attempt_cap(self.settings, {"cobertura": True}, "jaguar2"), 8)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 0)
+        self.assertEqual(attempt_cap(self.settings, {"cobertura": True}, "jaguar1"), 1)
+
+    def test_maven_cobertura_continua_com_8(self):
+        params = {"cobertura": True, "max_attempts": 8}
+        self.assertEqual(attempt_cap(self.settings, params, "maven"), 8)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.assertEqual(attempt_cap(self.settings, params, "maven"), 8)
+
+    def test_maven_cobertura_roda_ate_8_tentativas(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.settings.set("cobertura", "legado", False)
+        with mock.patch.object(ex, "run_maven", self.fake_runner(lambda n, c: "sniffer")), \
+                mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch("sbfl.autosearch.JDKS", (8, 11, 17, 21, 6, 5, 4, 3, 2, 1)):
+            ex.execute(self.home, self.settings, BUG, "maven", self.cob())
+        self.assertGreater(len(self.cfgs), 2)
+        self.assertLessEqual(len(self.cfgs), 8)
+
+    def test_fora_da_cobertura_vale_run_max_attempts(self):
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        _, run = self.go(lambda n, c: "sniffer")
+        self.assertEqual(run["attempts"], 6)
+        self.assertEqual(attempt_cap(self.settings, {}, "jaguar2"), 6)
+
+    def test_candidates_nao_monta_lista_maior_que_o_limite(self):
+        first = AttemptConfig(params={"cobertura": True, "max_attempts": 8})
+        self.assertEqual(len(candidates(first, Diagnosis("x"), "jaguar2", self.settings)), 3)
+        self.settings.set("cobertura", "max_tentativas_jaguar", 2)
+        self.assertEqual(len(candidates(first, Diagnosis("x"), "jaguar2", self.settings)), 1)
 
 
 if __name__ == "__main__":

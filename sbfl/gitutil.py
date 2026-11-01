@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from .errors import StageError
@@ -35,7 +37,23 @@ def ensure_repo(cfg, repo: str) -> Path:
     return dest
 
 
+_REPO_LOCKS: dict[str, threading.Lock] = {}
+_REPO_LOCKS_GUARD = threading.Lock()
+
+
+def repo_lock(repo) -> threading.Lock:
+    """Uma trava por repositório: o git não aceita `worktree add/remove` concorrentes no mesmo repo."""
+    key = os.path.normcase(str(repo))
+    with _REPO_LOCKS_GUARD:
+        return _REPO_LOCKS.setdefault(key, threading.Lock())
+
+
 def add_worktree(repo: Path, wt: Path, ref: str):
+    with repo_lock(repo):
+        return _add_worktree(repo, wt, ref)
+
+
+def _add_worktree(repo: Path, wt: Path, ref: str):
     if wt.exists():
         git(repo, "worktree", "remove", "--force", str(wt), check=False)
         shutil.rmtree(wt, ignore_errors=True)
@@ -46,7 +64,8 @@ def add_worktree(repo: Path, wt: Path, ref: str):
     git(repo, "worktree", "add", "--detach", "-f", str(wt), ref)
 
     def cleanup():
-        git(repo, "worktree", "remove", "--force", str(wt), check=False)
+        with repo_lock(repo):
+            git(repo, "worktree", "remove", "--force", str(wt), check=False)
         shutil.rmtree(wt, ignore_errors=True)
 
     return cleanup

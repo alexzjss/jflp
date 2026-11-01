@@ -4,6 +4,7 @@ import copy
 import os
 import re
 import tomllib
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,7 +22,12 @@ DEFAULTS = {
     "tools": {"jdks": {}, "mavens": {}},  # overrides manuais: {"11": "C:/..."}
     "jaguar2": {"version": "0.0.2", "jacoco": "0.8.7", "surefire": "3.5.3",
                 "compiler": "3.8.0", "junit": "4.12"},
-    "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": []},
+    "jaguar1": {"lib": "", "timeout_s": 3600, "max_retries": 6, "jvm_args": [], "port_aware": False},
+    "cobertura": {"workers": 4, "work_dir": "", "legado": True, "legado_offline": True,
+                  "min_livre_gb": 5,      # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
+                  "kinds": ["maven", "jaguar1", "jaguar2"],    # etapas que a cobertura roda; as outras ficam na fila
+                  "max_tentativas_jaguar": 4},    # tentativas por bug nos Jaguar (1 a 8); o Maven segue com 8 (legado)
+    "planilha": {"url": "", "token": ""},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
             "max_copy_mb": 2048, "max_copy_files": 200000,    # pasta local maior que isso não é copiada
@@ -38,6 +44,8 @@ _NOTES = {
     "tools": "# Caminhos manuais de JDKs e Mavens, ex.: jdks = {\"11\" = \"C:/Java/jdk-11\"}",
     "jaguar2": "# Versões dos plugins usados pelo perfil Jaguar 2",
     "jaguar1": "# Perfil Jaguar 1 (JDK 8 + Maven 3.6.3)",
+    "cobertura": "# Cobertura do bugs-dot-jar: workers paralelos, pasta de trabalho (ex.: E:/JFLP/cobertura), perfis legados",
+    "planilha": "# Planilha do Google (Apps Script): URL do app da web e token",
     "run": "# Execuções: escopo de testes, tempos limite e flags de Maven",
     "bugsjar": "# Projetos do BugsJar",
     "defects4j": "# Defects4J via WSL",
@@ -83,6 +91,7 @@ class Home:
     """Pasta-raiz do JFLP Studio e suas subpastas."""
 
     root: Path
+    work_root: Path | None = None  # pasta de trabalho configurada (cobertura.work_dir); None = root/work
 
     @property
     def tools(self) -> Path:
@@ -94,7 +103,7 @@ class Home:
 
     @property
     def work(self) -> Path:
-        return self.root / "work"
+        return self.work_root if self.work_root is not None else self.root / "work"
 
     @property
     def runs(self) -> Path:
@@ -145,6 +154,33 @@ class Home:
         if not self.config_path.exists():
             load_settings(self).save()
         return self
+
+
+PASTA_PADRAO_E = "E:\\JFLP\\cobertura"
+
+
+def pasta_padrao_cobertura() -> str | None:
+    """Pasta de trabalho quando `cobertura.work_dir` está vazio: E:\\JFLP\\cobertura se o Windows tem o
+    disco E: (spec §4a); None = segue na pasta do JFLP Studio."""
+    if os.name == "nt" and os.path.exists("E:\\"):
+        return PASTA_PADRAO_E
+    return None
+
+
+def apply_work_dir(home: Home, settings: Settings) -> tuple[Home, str | None]:
+    """Aplica `cobertura.work_dir` ao Home (vazio = padrão E:\\JFLP\\cobertura, se houver E:). Devolve
+    (home, aviso): aviso só quando a pasta configurada está num disco que não existe; nesse caso o
+    Home fica como estava."""
+    wd = str(settings.get("cobertura", "work_dir", "") or "").strip()
+    if not wd:
+        wd = pasta_padrao_cobertura() or ""
+    if not wd:
+        return home, None
+    anchor = Path(wd).anchor
+    if anchor and not os.path.exists(anchor):
+        return home, (f"A pasta de trabalho configurada ({wd}) não existe: o disco ou a unidade "
+                      "não está disponível. Usando a pasta padrão do JFLP Studio.")
+    return dataclasses.replace(home, work_root=Path(wd)), None
 
 
 class Settings:

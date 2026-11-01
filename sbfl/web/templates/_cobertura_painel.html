@@ -1,0 +1,91 @@
+<section class="cb-topo">
+  {% if aviso_disco %}<p class="aviso erro" role="alert">{{ aviso_disco }}</p>{% endif %}
+  <div class="cb-selo-linha">
+    <span class="cb-selo cb-selo-{{ selo_cls }}">{{ selo }}</span>
+    <form method="post" action="/cobertura/sincronizar"><button type="submit" class="cb-sec">Sincronizar pasta</button></form>
+  </div>
+  <div class="botoes">
+    {% if concluida or cancelada %}
+    {% elif pausado %}
+    <form method="post" action="/cobertura/continuar"><button type="submit">Continuar</button></form>
+    {% else %}
+    <form method="post" action="/cobertura/pausar"><button type="submit">Pausar após o bug atual</button></form>
+    {% endif %}
+    {% if not concluida %}
+    <form method="post" action="/cobertura/parar"><button type="submit" class="cb-sec">Parar agora</button></form>
+    {% endif %}
+    <form method="post" action="/cobertura/refazer-falhados"><button type="submit" class="cb-sec">Refazer falhados ({{ n_falhados }})</button></form>
+  </div>
+  {% if outra_instancia %}<p class="vazio">outra janela do JFLP Studio está rodando a fila</p>{% endif %}
+</section>
+
+<section>
+  <h2>{{ r.concluidos }} de {{ r.total }} bugs concluídos ({{ pct }}%)</h2>
+  <div class="cb-barra" role="img" aria-label="{{ r.concluidos }} de {{ r.total }} bugs concluídos">
+    {% for chave, rotulo in cores %}{% set n = r.por_situacao[chave] %}{% if n %}<span class="cb-seg cb-{{ chave }}" style="flex: {{ n }}" title="{{ rotulo }}: {{ n }}"></span>{% endif %}{% endfor %}
+  </div>
+  <ul class="cb-legenda">
+    {% for chave, rotulo in cores %}<li><span class="cb-quad cb-{{ chave }}"></span>{{ rotulo }} <b>{{ r.por_situacao[chave] }}</b></li>{% endfor %}
+  </ul>
+  <p class="vazio">{% if ritmo %}ritmo {{ ritmo }} bugs/h{% if restante %} · faltam ≈ {{ restante }} h{% endif %} · {{ n_workers }} workers{% else %}{{ n_workers }} workers{% endif %}</p>
+  <form method="post" action="/cobertura/workers" class="cb-workers">
+    <label>Workers em paralelo
+      <select name="workers">{% for k in range(1, workers_max + 1) %}<option value="{{ k }}"{% if k == n_workers %} selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+    <button type="submit">Aplicar</button>
+    {% if diminuindo %}<span class="vazio">diminuindo após os bugs atuais ({{ workers_ativos }} ativos, alvo {{ n_workers }})</span>{% endif %}
+  </form>
+  <p class="vazio cb-dica">{{ dica_maquina }}</p>
+  <form method="post" action="/cobertura/etapas" class="cb-workers cb-etapas">
+    <span>Etapas a rodar:</span>
+    {% for e in etapas %}<label><input type="checkbox" name="etapas" value="{{ e.k }}"{% if e.on %} checked{% endif %}> {{ e.nome }}</label> {% endfor %}
+    <button type="submit">Aplicar</button>
+  </form>
+  {% if aviso_etapas %}<p class="aviso erro">{{ aviso_etapas }}</p>{% endif %}
+  <p class="vazio cb-dica">Etapas desmarcadas ficam na fila (não são puladas): o bug só conta como concluído quando todas rodarem.</p>
+  {% if planilha %}
+  <p class="cb-planilha {{ 'erro' if planilha.tipo == 'erro' else 'vazio' }}">
+    {% if planilha.tipo == 'ok' %}{% if planilha.ha %}Planilha Google sincronizada há {{ planilha.ha }}{% else %}Planilha Google ainda não enviada{% endif %} · {{ planilha.linhas }} linhas
+    {% elif planilha.tipo == 'erro' %}{% if planilha.ha %}Planilha sem enviar há {{ planilha.ha }}{% else %}Planilha ainda não enviada{% endif %} · {{ planilha.pendentes }} pendentes · {{ planilha.erro }}
+    {% else %}Planilha não configurada · <a href="/ambiente#planilha">configurar</a>{% endif %}
+    {% if planilha.tipo != 'nao_configurada' and planilha.falhas %} · <span class="erro">{{ planilha.falhas }} linhas com erro</span>{% endif %}
+  </p>
+  {% endif %}
+</section>
+
+<div class="cb-colunas">
+  <section>
+    <h2>Por projeto</h2>
+    <table>
+      <thead><tr><th>Projeto</th><th>Concluídos</th><th>Ok</th><th>Falhou</th><th></th></tr></thead>
+      <tbody>
+      {% for p in r.por_projeto %}
+      <tr><td>{{ p.projeto }}</td><td>{{ p.concluidos }}/{{ p.total }}</td><td>{{ p.ok }}</td><td>{{ p.falhou + p.parcial }}</td>
+          <td><a href="/cobertura/bugs?projeto={{ p.projeto|q }}">ver</a></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  <div>
+    <section>
+      <h2>Rodando agora</h2>
+      {% if rodando %}
+      <ul class="cb-lista">
+        {% for x in rodando %}
+        <li><b>{{ x.projeto }} {{ x.bug }}</b> <span class="vazio">{{ x.tempo }}</span>
+          <span class="cb-chips">{% for c in x.chips %}<span class="cb-chip cb-chip-{{ c.estado }}">{{ c.nome }}</span>{% endfor %}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="vazio">Nada rodando agora.</p>{% endif %}
+    </section>
+    <section>
+      <h2>Últimos concluídos</h2>
+      {% if ultimos %}
+      <ul class="cb-lista">
+        {% for u in ultimos %}
+        <li><span class="cb-quad cb-{{ u.situacao }}"></span>{{ u.projeto }} {{ u.bug }} {% if u.quando %}<span class="vazio">há {{ u.quando }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="vazio">Ainda nenhum.</p>{% endif %}
+    </section>
+  </div>
+</div>

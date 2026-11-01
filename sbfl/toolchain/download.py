@@ -33,6 +33,14 @@ _JAGUAR1_JARS = {
 }
 
 
+# JDK 7 (legado, perfil de cobertura): Azul Zulu, pois o Adoptium não publica o 7. SHA-256 do zip oficial.
+_ZULU7_RELEASE = "zulu7.56.0.11-ca-jdk7.0.352"
+_ZULU7_WIN_URL = f"https://cdn.azul.com/zulu/bin/{_ZULU7_RELEASE}-win_x64.zip"
+_ZULU7_WIN_SHA256 = "a0255d1e29d4ab9d685b698217d9adca6a29b2e493608d4e73feda84e7759085"
+_ZULU7_WIN_SIZE = 68056121
+_MAVEN_305_URL = "https://archive.apache.org/dist/maven/binaries/apache-maven-3.0.5-bin.zip"
+
+
 class DownloadError(Exception):
     """Falha ao baixar, verificar ou extrair (mensagem em português)."""
 
@@ -71,6 +79,12 @@ def _arch() -> str:
 def plan_jdk(home: Home, major: int, os_name: str | None = None, arch: str | None = None) -> Download:
     os_name = os_name or ("windows" if _is_windows() else "linux")
     arch = arch or _arch()
+    if major == 7:
+        if os_name != "windows" or arch != "x64":
+            raise DownloadError("O JDK 7 só tem download automático para Windows x64; "
+                                "instale um JDK 7 e informe o caminho em Configurações.")
+        return Download("JDK 7 (Zulu)", _ZULU7_WIN_URL, _ZULU7_WIN_SIZE, _ZULU7_WIN_SHA256, "sha256", True,
+                        home.tools / f"jdk-{_ZULU7_RELEASE}", home.tools / "_dl")
     url = (f"https://api.adoptium.net/v3/assets/latest/{major}/hotspot"
            f"?os={os_name}&architecture={arch}&image_type=jdk&vendor=eclipse")
     try:
@@ -89,6 +103,12 @@ def plan_jdk(home: Home, major: int, os_name: str | None = None, arch: str | Non
 
 
 def plan_maven(home: Home, version: str) -> Download:
+    if version == "3.0.5":      # fora do diretório maven-3/: só há sha1 (e md5) publicados
+        text = _read(_MAVEN_305_URL + ".sha1").decode("utf-8", "replace").split()
+        if not text:
+            raise DownloadError("Arquivo .sha1 vazio para o Maven 3.0.5")
+        return Download("Maven 3.0.5", _MAVEN_305_URL, None, text[0].lower(), "sha1", True,
+                        home.tools / "apache-maven-3.0.5", home.tools / "_dl")
     url = (f"https://archive.apache.org/dist/maven/maven-3/{version}/binaries/"
            f"apache-maven-{version}-bin.zip")
     text = _read(url + ".sha512").decode("utf-8", "replace").split()

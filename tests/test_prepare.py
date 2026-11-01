@@ -199,6 +199,29 @@ class PrepareTests(Base):
         third = P.prepare(self.home, self.settings, bug, self.log, refresh=True)
         self.assertFalse((third.pristine / "extra.txt").exists())
 
+    def test_remove_pristine_apaga_o_checkout(self):
+        src = self.root / "p1"
+        src.mkdir()
+        (src / "a.txt").write_text("1")
+        bug = P.local_bug(str(src))
+        prep = P.prepare(self.home, self.settings, bug, self.log)
+        self.assertTrue(prep.pristine.exists())
+        P.remove_pristine(self.home, bug)
+        self.assertFalse(prep.pristine.exists())
+        P.remove_pristine(self.home, bug)      # de novo: nada a apagar, sem erro
+        again = P.prepare(self.home, self.settings, bug, self.log)    # e o bug pode ser preparado de novo
+        self.assertTrue((again.pristine / "a.txt").exists())
+
+    def test_remove_pristine_bugsjar_poda_o_worktree(self):
+        self.fake_bugsjar()
+        bug = P.list_bugs(self.settings, "bugsjar", "Proj")[0]
+        prep = P.prepare(self.home, self.settings, bug, self.log)
+        repo = Path(bug.extra["repo"])
+        P.remove_pristine(self.home, bug)
+        self.assertFalse(prep.pristine.exists())
+        out = subprocess.run(["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True).stdout
+        self.assertNotIn(prep.pristine.name, out)
+
     def test_working_copy_is_independent(self):
         src = self.root / "p2"
         (src / "target").mkdir(parents=True)

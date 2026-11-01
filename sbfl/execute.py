@@ -16,7 +16,7 @@ from . import proc, recipes
 from .proc import NO_WINDOW
 from . import status as st
 from .adapters.base import Bug
-from .autosearch import candidates, deep_merge, effective_jdk_maven, effective_key
+from .autosearch import attempt_cap, candidates, deep_merge, effective_jdk_maven, effective_key
 from .diagnose import Diagnosis, _read_tail, classify
 from .errors import StageError
 from .home import Home, Settings
@@ -207,13 +207,15 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         if kind == "jaguar2" and (prep.info.get("jaguar2_suportado") is False or not (mod / "pom.xml").is_file()):
             w.write_json("env.json", _env_info(prep, None))
             w.write_text("command.txt", "")
-            _stopped(w, st.DESCONHECIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
+            _stopped(w, st.PROJETO_INVALIDO, "projeto sem pom.xml: Jaguar 2 não suportado (use Jaguar 1)",
                      attempts=0, warnings=_prep_warnings(prep), test_scope=opts.test_scope or settings.get("run", "test_scope", "relevant"),
                      relevant_tests=prep.relevant_tests, truth=[f.to_dict() for f in prep.truth])
             return w.rel
 
         recipe = recipes.find(home, bug, kind)
         first = _first_config(settings, recipe, opts)
+        # lote de cobertura: Maven pede mais tentativas (perfis legados); os Jaguar usam cobertura.max_tentativas_jaguar
+        max_attempts = attempt_cap(settings, first.params, kind)
         if opts.tests:
             first = replace(first, test_scope="relevant")
         if opts.fixes_add:

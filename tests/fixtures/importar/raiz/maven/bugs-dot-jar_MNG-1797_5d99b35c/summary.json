@@ -1,0 +1,21 @@
+{
+    "project":  "maven",
+    "branch":  "origin/bugs-dot-jar_MNG-1797_5d99b35c",
+    "started":  "2026-10-29T18:33:49",
+    "checkout":  true,
+    "pom_dir":  "",
+    "profile":  "modern",
+    "maven":  "BUILD FAILURE",
+    "maven_tests":  "run=167 fail=1 err=0 skip=0",
+    "maven_failed_count":  1,
+    "repo_tests":  "Tests run: 106, Failures: 1, Errors: 0, Skipped: 0",
+    "patched_files":  "maven-project/src/main/java/org/apache/maven/profiles/DefaultProfileManager.java;maven-project/src/main/java/org/apache/maven/project/artifact/MavenMetadataSource.java",
+    "jaguar_modules":  "maven-project",
+    "jaguar":  "OK",
+    "jaguar_status_por_modulo":  "OK",
+    "jaguar_requirements":  1324,
+    "jaguar_top3":  "org.apache.maven.project.DefaultMavenProjectBuilder:1312=1 | org.apache.maven.project.DefaultMavenProjectBuilder:1302=1 | org.apache.maven.project.artifact.MavenMetadataSource:347=1",
+    "jaguar_best_line_rank":  11,
+    "minutes":  2,
+    "finished":  "2026-10-29T18:36:17"
+}

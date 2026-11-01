@@ -11,17 +11,20 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+from . import cobertura as cb
 from . import status as st
 from .adapters.base import Bug
 from .compare import compare_runs
 from .dataset import export
 from .errors import StageError
 from .execute import RunOptions, execute
-from .home import Home, Settings, load_settings
+from .home import Home, Settings, apply_work_dir, load_settings
+from .importar import importar_pipeline
 from .instance import MSG_OUTRA_INSTANCIA, WorkerLock
+from .planilha import Enviador, enfileirar_todos, garantir_token, linhas_total, pendentes
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
 from .proc import NO_WINDOW
-from .queue import Worker, active_batch_ids, batch_status, create_batch, delete_batch
+from .queue import Worker, WorkerPool, active_batch_ids, batch_status, create_batch, delete_batch
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
 from .toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
@@ -308,6 +311,9 @@ def _print_batch(s: dict) -> None:
 
 
 def cmd_batch(home: Home, settings: Settings, args) -> int:
+    home, aviso = apply_work_dir(home, settings)     # o worker usa a mesma pasta de trabalho da interface
+    if aviso:
+        print(f"aviso: {aviso}")
     if args.action == "create":
         kinds = [k for k in args.kinds.split(",") if k]
         bad = [k for k in kinds if k not in KINDS]
@@ -339,7 +345,7 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
     if not lock.acquire():
         print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
         return 1
-    worker = Worker(home, settings, lock)     # a trava passa para o worker
+    worker = WorkerPool(home, settings, getattr(args, "workers", None) or 1, lock)   # a trava passa para o pool
     seen: set[int] = set()
     worker.start()
     try:
@@ -362,6 +368,113 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
     err = worker.status()["last_error"]
     if err:
         print(f"aviso: último erro do worker: {err}")
+    return 0
+
+
+# --------------------------------------------------------------- cobertura
+
+_SIT_ROTULO = {cb.SIT_OK: "OK", cb.SIT_PARCIAL: "parcial", cb.SIT_FALHOU: "falhou",
+               cb.SIT_NAO_EXEC: "não executável", cb.SIT_RODANDO: "rodando", cb.SIT_PENDENTE: "pendente"}
+
+
+def _tempo(segundos: int) -> str:
+    h, m = divmod(int(segundos) // 60, 60)
+    return f"{h} h {m} min" if h else f"{m} min"
+
+
+def _cobertura_bid(home: Home) -> int | None:
+    bid = cb.batch_id(home)
+    if bid is None:
+        print("erro: ainda não há cobertura; rode `jflp cobertura sincronizar <pasta>` primeiro.",
+              file=sys.stderr)
+    return bid
+
+
+def cmd_cobertura(home: Home, settings: Settings, args) -> int:
+    home, aviso = apply_work_dir(home, settings)     # mesma pasta de trabalho que a interface web usa
+    if aviso:
+        print(f"aviso: {aviso}")
+    acao = args.action
+    if acao == "sincronizar":
+        pasta = args.pasta or settings.get("bugsjar", "root")
+        if not pasta:
+            print("erro: informe a pasta da coleção ou defina bugsjar.root no config.toml.", file=sys.stderr)
+            return 1
+        if not Path(pasta).expanduser().is_dir():
+            print(f"erro: a pasta da coleção não existe: {pasta}", file=sys.stderr)
+            return 1
+        r = cb.sincronizar(home, settings, Path(pasta).expanduser())
+        for av in r["avisos"]:
+            print(f"aviso: {av}")
+        print(f"[OK] cobertura (lote {r['batch_id']}): {r['total_bugs']} bugs; {r['adicionados']} jobs novos")
+        return 0
+    if acao == "importar":
+        r = importar_pipeline(home, settings, Path(args.pasta).expanduser())
+        print(f"[OK] importados: {r['maven']} Maven, {r['jaguar1']} Jaguar 1; ignorados: {r['ignorados']}")
+        for e in r["erros"]:
+            print(f"erro: {e}", file=sys.stderr)
+        return 1 if r["erros"] else 0
+    if acao == "planilha":
+        return _cobertura_planilha(home, settings, args)
+    bid = _cobertura_bid(home)
+    if bid is None:
+        return 1
+    if acao == "status":
+        r = cb.resumo(home, bid)
+        ps = r["por_situacao"]
+        print(f"Cobertura: {r['concluidos']} de {r['total']} bugs concluídos")
+        print("  " + "; ".join(f"{_SIT_ROTULO[s]} {ps[s]}" for s in ps))
+        for p in r["por_projeto"]:
+            print(f"  {p['projeto']}: {p['concluidos']} de {p['total']} concluídos "
+                  f"(OK {p[cb.SIT_OK]}, parcial {p[cb.SIT_PARCIAL]}, falhou {p[cb.SIT_FALHOU]}, "
+                  f"não executável {p[cb.SIT_NAO_EXEC]}, pendente {p[cb.SIT_PENDENTE]})")
+        if r["ritmo_h"] is not None:
+            print(f"Ritmo: {r['ritmo_h']:.1f} bugs por hora")
+        if r["restante_s"] is not None:
+            print(f"Restante estimado: {_tempo(r['restante_s'])}")
+        return 0
+    if acao == "refazer":
+        n = cb.refazer(home, bid, None, so_falhas=not args.todos)
+        print(f"[OK] {n} job(s) devolvido(s) à fila; rode `jflp batch run` para processá-los.")
+        return 0
+    return 1
+
+
+def _cobertura_planilha(home: Home, settings: Settings, args) -> int:
+    url = (settings.get("planilha", "url", "") or "").strip()
+    if not args.reenviar:
+        token = garantir_token(settings)
+        print(f"Token (propriedade JFLP_TOKEN no Apps Script): {token or '(ainda não gerado)'}")
+        print("Planilha: " + ("URL configurada" if url else "URL não configurada (tela Ambiente)"))
+        print(f"Linhas na caixa de saída: {linhas_total(home)}; pendentes de envio: {pendentes(home)}")
+        return 0
+    if not url:
+        print("erro: a URL do app da web da planilha não está configurada (tela Ambiente, seção Planilha).",
+              file=sys.stderr)
+        return 1
+    if _cobertura_bid(home) is None:
+        return 1
+    n = enfileirar_todos(home)
+    print(f"{n} linha(s) na fila de envio; enviando...")
+    envio = Enviador(home, settings)
+    anterior, parados = pendentes(home), 0
+    while True:
+        envio.ciclo()           # um ciclo manda até LOTE linhas; sem espera entre eles
+        erro = envio.status()["erro"]
+        if erro:
+            print(f"erro: {erro}", file=sys.stderr)
+            print(f"Ainda faltam {pendentes(home)} linha(s); rode o comando de novo depois de corrigir.",
+                  file=sys.stderr)
+            return 1
+        atual = pendentes(home)
+        if atual == 0:
+            break
+        parados = 0 if atual < anterior else parados + 1
+        if parados >= 3:        # três ciclos seguidos sem andar: para em vez de girar à toa
+            print(f"erro: o envio não avançou em 3 ciclos seguidos; faltam {atual} linha(s).", file=sys.stderr)
+            return 1
+        anterior = atual
+    print(f"[OK] {n} linha(s) enviada(s) para a planilha")
     return 0
 
 
@@ -521,13 +634,25 @@ def _parser() -> argparse.ArgumentParser:
     c.add_argument("name")
     c.add_argument("kinds", help="tipos separados por vírgula, ex.: maven,jaguar2")
     c.add_argument("bugs", nargs="+")
-    bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
+    r = bs.add_parser("run", help="roda a fila em primeiro plano até esvaziar")
+    r.add_argument("--workers", type=int, default=None, help="jobs em paralelo (padrão: 1)")
     s = bs.add_parser("status", help="situação de um lote")
     s.add_argument("id", type=int)
     s = bs.add_parser("cancel", help="cancela os jobs pendentes de um lote")
     s.add_argument("id", type=int)
     s = bs.add_parser("delete", help="exclui um lote encerrado do histórico")
     s.add_argument("id", type=int)
+    p = add("cobertura", cmd_cobertura, "cobertura do bugs-dot-jar: sincronizar, status, importar, refazer, planilha")
+    cs = p.add_subparsers(dest="action", required=True, metavar="ação")
+    s = cs.add_parser("sincronizar", help="cria o lote de cobertura e acrescenta os bugs novos da coleção")
+    s.add_argument("pasta", nargs="?", help="pasta da coleção (padrão: bugsjar.root)")
+    cs.add_parser("status", help="resumo da cobertura: bugs por situação e por projeto")
+    s = cs.add_parser("importar", help="importa os resultados do pipeline PowerShell")
+    s.add_argument("pasta", help="pasta relatorios_cobertura (<projeto>/<bug>/summary.json)")
+    s = cs.add_parser("refazer", help="devolve à fila os bugs com falha (ou todos, com --todos)")
+    s.add_argument("--todos", action="store_true", help="refaz todos os jobs concluídos, não só as falhas")
+    s = cs.add_parser("planilha", help="envia linhas à planilha do Google")
+    s.add_argument("--reenviar", action="store_true", help="reenvia todas as linhas da cobertura")
     p = add("export", cmd_export, "exporta um dataset")
     p.add_argument("name")
     p.add_argument("--batch", type=int)

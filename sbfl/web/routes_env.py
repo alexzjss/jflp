@@ -7,20 +7,29 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
+from .. import planilha
 from ..run_jaguar2 import prefetch_jaguar2
 from ..proc import NO_WINDOW
 from ..toolchain.detect import clear_cache, find_jdks, find_mavens, java_info, maven_info, wsl_status
 from ..toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
 from ..toolchain.profiles import PROFILES, MissingTool, _pick_maven, resolve
+from .routes_cobertura import _ha
 
 router = APIRouter()
 
 JDK_OPTIONS = (8, 11, 17)
 MAVEN_OPTIONS = ("3.6.3", "3.9.9")
+# perfil legado da cobertura (JDK 7 + Maven 3.0.5): só sob demanda, nunca como padrão de um perfil
+JDK_LEGADO = (7,)
+MAVEN_LEGADO = ("3.0.5",)
+WORKERS_MAX = 12
+ESPACO_MAX_GB = 500
+TENTATIVAS_MAX = 8
 KIND_LABEL = {"jaguar2": "Jaguar 2", "jaguar1": "Jaguar 1", "maven": "Maven puro"}
 # versão de Maven oferecida no botão quando falta um Maven para o perfil
 MAVEN_DOWNLOAD = {"maven": "3.6.3", "jaguar1": "3.6.3", "jaguar2": "3.9.9"}
@@ -127,12 +136,51 @@ def _cartoes(home, settings) -> list[dict]:
     return cartoes
 
 
+def _estado_planilha(s: dict | None) -> tuple[str, str]:
+    """(texto, classe) da linha de situação do envio à planilha."""
+    if s is None:
+        return "O envio automático não está rodando nesta sessão.", "vazio"
+    if not s.get("configurada"):
+        return "Sem URL configurada: nada é enviado para a planilha.", "vazio"
+    pend = s.get("pendentes", 0)
+    if s.get("erro"):
+        return f"Falha no envio: {s['erro']} · {pend} pendentes (tenta de novo sozinho).", "erro"
+    ultimo = f"há {_ha(s['ultimo_ok'])}" if s.get("ultimo_ok") else "nenhum ainda"
+    texto = f"Último envio: {ultimo} · {pend} pendentes"
+    if s.get("falhas_linha"):
+        texto += f" · {s['falhas_linha']} linhas não puderam ser montadas ({s.get('erro_linha') or 'ver o log'})"
+        return texto, "erro"
+    return texto, "vazio"
+
+
+def _planilha_ctx(request: Request) -> dict:
+    st = request.app.state
+    env = getattr(st, "enviador", None)
+    s = env.status() if env is not None else None
+    texto, classe = _estado_planilha(s)
+    return {"url": st.settings.get("planilha", "url", "") or "",
+            "token": planilha.garantir_token(st.settings),
+            "linhas": planilha.linhas_total(st.home), "estado": texto, "classe": classe}
+
+
+def _cobertura_ctx(request: Request) -> dict:
+    st = request.app.state
+    cob = st.settings.section("cobertura")
+    return {"workers": cob.get("workers", 4), "work_dir": cob.get("work_dir", "") or "",
+            "legado": bool(cob.get("legado", True)), "legado_offline": bool(cob.get("legado_offline", True)),
+            "min_livre_gb": cob.get("min_livre_gb", 5),
+            "max_tentativas_jaguar": cob.get("max_tentativas_jaguar", 4),
+            "paralelo_j1": bool(st.settings.get("jaguar1", "port_aware", False)),
+            "em_uso": str(st.home.work),          # a pasta que a execução usa agora (já com o padrão aplicado)
+            "aviso": getattr(st, "aviso_work_dir", None)}
+
+
 def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) -> dict:
     st = request.app.state
     home, settings = st.home, st.settings
     lib = jaguar1_lib(home, settings)
     return {
-        "page": "ambiente", "msg": msg, "msg_ok": msg_ok,
+        "page": "ambiente", "msg": msg, "msg_ok": msg_ok, "msgs": {}, "erros": {},
         "jdks": find_jdks(home, settings),
         "mavens": [(m, _vstr(m.version)) for m in find_mavens(home, settings)],
         "git": _git(),
@@ -141,21 +189,30 @@ def _env_context(request: Request, msg: str | None = None, msg_ok: bool = True) 
         "cartoes": _cartoes(home, settings),
         "profiles": _profiles(home, settings),
         "jdk_options": JDK_OPTIONS, "maven_options": MAVEN_OPTIONS,
+        "jdk_legado": JDK_LEGADO, "maven_legado": MAVEN_LEGADO,
+        "planilha": _planilha_ctx(request), "cobertura": _cobertura_ctx(request),
+        "workers_max": WORKERS_MAX, "tentativas_max": TENTATIVAS_MAX, "espaco_max_gb": ESPACO_MAX_GB,
     }
 
 
+SECOES = ("planilha", "cobertura")
+
+
 @router.get("/ambiente", response_class=HTMLResponse)
-def ambiente(request: Request):
-    return _render(request, "ambiente.html", _env_context(request))
+def ambiente(request: Request, msg: str = "", secao: str = ""):
+    ctx = _env_context(request)
+    if msg and secao in SECOES:
+        ctx["msgs"] = {secao: msg}
+    return _render(request, "ambiente.html", ctx)
 
 
 def _plans(home, tipo: str, v: str):
     if tipo == "jdk":
-        if v not in {str(x) for x in JDK_OPTIONS}:
+        if v not in {str(x) for x in JDK_OPTIONS + JDK_LEGADO}:
             raise DownloadError(f"Versão de JDK não oferecida: {v}")
         return [plan_jdk(home, int(v))]
     if tipo == "maven":
-        if v not in MAVEN_OPTIONS:
+        if v not in MAVEN_OPTIONS + MAVEN_LEGADO:
             raise DownloadError(f"Versão de Maven não oferecida: {v}")
         return [plan_maven(home, v)]
     if tipo == "jaguar1":
@@ -267,6 +324,93 @@ def _looks_like_jdk(p: Path) -> bool:
 
 def _looks_like_maven(p: Path) -> bool:
     return (p / "boot").is_dir() and (p / "conf" / "settings.xml").is_file()
+
+
+def _volta(secao: str, msg: str) -> RedirectResponse:
+    """PRG: depois de salvar, volta à seção com a mensagem na própria seção."""
+    return RedirectResponse("/ambiente?" + urlencode({"secao": secao, "msg": msg}) + f"#{secao}", status_code=303)
+
+
+def _erro_ambiente(request: Request, secao: str, erro: str, valores: dict) -> HTMLResponse:
+    """Re-renderiza a seção com o erro e os valores digitados (não se perde o que foi escrito)."""
+    ctx = _env_context(request)
+    ctx["erros"] = {secao: erro}
+    ctx[secao] = {**ctx[secao], **valores}
+    return _render(request, "ambiente.html", ctx, 400)
+
+
+@router.post("/ambiente/planilha", response_class=HTMLResponse)
+def salvar_planilha(request: Request, url: str = Form("")):
+    st = request.app.state
+    url = url.strip()
+    if url and not url.lower().startswith("https://"):
+        return _erro_ambiente(request, "planilha", "A URL do app da web precisa começar com https://.", {"url": url})
+    planilha.salvar_url(st.settings, url)
+    env = getattr(st, "enviador", None)
+    if env is not None:
+        env.acordar()
+    return _volta("planilha", "URL da planilha salva." if url else "URL da planilha removida.")
+
+
+@router.post("/ambiente/planilha/reenviar", response_class=HTMLResponse)
+def reenviar_planilha(request: Request):
+    """Reenvio completo: todas as linhas da cobertura voltam à fila e o envio tenta já, sem esperar a pausa."""
+    st = request.app.state
+    n = planilha.enfileirar_todos(st.home)
+    env = getattr(st, "enviador", None)
+    if env is not None:
+        env.acordar(forcar=True)
+        msg = f"{n} linhas voltaram para a fila de envio."
+    else:
+        msg = f"{n} linhas marcadas para envio, mas o envio automático não está rodando nesta sessão."
+    return _volta("planilha", msg)
+
+
+@router.post("/ambiente/cobertura", response_class=HTMLResponse)
+def salvar_cobertura(request: Request, workers: str = Form("4"), work_dir: str = Form(""),
+                     legado: bool = Form(False), legado_offline: bool = Form(False),
+                     min_livre_gb: str = Form("5"), jaguar1_paralelo: bool = Form(False),
+                     max_tentativas_jaguar: str | None = Form(None)):
+    st = request.app.state
+    if max_tentativas_jaguar is None:     # formulário sem o campo: mantém o valor atual
+        max_tentativas_jaguar = str(st.settings.get("cobertura", "max_tentativas_jaguar", 4))
+    valores = {"max_tentativas_jaguar": max_tentativas_jaguar, "workers": workers, "work_dir": work_dir, "legado": legado, "legado_offline": legado_offline,
+               "min_livre_gb": min_livre_gb, "paralelo_j1": jaguar1_paralelo}
+    try:
+        n = int(workers.strip())
+    except ValueError:
+        n = 0
+    if not 1 <= n <= WORKERS_MAX:
+        return _erro_ambiente(request, "cobertura", f"Os workers vão de 1 a {WORKERS_MAX}: digite um número inteiro.",
+                              valores)
+    try:
+        gb = int(min_livre_gb.strip())
+    except ValueError:
+        gb = 0
+    if not 1 <= gb <= ESPACO_MAX_GB:
+        return _erro_ambiente(request, "cobertura",
+                              f"O espaço mínimo vai de 1 a {ESPACO_MAX_GB} GB: digite um número inteiro.", valores)
+    try:
+        tent = int(max_tentativas_jaguar.strip())
+    except ValueError:
+        tent = 0
+    if not 1 <= tent <= TENTATIVAS_MAX:
+        return _erro_ambiente(request, "cobertura", f"As tentativas por bug vão de 1 a {TENTATIVAS_MAX}: "
+                                                    "digite um número inteiro.", valores)
+    wd = work_dir.strip().strip('"')
+    if wd and not Path(wd).is_absolute():
+        return _erro_ambiente(request, "cobertura", "A pasta de trabalho precisa de um caminho absoluto.", valores)
+    settings = st.settings
+    settings.set("cobertura", "workers", n)
+    settings.set("cobertura", "work_dir", wd)
+    settings.set("cobertura", "legado", bool(legado))
+    settings.set("cobertura", "legado_offline", bool(legado_offline))
+    settings.set("cobertura", "min_livre_gb", gb)
+    settings.set("cobertura", "max_tentativas_jaguar", tent)
+    settings.set("jaguar1", "port_aware", bool(jaguar1_paralelo))
+    settings.save()
+    return _volta("cobertura", "Configuração salva. Workers e pasta de trabalho valem depois de reiniciar "
+                               "o JFLP Studio.")
 
 
 @router.post("/ambiente/apontar", response_class=HTMLResponse)

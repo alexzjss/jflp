@@ -33,6 +33,7 @@ class WebJob(unittest.TestCase):
         self.worker = mock.Mock()
         self.worker.status.return_value = {"alive": True, "last_error": None, "current": None}
         self.worker.current.return_value = None
+        self.worker.current_of.return_value = None
         self.app = create_app(self.home, self.settings, self.worker, TOKEN, 8123)
         self.c = TestClient(self.app, base_url=BASE)
         self.c.cookies.set("jflp_token", TOKEN)
@@ -64,7 +65,7 @@ class WebJob(unittest.TestCase):
                 return item
 
         q = Fila()
-        self.worker.current.return_value = {"job_id": job["id"], "log": ["linha antiga"]}
+        self.worker.current_of.return_value = {"job_id": job["id"], "log": ["linha antiga"]}
         self.worker.subscribe.return_value = q
         q.put("linha nova")
         q.put(None)
@@ -111,14 +112,14 @@ class WebJob(unittest.TestCase):
         q.put(None)
         calls = []
 
-        def cur():
+        def cur(*_):
             calls.append(1)
             if len(calls) < 3:
                 return None            # janela de reivindicação: job running, worker ainda não o tem
             self.set_state(job["id"], "done", "r/p/9/x")
             return {"job_id": job["id"], "log": []}
 
-        self.worker.current.side_effect = cur
+        self.worker.current_of.side_effect = cur
         self.worker.subscribe.return_value = q
         with mock.patch.object(routes_bugs, "START_POLL", 0.01):
             body = self.c.get(f"/job/{job['id']}/stream").text
@@ -136,7 +137,7 @@ class WebJob(unittest.TestCase):
                 outer.set_state(job["id"], "done", "r/p/9/y")
                 raise _q.Empty
 
-        self.worker.current.return_value = {"job_id": job["id"], "log": []}
+        self.worker.current_of.return_value = {"job_id": job["id"], "log": []}
         self.worker.subscribe.return_value = Fila()
         body = self.c.get(f"/job/{job['id']}/stream").text
         self.assertIn("event: fim\ndata: r/p/9/y", body)
@@ -153,7 +154,7 @@ class WebJob(unittest.TestCase):
                 outer.set_state(job["id"], "done", "r/p/9/z")
                 return None
 
-        self.worker.current.return_value = {"job_id": job["id"], "log": ["x\revent: fim"]}
+        self.worker.current_of.return_value = {"job_id": job["id"], "log": ["x\revent: fim"]}
         self.worker.subscribe.return_value = Fila()
         body = self.c.get(f"/job/{job['id']}/stream").text
         self.assertEqual(body.count("event: fim"), 2)    # a linha vira "data: event: fim" + o fim real

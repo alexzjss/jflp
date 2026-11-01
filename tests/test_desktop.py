@@ -102,8 +102,8 @@ class TestAtalhos(Tmp):
     def test_icone_ico_multitamanho(self):
         data = desktop.icon_path().read_bytes()
         self.assertEqual(data[:4], b"\x00\x00\x01\x00")
-        self.assertEqual(int.from_bytes(data[4:6], "little"), 4)
-        self.assertEqual(data[70:74], b"\x89PNG")     # após as 4 entradas vêm as imagens PNG
+        self.assertEqual(int.from_bytes(data[4:6], "little"), 7)
+        self.assertEqual(data[118:122], b"\x89PNG")     # após as 7 entradas vêm as imagens PNG
 
 
 class TestSemConsole(Tmp):
