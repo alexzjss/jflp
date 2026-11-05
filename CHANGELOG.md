@@ -2,6 +2,18 @@
 
 Todas as mudanças relevantes deste projeto estão aqui. O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e as versões seguem o [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Não lançado]
+
+### Adicionado
+
+- **Correções para famílias de falha do Jaguar 2**, sugeridas pelo diagnóstico e aplicadas pela busca automática: `javac7` (compila com o javac do JDK 7 e mantém Maven/Surefire no JDK 8; Wicket, Camel, Flink), `asm-shadow` (ASM antigo do `cglib-full` sobrepondo o do JaCoCo; log4j2), `scr-jdk7` (reactor no JDK 7 + Maven 3.6.3 para o `maven-scr-plugin`; Oak), `rat-flags` (RAT 0.10), `exec-skip` (`exec-maven-plugin` rodando `.sh` no Windows) e `sortpom-warn` (sortpom reprovando o `jaguar2-pom.xml`; Accumulo). Ver README, seção 7.
+- **Flags extras do reactor** (`params["reactor_flags"]` e `params[<correção>]["reactor_flags"]`): vão para o `mvn install -pl M -am` e para o `mvn -f jaguar2-pom.xml`, depois do `run.skip_flags`.
+- O diagnóstico passa a reconhecer: ASM antigo na JVM do Surefire (`jaguar_sem_saida` com causa), `jdk.tools`/`lib/tools.jar` (pede JDK 8), pacotes Java EE ausentes no JDK 11 e `Source option 5 is no longer supported` (agora `jdk_incompativel`, antes escondido atrás do `COMPILATION ERROR` genérico).
+
+### Corrigido
+
+- Um JDK 7 configurado em `[tools] jdks` não é mais usado para sondar a versão dos Mavens (o Maven 3.9 não roda em Java 7 e o Maven era dado como ausente).
+
 ## [0.3.0] - 2026-10-31
 
 ### Adicionado

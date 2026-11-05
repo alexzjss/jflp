@@ -28,14 +28,19 @@ REACTOR_MAVEN = "3.6.3"        # último Maven que roda em Java 7
 
 def with_javac7(home: Home, settings: Settings, cfg: AttemptConfig) -> AttemptConfig:
     """Com a correção `javac7` ligada, localiza o JDK 7 (MissingTool se não houver) e acrescenta aos parâmetros
-    o executável do javac e as flags do reactor (`maven.compiler.fork`, `compiler.fork` - propriedade que o POM do Camel usa em `<fork>` - e `maven.compiler.executable`)."""
-    if JAVAC7 not in cfg.fixes_on:
+    o executável do javac e as flags do reactor (`maven.compiler.fork`, `compiler.fork` - propriedade que o POM do
+    Camel usa em `<fork>` - e `maven.compiler.executable`). A `scr-jdk7` já exige o JDK 7 e o código desse tipo
+    de projeto costuma ter o mesmo problema de javac estrito (Oak: `reference to assertEquals is ambiguous`), então
+    ela liga também a compilação do POM gerado no javac 7 (sem flags no reactor, que já roda no JDK 7)."""
+    if JAVAC7 not in cfg.fixes_on and SCR_JDK7 not in cfg.fixes_on:
         return cfg
     exe = str(javac_of(find_jdk_with_javac(home, settings, 7)))
-    sub = {**(cfg.params.get(JAVAC7) or {}), "executable": exe,
-           "reactor_flags": ["-Dmaven.compiler.fork=true", "-Dcompiler.fork=true",
-                             f"-Dmaven.compiler.executable={exe}"]}
-    return dataclasses.replace(cfg, params={**cfg.params, JAVAC7: sub})
+    sub = {**(cfg.params.get(JAVAC7) or {}), "executable": exe}
+    if JAVAC7 in cfg.fixes_on:
+        sub["reactor_flags"] = ["-Dmaven.compiler.fork=true", "-Dcompiler.fork=true",
+                                f"-Dmaven.compiler.executable={exe}"]
+    return dataclasses.replace(cfg, fixes_on=frozenset(cfg.fixes_on) | {JAVAC7},
+                               params={**cfg.params, JAVAC7: sub})
 
 
 def reactor_toolenv(home: Home, settings: Settings, te: ToolEnv, cfg: AttemptConfig, mod: Path) -> ToolEnv:

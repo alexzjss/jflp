@@ -282,6 +282,17 @@ As regras de diagnóstico (regex sobre o log, só em linhas de erro quando neces
 3. (Jaguar 2) Surefire `3.5.3` → `3.2.5` → `3.0.0-M5`;
 4. (Jaguar 2) compiler `3.8.0` → `3.1` → `3.11.0`.
 
+**Correções nomeadas para famílias de falha do Jaguar 2.** O diagnóstico reconhece o erro no log e sugere a correção; ela entra na busca automática antes dos JDKs. As que valem no reactor (que usa os POMs originais) entram como flags `-D` na linha de comando do `mvn install -pl M -am` e do `mvn -f jaguar2-pom.xml`, depois do `run.skip_flags` (então funcionam mesmo com `skip_flags` explícito no `config.toml`); `params["reactor_flags"]` ou `params[<correção>]["reactor_flags"]` acrescentam flags à mão.
+
+| Correção | Erro reconhecido | O que faz |
+|---|---|---|
+| `javac7` | `Source option 5 is no longer supported` (JDK 11), `incompatible types: inference variable ...`, `void cannot be converted`, `cannot access <classe opcional>` (JDK 8), `package javax.xml.bind... does not exist`, `jdk.tools ... lib/tools.jar` | Maven e Surefire seguem no JDK 8 e só o `javac` roda no JDK 7 (`maven.compiler.fork`, `compiler.fork` e `maven.compiler.executable` no reactor; `fork` + `executable` no compiler do POM gerado, com `source/target` limitados a 1.5-1.7). Precisa de um JDK 7 com `javac`: baixe na tela Ambiente ou aponte em `[tools] jdks = { "7" = "..." }`. Sem JDK 7 a tentativa é ignorada. Nem todo código antigo compila no javac 7 (WICKET-1677 também falha nele); funciona, por exemplo, no Camel 2.6 |
+| `asm-shadow` | `class org.jacoco.core.internal.flow.ClassProbesVisitor has interface org.objectweb.asm.ClassVisitor as super class` (status `jaguar_sem_saida`, antes sem causa) | O `cglib-full` (ASM 1.x, trazido pelo `mockejb` no log4j2) sai do classpath de teste (`classpathDependencyExcludes`) e o `cglib-nodep` (mesma API) assume; só no POM gerado |
+| `scr-jdk7` | `maven-scr-plugin:1.9.0:scr ... is not an ImageIO SPI class` (Oak) | O reactor roda no JDK 7 + Maven 3.6.3 (`-Dhttps.protocols=TLSv1.2`); o POM gerado desliga as execuções do scr (fase `none`), então só os módulos do reactor têm os descritores OSGi-INF, e compila com o javac 7 (`javac7` sem flags no reactor; o javac 8 recusa, por exemplo, `assertEquals` ambíguo no Oak) |
+| `rat-flags` | `apache-rat-plugin:0.10:check ... Too many files with unapproved license` | `-Drat.ignoreErrors=true -Drat.numUnapprovedLicenses=999999` (a 0.10 não tem `rat.skip`) |
+| `exec-skip` | `exec-maven-plugin ... Cannot run program ... .sh` / `CreateProcess error=193` (Accumulo, Windows) | `-Dskip=true`; vale porque o código gerado pelo script (thrift) já está no repositório |
+| `sortpom-warn` | `maven-sortpom-plugin:verify ... is not sorted` (reprova o `jaguar2-pom.xml`) | `-Dsort.verifyFail=warn` |
+
 Se uma tentativa com outro JDK chegou até os testes (sucesso ou `jaguar_sem_saida`), as candidatas seguintes sem JDK próprio herdam esse JDK.
 
 O **status final** é o da tentativa que foi mais longe (checkout < pom < reactor < compilação < testes < Jaguar sem saída < sucesso; empatando, a mais recente); saídas e checkout arquivados são dessa tentativa e as demais aparecem em `warnings` (ex.: `tentativa 4 (JDK 11): compilacao_falhou`). Cada tentativa termina com a linha `# jflp tentativa N: <status>` no log.

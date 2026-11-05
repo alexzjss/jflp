@@ -221,6 +221,20 @@ class ComJavac7(unittest.TestCase):
         self.assertTrue(out.params["cobertura"])
         self.assertNotIn("executable", cfg.params.get("javac7", {}))     # a configuração original não é alterada
 
+    def test_scr_jdk7_liga_javac7_no_pom_gerado_sem_flags_no_reactor(self):
+        jdk = self.root / "jdk7"
+        (jdk / "bin").mkdir(parents=True)
+        for name in ("javac.exe", "javac"):
+            (jdk / "bin" / name).write_text("")
+        cfg = AttemptConfig(fixes_on=frozenset({"scr-jdk7"}))
+        from unittest import mock
+        with mock.patch("sbfl.toolchain.profiles.find_jdks", return_value=[Jdk(jdk, 7, "1.7.0_352", "config")]):
+            out = with_javac7(self.home, self.settings, cfg)
+        self.assertEqual(out.fixes_on, frozenset({"scr-jdk7", "javac7"}))
+        self.assertIn("executable", out.params["javac7"])
+        self.assertEqual(reactor_flags(out), [])
+        self.assertEqual(cfg.fixes_on, frozenset({"scr-jdk7"}))
+
 
 class ReactorNoJdk7(unittest.TestCase):
     def test_sem_a_correcao_usa_o_mesmo_ambiente(self):
