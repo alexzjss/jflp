@@ -54,6 +54,7 @@ class Rule:
     cause: str
     suggestions: list[Suggestion] = field(default_factory=list)
     only_errors: bool = False  # só casa em linhas de falha ([ERROR] / Failed to execute goal)
+    prefer: bool = False       # causa específica: vence as genéricas (ex.: "COMPILATION ERROR") mesmo vindo depois
 
 
 def _surefire(version: str) -> Suggestion:
@@ -66,6 +67,23 @@ def _compiler(version: str) -> Suggestion:
                       label=f"Usar o maven-compiler-plugin {version}")
 
 
+def _javac7(label: str = "Compilar com o javac do JDK 7 (Maven e testes no JDK 8)") -> Suggestion:
+    return Suggestion(fix="javac7", jdk=8, label=label)
+
+
+# Código de 2009-2014 que o javac 8/11 recusa: -source 5 removido, inferência de genéricos mais estrita,
+# classes opcionais ausentes do classpath (`cannot access`), chamadas ambíguas.
+_JAVAC_ESTRITO = (r"incompatible types: inference variable|incompatible types: void cannot be converted|"
+                  r"incompatible types: .*capture#\d+|incompatible upper bounds|reference to \S+ is ambiguous|"
+                  r"(?:error: |\.java:\[\d+,\d+\] )cannot access \w+")
+_JAVAC_SOURCE = r"(?:Source|Target) option (?:1\.)?[1-6] is no longer supported"
+
+# ASM 1.x-3.x no classpath de teste (ex.: cglib-full via mockejb) sobrepõe o ASM do JaCoCo dentro da JVM do Surefire
+_ASM_ANTIGO = re.compile(r"class org\.jacoco\.core\.internal\.\S+ has interface org\.objectweb\.asm\.\w+ as super class")
+CAUSA_ASM_ANTIGO = ("um ASM antigo (1.x-3.x) no classpath de teste sobrepõe o ASM do JaCoCo na JVM do Surefire; "
+                    "o Jaguar 2 não consegue analisar as classes")
+_ASM_SHADOW = Suggestion(fix="asm-shadow", label="Tirar o ASM antigo (cglib-full) do classpath de teste")
+
 _SKIP_JACOCO = Suggestion(fix="skip-jacoco", label="Desligar o JaCoCo do projeto (-Djacoco.skip=true)")
 _JAVAAGENT = re.compile(r"processing of -javaagent failed|FATAL ERROR in native method|"
                         r"Error opening zip file or JAR manifest missing", re.I)
@@ -74,6 +92,32 @@ _MAVEN_363 = Suggestion(maven="3.6.3", label="Usar Maven 3.6.3 (aceita repositó
 
 # A primeira regra que casar vence (padrões casados sem diferenciar maiúsculas).
 RULES: list[Rule] = [
+    Rule(st.JDK_INCOMPATIVEL, _JAVAC_SOURCE,
+         "o JDK da tentativa não aceita o nível de Java do projeto (-source/-target 5 ou 6)",
+         [_javac7(), Suggestion(jdk=8, label="Tentar com JDK 8")], only_errors=True, prefer=True),
+    Rule(st.JDK_INCOMPATIVEL, r"package javax\.(?:xml\.bind|activation|annotation|xml\.ws|jws|transaction)\S* does not exist",
+         "classes do Java EE que saíram do JDK 11 (javax.xml.bind etc.): o projeto precisa do JDK 8",
+         [_javac7(), Suggestion(jdk=8, label="Tentar com JDK 8")], only_errors=True, prefer=True),
+    Rule(st.JDK_INCOMPATIVEL, r"jdk\.tools:jdk\.tools:jar:[\d.]+ \(system\)|[/\\]lib[/\\]tools\.jar",
+         "a dependência jdk.tools aponta para lib/tools.jar, que não existe a partir do JDK 9: o projeto precisa do JDK 8",
+         [_javac7(), Suggestion(jdk=8, label="Tentar com JDK 8")], only_errors=True, prefer=True),
+    Rule(st.PLUGIN_INCOMPATIVEL, r"maven-scr-plugin.*not an ImageIO SPI class|is not an ImageIO SPI class",
+         "o maven-scr-plugin 1.9.0 não roda em JDK 8 ou mais novo (AnnotationProcessor is not an ImageIO SPI class)",
+         [Suggestion(fix="scr-jdk7", jdk=8,
+                     label="Rodar o reactor no JDK 7 + Maven 3.6.3 e desligar o scr no POM gerado")],
+         only_errors=True, prefer=True),
+    Rule(st.PLUGIN_INCOMPATIVEL, r"exec-maven-plugin.*(?:Cannot run program|CreateProcess error=\d+)|"
+         r"CreateProcess error=193",
+         "o exec-maven-plugin tenta rodar um script .sh no Windows",
+         [Suggestion(fix="exec-skip", label="Pular o exec-maven-plugin (-Dskip=true)")],
+         only_errors=True, prefer=True),
+    Rule(st.PLUGIN_INCOMPATIVEL, r"maven-sortpom-plugin.*(?:is not sorted|verify)|The file \S+ is not sorted",
+         "o maven-sortpom-plugin reprovou o jaguar2-pom.xml gerado (POM não ordenado)",
+         [Suggestion(fix="sortpom-warn", label="Só avisar no sortpom (-Dsort.verifyFail=warn)")],
+         only_errors=True, prefer=True),
+    Rule(st.COMPILACAO_FALHOU, _JAVAC_ESTRITO,
+         "o javac 8/11 é mais estrito que o do tempo do projeto (genéricos, classes opcionais ausentes)",
+         [_javac7()], only_errors=True, prefer=True),
     Rule(st.PROJETO_INVALIDO,
          r"there is no POM in this directory|MissingProjectException|"
          r"Could not find the selected project in the reactor",
@@ -106,7 +150,8 @@ RULES: list[Rule] = [
          [Suggestion(fix="skip-animal-sniffer", label="Pular o animal-sniffer")], only_errors=True),
     Rule(st.PLUGIN_INCOMPATIVEL, r"apache-rat-plugin.*unapproved license",
          "verificação de licenças (Apache RAT) reprovou arquivos",
-         [Suggestion(fix="skip-rat", label="Pular o Apache RAT")], only_errors=True),
+         [Suggestion(fix="rat-flags", label="Ignorar o RAT na linha de comando (-Drat.ignoreErrors=true)"),
+          Suggestion(fix="skip-rat", label="Pular o Apache RAT")], only_errors=True),
     Rule(st.DEPENDENCIA_NAO_RESOLVIDA, r"maven-remote-resources-plugin",
          "recurso remoto indisponível (maven-remote-resources-plugin); "
          "inclua -Dremoteresources.skip=true em run.skip_flags", only_errors=True),
@@ -217,6 +262,8 @@ def _match_rules(text: str) -> tuple[Diagnosis, bool] | None:
             cands.append((pos if first else 0, n, r, from_err, pos))
     if not cands:
         return None
+    if any(c[2].prefer for c in cands):
+        cands = [c for c in cands if c[2].prefer]
     _, _, r, from_err, pos = min(cands, key=lambda c: (c[0], c[1]))
     sugs = [Suggestion(s.fix, dict(s.params), s.jdk, s.maven, s.label) for s in r.suggestions]
     if r.status == st.CLASSES_DUPLICADAS:
@@ -256,6 +303,14 @@ def classify(kind: str, res: AttemptResult) -> Diagnosis:
     return d
 
 
+def _asm_antigo(text: str) -> Diagnosis | None:
+    m = _ASM_ANTIGO.search(text)
+    if not m:
+        return None
+    return Diagnosis(st.JAGUAR_SEM_SAIDA, CAUSA_ASM_ANTIGO, _evidence(text, m.start()),
+                     [Suggestion(_ASM_SHADOW.fix, dict(_ASM_SHADOW.params), None, None, _ASM_SHADOW.label)])
+
+
 def _junit4_suggestion() -> Suggestion:
     return Suggestion(fix="junit4", label="Forçar JUnit 4 (o Surefire pode estar usando o provedor JUnit 3)")
 
@@ -287,6 +342,9 @@ def _classify(kind: str, res: AttemptResult) -> Diagnosis:
             except (ValueError, OSError) as e:
                 return Diagnosis(st.JAGUAR_SEM_SAIDA, "relatório do Jaguar 2 ilegível", [str(e)[:MAX_LINE]])
             if not scores and failed:   # §8.5.5: sucesso exige relatório não vazio quando há falhas
+                asm = _asm_antigo(_read_tail(res.log))
+                if asm:
+                    return asm
                 return Diagnosis(st.JAGUAR_SEM_SAIDA,
                                  "testes falharam mas o relatório do Jaguar 2 está vazio "
                                  "(cobertura/classesDirs não ligados)", suggestions=[_junit4_suggestion()],
@@ -308,6 +366,10 @@ def _classify(kind: str, res: AttemptResult) -> Diagnosis:
         m = _JAVAAGENT.search(text)
         return Diagnosis(st.PLUGIN_INCOMPATIVEL, "o agente do JaCoCo do projeto derrubou a JVM de teste",
                          _evidence(text, m.start()), [_SKIP_JACOCO])
+    if kind == "jaguar2" and fase not in ("reactor", "pom") and text:
+        asm = _asm_antigo(text)
+        if asm:
+            return asm
     found = _match_rules(text) if text else None
     d, from_err = found if found else (None, False)
     if fase == "pom":

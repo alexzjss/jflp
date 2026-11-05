@@ -235,7 +235,9 @@ def find_mavens(home: Home, settings: Settings) -> list[Maven]:
         candidates += [(p, "managed") for p in sorted(home.tools.glob("apache-maven-*")) if p.is_dir()]
     candidates += [(p, "system") for p in _system_maven_homes()]
     jdks = find_jdks(home, settings)
-    java_home = jdks[0].home if jdks else None
+    # o Maven 3.9 não roda em Java 7: um JDK 7 configurado (javac legado) não pode ser o que sonda os Mavens
+    modern = [j for j in jdks if j.major >= 8]
+    java_home = (modern or jdks)[0].home if jdks else None
     found: list[Maven] = []
     seen: set[str] = set()
     for path, source in candidates:

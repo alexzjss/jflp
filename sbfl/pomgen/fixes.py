@@ -263,6 +263,116 @@ def _apply_excludes(doc: PomDoc, ctx: PomContext, params: dict) -> None:
             ET.SubElement(excludes, doc.q("exclude")).text = f
 
 
+def _legacy_level(ctx: PomContext) -> str:
+    """Nível declarado limitado ao que o javac 7 aceita (1.5 a 1.7); sem declaração, 1.7."""
+    for text in ctx.chain_texts:
+        lv = declared_level(text)
+        if lv is not None:
+            return f"1.{min(max(lv, 5), 7)}"
+    return "1.7"
+
+
+def _apply_javac7(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    """Maven e Surefire seguem no JDK da tentativa; só a compilação roda no javac 7 (fork).
+    `executable` é preenchido por run_jaguar2 com o javac do JDK 7 encontrado."""
+    exe = params.get("executable")
+    if not exe:
+        raise ValueError("JDK 7 não localizado (informe em Configurações ou baixe na tela Ambiente)")
+    p = doc.ensure_plugin(*COMPILER, params.get("version") or ctx.versions["compiler"])
+    cfg = doc.child(p, "configuration", create=True)
+    level = params.get("level") or _legacy_level(ctx)
+    doc.set_child(cfg, "source", level)
+    doc.set_child(cfg, "target", level)
+    doc.set_child(cfg, "encoding", "UTF-8")
+    doc.set_child(cfg, "fork", "true")
+    doc.set_child(cfg, "executable", str(exe))
+
+
+# Jars que embutem uma cópia do ASM 1.x-3.x (`org.objectweb.asm.ClassVisitor` como interface) e, no classpath
+# de teste, sobrepõem o ASM moderno do JaCoCo (`ClassProbesVisitor has interface ... ClassVisitor as super class`).
+# Só entram os que têm substituto de mesma API (cglib-nodep tem o ASM sob outro pacote).
+ASM_ANTIGO_PADRAO = ["cglib:cglib-full"]
+CGLIB_NODEP = ("cglib", "cglib-nodep", "2.2.2")
+
+
+def _apply_asm_shadow(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    excludes = list(params.get("excludes") or ASM_ANTIGO_PADRAO)
+    for coord in excludes:
+        _split(coord, False)            # valida "grupo:artefato"
+    sf = doc.ensure_plugin(*SUREFIRE, ctx.versions["surefire"])
+    cfg = doc.child(sf, "configuration", create=True)
+    block = doc.child(cfg, "classpathDependencyExcludes", create=True)
+    have = {(e.text or "").strip() for e in block}
+    for coord in excludes:
+        if coord not in have:
+            ET.SubElement(block, doc.q("classpathDependencyExclude")).text = coord
+    if "cglib:cglib-full" in excludes:      # o que usava o cglib-full passa a usar o cglib-nodep (mesmo pacote)
+        doc.ensure_dependency(CGLIB_NODEP[0], CGLIB_NODEP[1], params.get("cglib_version") or CGLIB_NODEP[2], "test")
+
+
+# Correções que só mexem na linha de comando (flags `-D` do reactor e do jaguar2): o POM gerado não muda.
+# Os flags vêm daqui, a não ser que a sugestão traga `reactor_flags` próprios.
+FIX_FLAGS: dict[str, list[str]] = {
+    # RAT 0.10 não tem `rat.skip`: ignora o erro e libera qualquer número de arquivos sem licença
+    "rat-flags": ["-Drat.ignoreErrors=true", "-Drat.numUnapprovedLicenses=999999"],
+    # exec-maven-plugin 1.2.1 (`skip` = ${skip}) rodando .sh no Windows; só vale quando o gerado já está no repositório
+    "exec-skip": ["-Dskip=true"],
+    # maven-sortpom-plugin:verify reprova o jaguar2-pom.xml (não ordenado); `warn` só avisa
+    "sortpom-warn": ["-Dsort.verifyFail=warn"],
+}
+SCR = ("org.apache.felix", "maven-scr-plugin")
+SCR_EXECUCAO = "generate-scr-scrdescriptor"
+
+
+def _apply_nada(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    """Correção só de linha de comando (ver FIX_FLAGS): o POM fica como está."""
+
+
+SORTPOM = ("com.google.code.sortpom", "maven-sortpom-plugin")
+
+
+def _apply_sortpom_warn(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    """O POM do Accumulo fixa `<verifyFail>Stop</verifyFail>`, que vence a propriedade `sort.verifyFail`: no
+    POM gerado a configuração vira `warn`. Sem o plugin na cadeia de POMs não há o que mudar."""
+    version = None
+    found = False
+    for d in _chain_docs(ctx):
+        for p in _plugin_entries(d, *SORTPOM):
+            found = True
+            if not version and d.child(p, "version") is not None:
+                version = (d.child(p, "version").text or "").strip()
+    if not found:
+        return
+    p = doc.ensure_plugin(*SORTPOM, version, overwrite=False)
+    doc.set_child(doc.child(p, "configuration", create=True), "verifyFail", "warn")
+
+
+def _apply_scr_skip(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    """O maven-scr-plugin 1.9.0 não roda em JDK >= 8; o reactor o executa no JDK 7 (scr-jdk7) e o POM gerado
+    desliga as execuções dele (fase `none`), então os descritores OSGi-INF só existem nos módulos do reactor."""
+    ids: list[str] = []
+    version = params.get("version")
+    for d in _chain_docs(ctx):
+        for p in _plugin_entries(d, *SCR):
+            if not version and d.child(p, "version") is not None:
+                version = (d.child(p, "version").text or "").strip()
+            for e in p.findall(f"{d.q('executions')}/{d.q('execution')}"):
+                eid = (d.child(e, "id").text or "").strip() if d.child(e, "id") is not None else "default"
+                if eid not in ids:
+                    ids.append(eid)
+    p = doc.ensure_plugin(*SCR, version or "1.9.0", overwrite=False)
+    execs = doc.child(p, "executions", create=True)
+    have = {(doc.child(e, "id").text or "").strip(): e for e in execs.findall(doc.q("execution"))
+            if doc.child(e, "id") is not None}
+    for eid in ids or [SCR_EXECUCAO]:
+        e = have.get(eid)
+        if e is None:
+            e = ET.SubElement(execs, doc.q("execution"))
+            if eid != "default":
+                doc.set_child(e, "id", eid)
+        doc.set_child(e, "phase", "none")
+
+
 FIXES: dict[str, Fix] = {f.id: f for f in [
     Fix("skip-animal-sniffer", "Ignorar o animal-sniffer",
         "O animal-sniffer verifica a API do Java antiga e quebra a compilação em JDKs novos.",
@@ -287,4 +397,28 @@ FIXES: dict[str, Fix] = {f.id: f for f in [
     Fix("skip-rat", "Ignorar o Apache RAT",
         "A verificação de licenças (apache-rat-plugin) reprova arquivos do checkout antigo.",
         _detect_rat, _apply_rat, {}),
+    Fix("javac7", "Compilar com o javac do JDK 7",
+        "O código antigo não compila no javac 8/11 (inferência de genéricos mais estrita, `-source 5` removido); "
+        "o Maven e o Surefire seguem no JDK da tentativa e só o javac roda no JDK 7 (fork).",
+        _never, _apply_javac7, {}),
+    Fix("asm-shadow", "Tirar do classpath de teste o ASM antigo",
+        "Um jar de teste (cglib-full) embute o ASM 1.x e sobrepõe o ASM do JaCoCo, que então não consegue analisar "
+        "as classes; o jar é excluído do classpath de teste e o cglib-nodep (mesma API) assume.",
+        _never, _apply_asm_shadow, {"excludes": ASM_ANTIGO_PADRAO}),
+    Fix("rat-flags", "Ignorar o Apache RAT 0.10 no reactor",
+        "A versão 0.10 do apache-rat-plugin não tem `rat.skip`; `-Drat.ignoreErrors` e "
+        "`-Drat.numUnapprovedLicenses` entram na linha de comando do reactor e do Jaguar 2.",
+        _never, _apply_nada, {}),
+    Fix("exec-skip", "Pular o exec-maven-plugin",
+        "O exec-maven-plugin 1.2.1 tenta rodar um script .sh no Windows; `-Dskip=true` o pula "
+        "(vale quando o código gerado por ele já está no repositório).",
+        _never, _apply_nada, {}),
+    Fix("sortpom-warn", "Só avisar no sortpom",
+        "O maven-sortpom-plugin:verify reprova o jaguar2-pom.xml gerado; `-Dsort.verifyFail=warn` (e `verifyFail` "
+        "no POM gerado, quando o POM fixa `Stop`) só avisa.",
+        _never, _apply_sortpom_warn, {}),
+    Fix("scr-jdk7", "Rodar o maven-scr-plugin no JDK 7",
+        "O maven-scr-plugin 1.9.0 falha em JDK >= 8 (`not an ImageIO SPI class`): o reactor roda no JDK 7 com "
+        "Maven 3.6.3 e o POM gerado desliga o plugin.",
+        _never, _apply_scr_skip, {}),
 ]}
