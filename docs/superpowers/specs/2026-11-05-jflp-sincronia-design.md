@@ -57,7 +57,7 @@ Nova versão)". O envio de linhas segue funcionando.
 Corpo: `{token, colunas, linhas, maquina?, maquina_nome?, sync?}`.
 - `colunas`/`linhas`: como hoje (upsert na aba "Bugs").
 - `sync` (opcional): `{chave: {kind: {estado, revisao, run_rel}}}` — só as etapas **concluídas e produzidas por esta
-  máquina** (`estado` ∈ `ok`, `falhou`, `nao_exec`, que são os valores de `cobertura.SIT_*`; `revisao` = ISO do fim da
+  máquina** (`estado` ∈ `ok`, `falhou`, `nao_executavel`, que são os valores de `cobertura.SIT_*`; `revisao` = ISO do fim da
   execução). Para cada uma: se `_sync[chave][kind]` não existe, ou tem outro `run_rel`, ou outra `revisao`, grava
   `{estado, maquina, maquina_nome, revisao, run_rel, pacote: null}` e incrementa o `seq` da linha. Se for igual, não
   faz nada (sem `seq` novo: evita eco).
