@@ -111,6 +111,11 @@ def _connect(home: Home) -> sqlite3.Connection:
                 con.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} TEXT")
             except sqlite3.OperationalError:    # outra conexão migrou primeiro
                 pass
+    if "remoto_ate" not in {r[1] for r in con.execute("PRAGMA table_info(jobs)")}:
+        try:
+            con.execute("ALTER TABLE jobs ADD COLUMN remoto_ate REAL")
+        except sqlite3.OperationalError:        # outra conexão migrou primeiro
+            pass
     return con
 
 
@@ -301,6 +306,8 @@ class Worker(threading.Thread):
         self._gate = None                        # pool: devolve True quando a trava está com o pool
         self._on_exit = None                       # pool: chamado quando a thread termina
         self.on_bug_change = None                  # pool: chamado com a chave do bug quando um job de cobertura muda
+        self.reservar_remoto = None                # pool: bug_key -> bool; False = outra máquina já está nesse bug
+        self.restante_remoto = None                # pool: bug_key -> segundos que faltam da reserva da outra máquina
         self._wlock = (lock or WorkerLock(home)) if owns_lock else None   # entregue ao worker
         self._interrupt_req: set[int] = set()      # jobs com "parar agora" pedido (cobre o intervalo até o início)
         self._interrupt = threading.Event()      # "Parar agora": mata o job e o devolve à fila
@@ -472,10 +479,13 @@ class Worker(threading.Thread):
     def _after_select(self) -> None:
         """Gancho (só para testes): roda entre o SELECT e a reivindicação do job."""
 
-    def _claim_rules(self, alias: str) -> str:
+    def _claim_rules(self, alias: str, agora: float | None = None) -> str:
         """Condições extras de reivindicação (SQL), escritas para o SELECT e repetidas no UPDATE atômico:
-        nunca dois jobs `running` do mesmo bug e, sem `port_aware`, nunca dois do Jaguar 1."""
+        nunca dois jobs `running` do mesmo bug, bug não reservado por outra máquina (`remoto_ate`, comparado
+        com o mesmo `agora` nas duas consultas) e, sem `port_aware`, nunca dois do Jaguar 1."""
+        agora = time.time() if agora is None else agora
         rules = f" AND NOT EXISTS (SELECT 1 FROM jobs r WHERE r.state='running' AND r.bug_key={alias}.bug_key)"
+        rules += f" AND ({alias}.remoto_ate IS NULL OR {alias}.remoto_ate < {agora!r})"
         if not self.settings.get("jaguar1", "port_aware", False):
             rules += (f" AND ({alias}.kind <> 'jaguar1' OR NOT EXISTS "
                       "(SELECT 1 FROM jobs r2 WHERE r2.state='running' AND r2.kind='jaguar1'))")
@@ -500,10 +510,22 @@ class Worker(threading.Thread):
             self._disk.verificar()      # sem espaço, a cobertura é pausada antes de reivindicar
         except Exception as e:      # noqa: BLE001
             self._record_error(e)
+        for _ in range(5):
+            picked = self._reivindicar()
+            if picked is None:
+                return None
+            job, opts, cobertura = picked
+            if not cobertura or self._reserva_ok(job):
+                return job, opts
+        return None
+
+    def _reivindicar(self):
+        """Reivindica o próximo job pendente: `(job, opções, é_de_cobertura)` ou None."""
+        agora = time.time()
         with contextlib.closing(_connect(self.home)) as con, con:
             row = con.execute(
                 "SELECT j.* FROM jobs j JOIN batches b ON b.id = j.batch_id "
-                "WHERE j.state='pending' AND b.state='active'" + self._claim_rules("j") +
+                "WHERE j.state='pending' AND b.state='active'" + self._claim_rules("j", agora) +
                 " ORDER BY j.batch_id, j.idx LIMIT 1").fetchone()
             if row is None:
                 return None
@@ -512,12 +534,39 @@ class Worker(threading.Thread):
             # valendo (o UPDATE roda sob a trava de escrita do SQLite: dois workers nunca passam juntos)
             cur = con.execute("UPDATE jobs SET state='running' WHERE id=? AND state='pending' "
                               "AND batch_id IN (SELECT id FROM batches WHERE state='active')"
-                              + self._claim_rules("jobs"), (row["id"],))
+                              + self._claim_rules("jobs", agora), (row["id"],))
             if cur.rowcount == 0:
                 return None
-            opts = json.loads(con.execute("SELECT options FROM batches WHERE id=?",
-                                          (row["batch_id"],)).fetchone()[0] or "{}")
-            return dict(row), opts
+            b = con.execute("SELECT options, meta FROM batches WHERE id=?", (row["batch_id"],)).fetchone()
+            opts = json.loads(b["options"] or "{}")
+            cobertura = bool(json.loads(b["meta"] or "{}").get("cobertura"))
+            return dict(row), opts, cobertura
+
+    def _reserva_ok(self, job: dict) -> bool:
+        """Pede a reserva do bug à outra ponta (fora de qualquer transação). Negada: o job volta a `pending`
+        e o bug fica `remoto_ate` o tempo que a outra máquina ainda tem. Falha do gancho conta como liberada."""
+        hook = self.reservar_remoto
+        if hook is None:
+            return True
+        try:
+            if hook(job["bug_key"]):
+                return True
+        except Exception as e:      # noqa: BLE001
+            self._record_error(e)
+            return True
+        ttl = None
+        try:
+            if self.restante_remoto is not None:
+                ttl = self.restante_remoto(job["bug_key"])
+        except Exception as e:      # noqa: BLE001
+            self._record_error(e)
+        if not ttl or ttl <= 0:
+            ttl = float(self.settings.get("planilha", "reserva_ttl_s", 1800) or 1800)
+        with contextlib.closing(_connect(self.home)) as con, con:
+            con.execute("UPDATE jobs SET state='pending' WHERE id=? AND state='running'", (job["id"],))
+            con.execute("UPDATE jobs SET remoto_ate=? WHERE bug_key=? AND batch_id=?",
+                        (time.time() + ttl, job["bug_key"], job["batch_id"]))
+        return False
 
     def _record_error(self, e: BaseException) -> None:
         self._last_error = repr(e)[-500:]
@@ -732,8 +781,9 @@ class WorkerPool:
     fila uma vez; a regra "nunca dois jobs do mesmo bug" mora na reivindicação SQL de cada worker."""
 
     def __init__(self, home: Home, settings: Settings, n: int | None = None, lock: WorkerLock | None = None,
-                 on_bug_change=None):
-        """`on_bug_change(bug_key)`: chamado quando um job de cobertura termina, é descartado ou volta à fila."""
+                 on_bug_change=None, reservar_remoto=None, restante_remoto=None):
+        """`on_bug_change(bug_key)`: chamado quando um job de cobertura termina, é descartado ou volta à fila.
+        `reservar_remoto(bug_key) -> bool` e `restante_remoto(bug_key) -> segundos|None`: reservas entre máquinas."""
         if n is None:
             n = settings.get("cobertura", "workers", 4)
         try:
@@ -752,6 +802,7 @@ class WorkerPool:
         self._interrupt_req: set[int] = set()
         self._disk = DiskGuard(home, settings)
         self._on_bug_change = on_bug_change
+        self._reservar_remoto, self._restante_remoto = reservar_remoto, restante_remoto
         self._started = False
         self._stopping = False
         self._workers = [self._novo_worker(i) for i in range(self.n)]
@@ -762,6 +813,7 @@ class WorkerPool:
         w._cancel_req, w._interrupt_req = self._cancel_req, self._interrupt_req
         w._gate, w._on_exit = self._gate, self._worker_exited
         w.on_bug_change = self._on_bug_change
+        w.reservar_remoto, w.restante_remoto = self._reservar_remoto, self._restante_remoto
         return w
 
     def set_workers(self, n) -> int:

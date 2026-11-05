@@ -51,6 +51,15 @@
   </div>
   <p class="{{ planilha.classe }}">{{ planilha.estado }} · {{ planilha.linhas }} linhas na caixa de saída</p>
   <form method="post" action="/ambiente/planilha/reenviar"><button type="submit" class="cb-sec">Reenviar tudo</button></form>
+  <h3>Sincronização entre computadores</h3>
+  <form method="post" action="/ambiente/planilha/maquina" class="linha">
+    <input type="text" name="maquina_nome" value="{{ planilha.maquina_nome }}" placeholder="{{ planilha.maquina_padrao }}" maxlength="60" autocomplete="off" aria-label="Nome deste computador">
+    <label><input type="checkbox" name="sincronizar" value="1"{% if planilha.sincronizar %} checked{% endif %}> Sincronizar com outros computadores</label>
+    <button type="submit">Salvar</button>
+  </form>
+  {% if planilha.sinc.hub_antigo %}<p class="aviso erro" role="alert">{{ planilha.sinc.aviso }} No Apps Script: Implantar &gt; Gerenciar implantações &gt; editar &gt; Versão: Nova versão &gt; Implantar.</p>{% endif %}
+  <p class="{{ planilha.sinc.classe }}">{{ planilha.sinc.texto }}</p>
+  {% if planilha.sinc.rodando %}<form method="post" action="/ambiente/planilha/sincronizar"><button type="submit" class="cb-sec">Sincronizar agora</button></form>{% endif %}
   <script>
   function copiarToken(botao) {
     var t = document.getElementById('planilha-token');

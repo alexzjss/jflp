@@ -6,7 +6,7 @@ import re
 import tomllib
 import dataclasses
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # Flags que desligam verificações de qualidade do Maven que atrapalham o checkout antigo.
 SKIP_FLAGS = [
@@ -27,7 +27,10 @@ DEFAULTS = {
                   "min_livre_gb": 5,      # abaixo disso, a cobertura pausa (o disco enche com os XMLs)
                   "kinds": ["maven", "jaguar1", "jaguar2"],    # etapas que a cobertura roda; as outras ficam na fila
                   "max_tentativas_jaguar": 4},    # tentativas por bug nos Jaguar (1 a 8); o Maven segue com 8 (legado)
-    "planilha": {"url": "", "token": ""},
+    "planilha": {"url": "", "token": "",
+                 "sincronizar": True,       # puxa execuções de outros computadores, sobe pacotes e reserva bugs (com `url`)
+                 "maquina_id": "", "maquina_nome": "",     # id gerado uma vez; nome vazio = nome do computador
+                 "puxar_cada_s": 120, "reserva_ttl_s": 1800},
     "run": {"test_scope": "relevant", "timeout_s": 7200, "archive_checkout": True,
             "max_attempts": 6, "maven_opts": "",
             "max_copy_mb": 2048, "max_copy_files": 200000,    # pasta local maior que isso não é copiada
@@ -45,7 +48,7 @@ _NOTES = {
     "jaguar2": "# Versões dos plugins usados pelo perfil Jaguar 2",
     "jaguar1": "# Perfil Jaguar 1 (JDK 8 + Maven 3.6.3)",
     "cobertura": "# Cobertura do bugs-dot-jar: workers paralelos, pasta de trabalho (ex.: E:/JFLP/cobertura), perfis legados",
-    "planilha": "# Planilha do Google (Apps Script): URL do app da web e token",
+    "planilha": "# Planilha do Google (Apps Script): URL do app da web, token e sincronização entre computadores",
     "run": "# Execuções: escopo de testes, tempos limite e flags de Maven",
     "bugsjar": "# Projetos do BugsJar",
     "defects4j": "# Defects4J via WSL",
@@ -68,7 +71,7 @@ def redirected_path(plain: str, real: str) -> str | None:
     if r == p:
         return None
     if "\\packages\\" in r and "\\localcache\\" in r and "\\packages\\" not in p:
-        return str(Path(real).parent)
+        return str(PureWindowsPath(real).parent)
     return None
 
 

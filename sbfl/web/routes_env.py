@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from .. import planilha
+from .. import planilha, sincronia
 from ..run_jaguar2 import prefetch_jaguar2
 from ..proc import NO_WINDOW
 from ..toolchain.detect import clear_cache, find_jdks, find_mavens, java_info, maven_info, wsl_status
@@ -153,14 +153,37 @@ def _estado_planilha(s: dict | None) -> tuple[str, str]:
     return texto, "vazio"
 
 
+def _estado_sincronia(s: dict | None, ativa: bool) -> dict:
+    """Linhas do bloco "Sincronização entre computadores" (sem o sincronizador, só diz que não está rodando)."""
+    if s is None:
+        return {"rodando": False, "texto": "A sincronização não está rodando nesta sessão.", "classe": "vazio"}
+    if not ativa:
+        return {"rodando": True, "texto": "Sincronização desligada (ou sem URL da planilha).", "classe": "vazio"}
+    ultimo = f"há {_ha(s['ultimo_puxar'])}" if s.get("ultimo_puxar") else "nenhum ainda"
+    texto = (f"Último puxar: {ultimo} · {s.get('aplicadas', 0)} execuções recebidas · "
+             f"{s.get('pacotes_pendentes', 0)} pacotes a enviar · "
+             f"{s.get('reservas_remotas', 0)} bugs reservados por outros computadores")
+    if s.get("hub_antigo"):
+        return {"rodando": True, "texto": texto, "classe": "erro", "hub_antigo": True,
+                "aviso": sincronia.AVISO_ANTIGO}
+    if s.get("erro"):
+        return {"rodando": True, "texto": texto + f" · erro: {s['erro']}", "classe": "erro"}
+    return {"rodando": True, "texto": texto, "classe": "vazio"}
+
+
 def _planilha_ctx(request: Request) -> dict:
     st = request.app.state
     env = getattr(st, "enviador", None)
     s = env.status() if env is not None else None
     texto, classe = _estado_planilha(s)
+    sinc = getattr(st, "sincronizador", None)
     return {"url": st.settings.get("planilha", "url", "") or "",
             "token": planilha.garantir_token(st.settings),
-            "linhas": planilha.linhas_total(st.home), "estado": texto, "classe": classe}
+            "linhas": planilha.linhas_total(st.home), "estado": texto, "classe": classe,
+            "maquina_nome": st.settings.get("planilha", "maquina_nome", "") or "",
+            "maquina_padrao": sincronia.maquina(st.settings)[1],
+            "sincronizar": bool(st.settings.get("planilha", "sincronizar", True)),
+            "sinc": _estado_sincronia(sinc.status() if sinc is not None else None, sincronia.ativa(st.settings))}
 
 
 def _cobertura_ctx(request: Request) -> dict:
@@ -350,6 +373,29 @@ def salvar_planilha(request: Request, url: str = Form("")):
     if env is not None:
         env.acordar()
     return _volta("planilha", "URL da planilha salva." if url else "URL da planilha removida.")
+
+
+@router.post("/ambiente/planilha/maquina", response_class=HTMLResponse)
+def salvar_maquina(request: Request, maquina_nome: str = Form(""), sincronizar: str = Form("")):
+    """Nome deste computador e liga/desliga da sincronização com os outros."""
+    st = request.app.state
+    st.settings.set("planilha", "maquina_nome", " ".join(maquina_nome.split())[:60])
+    st.settings.set("planilha", "sincronizar", bool(sincronizar))
+    st.settings.save()
+    sinc = getattr(st, "sincronizador", None)
+    if sinc is not None:
+        sinc.acordar(forcar=True)
+    return _volta("planilha", "Configuração de sincronização salva.")
+
+
+@router.post("/ambiente/planilha/sincronizar", response_class=HTMLResponse)
+def sincronizar_agora(request: Request):
+    """Puxa e envia agora, sem esperar o intervalo."""
+    sinc = getattr(request.app.state, "sincronizador", None)
+    if sinc is None:
+        return _volta("planilha", "A sincronização não está rodando nesta sessão.")
+    sinc.acordar(forcar=True)
+    return _volta("planilha", "Sincronizando com os outros computadores…")
 
 
 @router.post("/ambiente/planilha/reenviar", response_class=HTMLResponse)

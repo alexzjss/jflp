@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
+from sbfl import bugview as bv
 from sbfl import cobertura as cb
 from sbfl import planilha as pl
 from sbfl import queue as jq
@@ -127,7 +128,7 @@ class TestLinha(Cobertura):
         bug = next(b for b in pl._bugs_do_lote(self.home, None) if b["key"] == self.k0)
         row = pl.linha(self.home, bug)
         self.assertEqual(len(row), len(pl.COLUNAS))
-        self.assertEqual(len(pl.COLUNAS), 24)
+        self.assertEqual(len(pl.COLUNAS), 25)
         d = dict(zip(pl.COLUNAS, row))
         self.assertEqual(d["Situação"], "pendente")
         self.assertTrue(d["Link JIRA"].startswith("https://issues.apache.org/jira/browse/"))
@@ -199,7 +200,7 @@ class TestOutbox(Cobertura):
         real = pl.linha
         visto = []
 
-        def espia(home, bug, resumo=None):
+        def espia(home, bug, resumo=None, **kw):
             outra = sqlite3.connect(str(home.db_path), timeout=0.2)
             try:
                 outra.execute("BEGIN IMMEDIATE")      # falharia (database is locked) se houvesse escrita aberta
@@ -207,7 +208,7 @@ class TestOutbox(Cobertura):
                 visto.append(True)
             finally:
                 outra.close()
-            return real(home, bug, resumo=resumo)
+            return real(home, bug, resumo=resumo, **kw)
         with mock.patch.object(pl, "linha", espia):
             pl.enfileirar_todos(self.home)
         self.assertEqual(len(visto), 4)
@@ -216,11 +217,11 @@ class TestOutbox(Cobertura):
         pl.enfileirar(self.home, [self.k0])
         real, chamadas = pl.linha, []
 
-        def espia(home, bug, resumo=None):
+        def espia(home, bug, resumo=None, **kw):
             chamadas.append(1)
             if len(chamadas) == 1:      # outro escritor mexe na linha enquanto esta é montada
                 self.sql("UPDATE planilha_outbox SET atualizado='outro' WHERE bug_key=?", self.k0)
-            return real(home, bug, resumo=resumo)
+            return real(home, bug, resumo=resumo, **kw)
         with mock.patch.object(pl, "linha", espia):
             pl.enfileirar(self.home, [self.k0])
         self.assertEqual(len(chamadas), 2)
@@ -273,6 +274,95 @@ class TestReconciliar(Cobertura):
         env = self.enviador(Fake(), url="", reconciliar_cada=600)
         env.ciclo()
         self.assertEqual(self.outbox(), {})
+
+
+class TestSync(Cobertura):
+    """Coluna "Máquina" e o payload `sync` montado junto com cada linha."""
+
+    def concluir_com_run(self, key, **kw):
+        self.concluir(key, cfgs=[{"jdk": 11}], **kw)
+        for j in self.jobs():
+            if j["bug_key"] == key:
+                f = self.home.runs / "r" / str(j["id"]) / "run.json"
+                run = json.loads(f.read_text(encoding="utf-8"))
+                run["finished"] = f"2026-11-05T10:00:0{j['id'] % 10}"
+                f.write_text(json.dumps(run), encoding="utf-8")
+
+    def sync_do_outbox(self, key):
+        return json.loads(self.outbox()[key]["sync"])
+
+    def test_sync_so_das_etapas_concluidas_locais(self):
+        self.concluir_com_run(self.k0)
+        pl.enfileirar(self.home, [self.k0])
+        sync = self.sync_do_outbox(self.k0)
+        self.assertEqual(set(sync), set(cb.KINDS))
+        j = next(j for j in self.jobs() if j["bug_key"] == self.k0 and j["kind"] == "maven")
+        self.assertEqual(sync["maven"], {"estado": "ok", "revisao": f"2026-11-05T10:00:0{j['id'] % 10}",
+                                         "run_rel": j["run_rel"]})
+
+    def test_etapas_remotas_pendentes_e_sem_run_ficam_de_fora(self):
+        self.concluir_com_run(self.k0)
+        self.sql("UPDATE jobs SET origem='remoto' WHERE bug_key=? AND kind='maven'", self.k0)
+        self.sql("UPDATE jobs SET state='pending' WHERE bug_key=? AND kind='jaguar2'", self.k0)
+        self.sql("UPDATE jobs SET origem='importado' WHERE bug_key=? AND kind='jaguar1'", self.k0)
+        pl.enfileirar(self.home, [self.k0])
+        self.assertEqual(set(self.sync_do_outbox(self.k0)), {"jaguar1"})     # importado entra, remoto não
+        pl.enfileirar(self.home, [self.jobs()[-1]["bug_key"]])
+        self.assertIsNone(self.outbox()[self.jobs()[-1]["bug_key"]]["sync"])
+
+    def test_registra_o_pacote_de_cada_etapa(self):
+        self.concluir_com_run(self.k0)
+        with mock.patch("sbfl.sincronia.registrar_pacote") as reg:
+            pl.enfileirar(self.home, [self.k0])
+        self.assertEqual({c.args[2] for c in reg.call_args_list}, set(cb.KINDS))
+        self.assertTrue(all(c.args[1] == self.k0 for c in reg.call_args_list))
+        from sbfl import sincronia
+        self.assertEqual(sincronia.pacotes_pendentes(self.home), 0)
+        pl.enfileirar(self.home, [self.k0])
+        self.assertEqual(sincronia.pacotes_pendentes(self.home), len(cb.KINDS))
+
+    def test_coluna_maquina(self):
+        self.settings.set("planilha", "maquina_nome", "notebook")
+        self.settings.save()
+        self.concluir_com_run(self.k0)
+        for j in self.jobs():
+            if j["bug_key"] == self.k0 and j["kind"] == "maven":
+                f = self.home.runs / "r" / str(j["id"]) / "run.json"
+                run = json.loads(f.read_text(encoding="utf-8"))
+                run.update(origem="remoto", remoto_de={"maquina_nome": "pc-lab"})
+                f.write_text(json.dumps(run), encoding="utf-8")
+        bug = next(b for b in pl._bugs_do_lote(self.home, [self.k0]))
+        maquina = dict(zip(pl.COLUNAS, pl.linha(self.home, bug)))["Máquina"]
+        self.assertIn(f"{bv.KIND_LABEL['maven']}: pc-lab", maquina)
+        self.assertIn(f"{bv.KIND_LABEL['jaguar1']}: notebook", maquina)
+
+    def test_enviador_manda_maquina_e_sync(self):
+        self.concluir_com_run(self.k0)
+        pl.enfileirar(self.home, [self.k0])
+        fake = Fake({"ok": True})
+        self.enviador(fake).ciclo()
+        body = fake.corpos[0][1]
+        from sbfl import sincronia
+        mid, nome = sincronia.maquina(self.settings)
+        self.assertEqual((body["maquina"], body["maquina_nome"]), (mid, nome))
+        self.assertEqual(set(body["sync"]), {self.k0})
+        self.assertEqual(set(body["sync"][self.k0]), set(cb.KINDS))       # bugs sem execução ficam de fora
+
+    def test_enviador_sem_sincronia_nao_manda_sync(self):
+        self.concluir_com_run(self.k0)
+        pl.enfileirar(self.home, [self.k0])
+        self.settings.set("planilha", "sincronizar", False)
+        fake = Fake({"ok": True})
+        self.enviador(fake).ciclo()
+        self.assertNotIn("sync", fake.corpos[0][1])
+
+    def test_tabela_antiga_ganha_a_coluna_sync(self):
+        with contextlib.closing(jq._connect(self.home)) as con, con:
+            con.execute("CREATE TABLE planilha_outbox(bug_key TEXT PRIMARY KEY, linha TEXT, atualizado TEXT, "
+                        "enviado TEXT, assinatura TEXT)")
+        self.concluir_com_run(self.k0)
+        pl.enfileirar(self.home, [self.k0])
+        self.assertEqual(set(self.sync_do_outbox(self.k0)), set(cb.KINDS))
 
 
 class TestEnviador(Cobertura):

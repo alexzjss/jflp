@@ -104,13 +104,16 @@ def _planilha(request: Request) -> dict | None:
     s = env.status()
     if not s.get("configurada"):
         return {"tipo": "nao_configurada"}
+    sinc = getattr(request.app.state, "sincronizador", None)
+    remotas = int((sinc.status() if sinc is not None else {}).get("reservas_remotas") or 0)
     falhas = int(s.get("falhas_linha") or 0)
     ultimo = s.get("ultimo_ok")
     if s.get("erro"):
-        return {"tipo": "erro", "pendentes": s.get("pendentes", 0), "erro": s["erro"], "ha": _ha(ultimo), "falhas": falhas}
+        return {"tipo": "erro", "pendentes": s.get("pendentes", 0), "erro": s["erro"], "ha": _ha(ultimo), "falhas": falhas,
+                "remotas": remotas}
     # ha None: nenhuma linha foi enviada ainda (o painel diz "ainda não enviada", sem "há —")
     return {"tipo": "ok", "ha": _ha(ultimo) if ultimo else None,
-            "linhas": planilha.linhas_total(request.app.state.home), "falhas": falhas}
+            "linhas": planilha.linhas_total(request.app.state.home), "falhas": falhas, "remotas": remotas}
 
 
 def painel_ctx(request: Request, bid: int) -> dict:

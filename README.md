@@ -66,7 +66,13 @@ cd jflp
 ./jflp.sh doctor
 ```
 
-> O `jflp.sh` foi escrito junto com o resto, mas só teve a sintaxe conferida (`bash -n`); a execução em Arch ainda não foi verificada.
+> Verificado em Arch Linux (Python 3.14): o `jflp.sh` cria o `.venv`, `doctor` funciona, a interface sobe e a suíte de testes passa. O `jflp tools get` (JDK 11 e Maven 3.9.9) e o `jflp selftest` (Maven e Jaguar 2) também passaram; o Jaguar 1 (JDK 8 e jars) ainda não foi exercitado no Linux.
+>
+> Particularidades do Linux:
+>
+> - **Seletor de pastas** ("Escolher pasta…"): usa o `tkinter` (no Arch, `sudo pacman -S tk`; sem o pacote o `import tkinter` falha) ou, se não houver, `zenity` ou `kdialog`. Sem nenhum deles o botão não aparece e basta colar o caminho.
+> - **JDK 7** não tem download automático fora do Windows x64. As correções `javac7` e `scr-jdk7` e o perfil legado precisam dele: instale um JDK 7 por conta própria e aponte em `[tools] jdks = { "7" = "/caminho/do/jdk7" }`. JDK 8 e 11 (Temurin) e o Maven são baixados normalmente pela tela Ambiente.
+> - **Janela própria** (`ui --app`): precisa de `chromium`, `google-chrome` ou `microsoft-edge` no PATH; `ui --window` precisa do `pywebview` com um backend (Qt ou GTK).
 
 **Pasta do JFLP** (`tools/`, `m2/`, `work/`, `runs/`, `recipes/`, `datasets/`, `jflp.db`, `config.toml`):
 
@@ -427,6 +433,37 @@ O token protege a planilha: quem não souber o token não consegue gravar nela. 
 
 Depois de alterar o `Code.gs`, não crie outra implantação: use **Implantar > Gerenciar implantações**, clique no lápis (editar) da implantação, escolha **Nova versão** e clique em **Implantar**. A URL continua a mesma, então a planilha não precisa ser religada.
 
+### Sincronizar dois ou mais computadores
+
+Quando dois ou mais computadores rodam a cobertura apontando para a **mesma planilha** (mesma URL e mesmo token), eles se coordenam pela planilha:
+
+- **Resultado completo:** quando um computador conclui um bug, os outros recebem a execução inteira (`run.json`, `outputs/` e o resto da pasta) e a tratam como execução normal. As telas de ranking e de código funcionam igual.
+- **Sem repetir bugs:** antes de começar um bug da cobertura, o computador reserva o bug na planilha. Se outro já o reservou, ele pula para o próximo.
+- **Funciona offline:** sem internet, cada computador continua rodando sozinho, como antes, e sincroniza quando a conexão volta.
+
+**Configurar**
+
+1. Atualize o `Code.gs` da planilha (passo a passo acima) e publique uma **nova versão** da implantação, como descrito no final da seção. Se a tela **Ambiente** mostrar "atualize o Apps Script", a versão publicada ainda é a antiga.
+2. Na primeira execução da versão nova, o Google pede permissão para o **Google Drive**. Aceite: os pacotes das execuções ficam na pasta **JFLP pacotes**, criada ao lado da planilha.
+3. Em cada computador, use a mesma URL e o mesmo token da planilha.
+4. Dê um nome a cada computador na tela **Ambiente**, na seção **Planilha**. Sem nome, o JFLP usa o nome do próprio computador. Os nomes aparecem na coluna **Máquina** da aba **Bugs**.
+
+A sincronia fica ligada por padrão (`sincronizar = true` no `[planilha]` do `config.toml`) e só vale com a URL configurada. Com a cobertura rodando, ela acontece em segundo plano: os computadores puxam as mudanças a cada 120 segundos (`puxar_cada_s`), e a reserva de um bug vale por 30 minutos sem renovação (`reserva_ttl_s`), renovada enquanto o bug roda.
+
+Para conferir sem esperar o intervalo, rode:
+
+```bash
+jflp cobertura sincronia
+```
+
+O comando faz um ciclo completo: recebe o que os outros computadores concluíram, envia o que este concluiu e imprime um resumo.
+
+**Limites**
+
+- Ações manuais não são sincronizadas. "Marcar não executável" e "refazer", feitas num computador, valem só para ele.
+- Os pacotes ficam acumulados na pasta **JFLP pacotes** do Google Drive. Por enquanto, o JFLP não os apaga; remova manualmente o que não quiser mais.
+- O arquivo `outputs/jacoco.exec` não é transferido, por ser grande. A execução recebida não o tem.
+
 ## 10. Layout da pasta de execução
 
 Cada execução é uma pasta nova (nunca sobrescrita). Ela é gravada em `.<nome>.partial/`, renomeada ao final e seus arquivos viram somente leitura. A pasta é a fonte da verdade; o índice (`jflp.db`) pode ser reconstruído com `jflp reindex`. Execuções que ficaram pela metade viram `interrompido` quando a fila (interface ou `jflp batch run`) é iniciada.
@@ -492,6 +529,7 @@ Um **bug** é identificado por `benchmark/projeto/id` (`d4j/Jsoup/93`, `bugsjar/
 | `jflp cobertura importar <pasta>` | importa os resultados do pipeline PowerShell (`relatorios_cobertura`) para o lote |
 | `jflp cobertura refazer [--todos]` | devolve à fila as etapas com falha (`--todos`: todas as concluídas); depois rode `jflp batch run` |
 | `jflp cobertura planilha [--reenviar]` | sem opção, mostra o token (para o passo 5 do Apps Script), a situação da URL e da caixa de saída; `--reenviar` manda todas as linhas da cobertura para a planilha e espera o envio terminar |
+| `jflp cobertura sincronia` | um ciclo completo da sincronização entre computadores: sobe os pacotes pendentes, puxa e aplica as execuções dos outros computadores e renova/libera as reservas |
 | `jflp export <nome> [bug...] [--batch ID]` | exporta o dataset (informe `--batch` **ou** bugs) |
 | `jflp recipes [benchmark/projeto]` | lista as receitas, ou mostra a de um projeto |
 | `jflp reindex` | reconstrói o índice varrendo `runs/` |
@@ -542,7 +580,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 ```text
 python -m venv .venv
 .venv\Scripts\activate          # Linux: source .venv/bin/activate
-pip install -e .[dev]           # [dev] traz httpx, usado nos testes da interface
+pip install -e .[dev]           # [dev] traz httpx/httpx2, usados nos testes da interface
 python -m unittest discover -s tests -q
 ```
 
@@ -554,6 +592,7 @@ Módulos da cobertura:
 |---|---|
 | `sbfl/cobertura.py` | lote de cobertura: sincronizar, situação de cada bug a partir das etapas, resumo do Painel, refazer, marcar não executável |
 | `sbfl/planilha.py` | planilha do Google: linha de cada bug, caixa de saída no SQLite, `Enviador` (thread com nova tentativa, espera crescente e reconciliação) |
+| `sbfl/sincronia.py` | sincronização entre computadores pelo Apps Script: pacotes das execuções, puxar e aplicar resultados remotos, reservas e a thread `Sincronizador` |
 | `sbfl/importar.py` | importação dos resultados do pipeline PowerShell (`jflp cobertura importar`) |
 | `sbfl/queue.py` | fila SQLite; `Worker` executa um job e `WorkerPool` roda N workers sobre a mesma fila, com a trava de instância, a regra de nunca dois jobs do mesmo bug e a guarda de disco (`DiskGuard`) |
 | `sbfl/web/routes_cobertura.py` | telas Painel e Tabela da cobertura |

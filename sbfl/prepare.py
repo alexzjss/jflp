@@ -130,7 +130,7 @@ def _rmtree(path, strict: bool = True) -> None:
     """rmtree que apaga também arquivos somente-leitura (objetos do .git no Windows)."""
     def fix(func, p, *_):
         try:
-            os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+            os.chmod(p, stat.S_IRWXU if os.path.isdir(p) else stat.S_IWRITE | stat.S_IREAD)
             func(p)
         except OSError:
             pass

@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import unittest
+from unittest import mock
 
 from sbfl import queue as jq
 from sbfl import store
@@ -39,7 +40,8 @@ class Rodar(WebFixture, unittest.TestCase):
         return f"{repo}|{ramo_de(id_)}"
 
     def test_inicio_e_pagina(self):
-        r = self.c.get("/")
+        with mock.patch("sbfl.web.routes_rodar._tk_available", return_value=True):   # não depende do libtk do sistema
+            r = self.c.get("/")
         self.assertEqual(r.status_code, 200)
         for t in ("Rodar bugs", "Pasta", "Escolher pasta"):
             self.assertIn(t, r.text)
