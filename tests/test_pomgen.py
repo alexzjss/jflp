@@ -212,6 +212,14 @@ class TestPomgen(Base):
         d = self._junit_module("", dep % "4.11")
         self.assertNotIn("junit4", self.gen(d).detected)
 
+    def test_junit_de_producao_mantem_o_escopo(self):
+        # Wicket 1.x: junit 3.8.1 em escopo compile (WicketTester); forçar `test` quebra o main
+        d = self._junit_module("", "<dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+                                   "<version>3.8.1</version><scope>compile</scope></dependency></dependencies>")
+        plan = self.gen(d)
+        self.assertIn("junit4", plan.applied)
+        self.assertEqual(self._junit_deps(plan)[0], [("4.12", "compile")])
+
     def test_fixes_on_explicit_and_params(self):
         d = self.module("minimal.xml")
         plan = self.gen(d, fixes_on={"override-version", "exclude-duplicates"}, params={
@@ -347,7 +355,8 @@ class TestPomgen(Base):
     def test_fixes_registry(self):
         self.assertEqual(list(FIXES), ["skip-animal-sniffer", "compiler-java", "source-dirs",
                                        "junit4", "override-version", "exclude-duplicates",
-                                       "skip-rat"])
+                                       "skip-rat", "javac7", "asm-shadow", "rat-flags", "exec-skip",
+                                       "sortpom-warn", "scr-jdk7"])
 
     def test_skip_rat_detected_and_applied(self):
         self.module("parent_sniffer.xml")
@@ -366,6 +375,86 @@ class TestPomgen(Base):
         self.assertEqual(len(p), 1)
         self.assertEqual(p[0].findtext("m:configuration/m:skip", namespaces=NS), "true")
         self.assertEqual(p[0].findtext("m:configuration/m:numUnapprovedLicenses", namespaces=NS), "999999")
+
+    def test_javac7_fork_com_executavel_e_nivel_limitado(self):
+        d = self.module("minimal.xml")
+        plan = self.gen(d, jdk=8, fixes_on={"compiler-java", "javac7"},
+                        params={"javac7": {"executable": "E:/jdk7/bin/javac.exe"}})
+        self.assertIn("javac7", plan.applied)
+        cfg = self.plugins(self.parse(plan), "maven-compiler-plugin")[0].find("m:configuration", NS)
+        self.assertEqual(cfg.findtext("m:fork", namespaces=NS), "true")
+        self.assertEqual(cfg.findtext("m:executable", namespaces=NS), "E:/jdk7/bin/javac.exe")
+        # o compiler-java pediria 1.8; o javac 7 não aceita: a correção do javac 7 vence
+        self.assertEqual(cfg.findtext("m:source", namespaces=NS), "1.7")
+        self.assertEqual(cfg.findtext("m:target", namespaces=NS), "1.7")
+
+    def test_javac7_mantem_nivel_declarado_antigo(self):
+        d = self.module("minimal.xml")
+        text = (d / "pom.xml").read_text(encoding="utf-8").replace(
+            "</project>", "<properties><maven.compiler.source>1.5</maven.compiler.source>"
+                          "<maven.compiler.target>1.5</maven.compiler.target></properties></project>")
+        (d / "pom.xml").write_text(text, encoding="utf-8")
+        plan = self.gen(d, jdk=8, fixes_on={"javac7"}, params={"javac7": {"executable": "x/javac"}})
+        cfg = self.plugins(self.parse(plan), "maven-compiler-plugin")[0].find("m:configuration", NS)
+        self.assertEqual(cfg.findtext("m:source", namespaces=NS), "1.5")
+
+    def test_javac7_sem_executavel_avisa_e_nao_aplica(self):
+        plan = self.gen(self.module("minimal.xml"), fixes_on={"javac7"})
+        self.assertNotIn("javac7", plan.applied)
+        self.assertTrue(any("JDK 7" in w for w in plan.warnings))
+
+    def test_asm_shadow_exclui_cglib_full_e_garante_cglib_nodep(self):
+        plan = self.gen(self.module("minimal.xml"), fixes_on={"asm-shadow"})
+        self.assertIn("asm-shadow", plan.applied)
+        root = self.parse(plan)
+        sf = self.plugins(root, "maven-surefire-plugin")[0]
+        excl = [e.text for e in sf.findall("m:configuration/m:classpathDependencyExcludes/"
+                                           "m:classpathDependencyExclude", NS)]
+        self.assertEqual(excl, ["cglib:cglib-full"])
+        nodep = [d for d in root.findall("m:dependencies/m:dependency", NS)
+                 if d.findtext("m:artifactId", namespaces=NS) == "cglib-nodep"]
+        self.assertEqual(len(nodep), 1)
+        self.assertEqual(nodep[0].findtext("m:scope", namespaces=NS), "test")
+
+    def test_asm_shadow_parametros_proprios_sem_nodep(self):
+        plan = self.gen(self.module("minimal.xml"), fixes_on={"asm-shadow"},
+                        params={"asm-shadow": {"excludes": ["asm:asm"]}})
+        root = self.parse(plan)
+        sf = self.plugins(root, "maven-surefire-plugin")[0]
+        excl = [e.text for e in sf.findall("m:configuration/m:classpathDependencyExcludes/"
+                                           "m:classpathDependencyExclude", NS)]
+        self.assertEqual(excl, ["asm:asm"])
+        self.assertNotIn("cglib-nodep", plan.text)
+
+    def test_scr_jdk7_desliga_execucoes_do_scr_no_pom_gerado(self):
+        d = self.module("minimal.xml")
+        scr = ("<plugin><groupId>org.apache.felix</groupId><artifactId>maven-scr-plugin</artifactId>"
+               "<version>1.9.0</version><executions><execution><id>generate-scr-scrdescriptor</id>"
+               "<goals><goal>scr</goal></goals></execution></executions></plugin>")
+        text = (d / "pom.xml").read_text(encoding="utf-8").replace("</project>", "<build><plugins>" + scr
+                                                                  + "</plugins></build></project>")
+        (d / "pom.xml").write_text(text, encoding="utf-8")
+        plan = self.gen(d, fixes_on={"scr-jdk7"})
+        self.assertIn("scr-jdk7", plan.applied)
+        p = self.plugins(self.parse(plan), "maven-scr-plugin")
+        self.assertEqual(len(p), 1)
+        execs = p[0].findall("m:executions/m:execution", NS)
+        self.assertEqual([e.findtext("m:id", namespaces=NS) for e in execs], ["generate-scr-scrdescriptor"])
+        self.assertEqual(execs[0].findtext("m:phase", namespaces=NS), "none")
+
+    def test_scr_jdk7_herdado_do_pai_usa_o_id_da_execucao_do_pai(self):
+        d = self.module("minimal.xml")
+        plan = self.gen(d, fixes_on={"scr-jdk7"})
+        p = self.plugins(self.parse(plan), "maven-scr-plugin")[0]
+        self.assertEqual(p.findtext("m:version", namespaces=NS), "1.9.0")
+        self.assertEqual(p.findtext("m:executions/m:execution/m:id", namespaces=NS), "generate-scr-scrdescriptor")
+        self.assertEqual(p.findtext("m:executions/m:execution/m:phase", namespaces=NS), "none")
+
+    def test_correcoes_so_de_linha_de_comando_nao_mexem_no_pom(self):
+        base = self.gen(self.module("minimal.xml"), fixes_on=set())
+        plan = self.gen(self.module("minimal.xml"), fixes_on={"rat-flags", "exec-skip", "sortpom-warn"})
+        self.assertEqual(plan.text, base.text)
+        self.assertEqual(plan.applied, ["rat-flags", "exec-skip", "sortpom-warn"])
 
 
 if __name__ == "__main__":

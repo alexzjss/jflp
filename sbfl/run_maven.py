@@ -11,6 +11,7 @@ from pathlib import Path
 from . import proc
 from .home import Home, Settings
 from .outputs import parse_surefire
+from .pomgen.fixes import FIX_FLAGS
 from .prepare import Prepared
 from .toolchain.detect import find_mavens
 from .toolchain.profiles import ToolEnv, resolve
@@ -160,7 +161,8 @@ def run_maven(home: Home, settings: Settings, prep: Prepared, workdir: Path, cfg
         total += pre["seconds"]
         phases.append(phase_record("prefetch", pre["command"], pre["env"]))
     sargs = sargs + offline
-    r0 = install_reactor(te, settings, prep, workdir, log, on_line, sargs)   # multi-módulo: instala o reactor antes
+    r0 = install_reactor(te, settings, prep, workdir, log, on_line, sargs,   # multi-módulo: instala o reactor antes
+                         reactor_flags(cfg))
     if r0 is not None:
         total += r0["seconds"]
         phases.append(phase_record("reactor", r0["command"], te.env))
@@ -227,9 +229,22 @@ def log_phase(log: Path, name: str, on_line=None) -> None:
             pass
 
 
+def reactor_flags(cfg: AttemptConfig) -> list[str]:
+    """Flags `-D...` extras da tentativa: `params["reactor_flags"]` e os `reactor_flags` de cada correção ligada
+    (`params[<correção>]["reactor_flags"]`). O reactor usa os POMs originais, então só a linha de comando o alcança."""
+    flags = [str(f) for f in (cfg.params.get("reactor_flags") or [])]
+    for fid in sorted(cfg.fixes_on):
+        sub = cfg.params.get(fid)
+        own = sub.get("reactor_flags") if isinstance(sub, dict) else None
+        flags += [str(f) for f in (own or FIX_FLAGS.get(fid) or [])]
+    return list(dict.fromkeys(flags))
+
+
 def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Path,
-                    log: Path, on_line=None, extra: list | None = None) -> dict | None:
+                    log: Path, on_line=None, extra: list | None = None,
+                    flags: list[str] | None = None) -> dict | None:
     """Em bug multi-módulo, instala o reactor na raiz com os POMs originais.
+    `flags`: `-D...` de correções (ver `reactor_flags`), depois do `run.skip_flags` para valerem por último.
     Devolve o resultado do `mvn install` (dict de proc.run + "command") ou None se o módulo é a raiz."""
     if prep.module == ".":
         return None
@@ -249,7 +264,8 @@ def install_reactor(te: ToolEnv, settings: Settings, prep: Prepared, workdir: Pa
     log_phase(log, "reactor", on_line)
     # só o módulo do bug e o que ele precisa (o reactor inteiro pode ter módulos de distribuição que quebram)
     module = prep.module.replace("\\", "/").strip("/")
-    cmd = te.mvn(*(extra or []), "install", "-DskipTests", "-pl", module, "-am", *(settings.get("run", "skip_flags", []) or []))
+    cmd = te.mvn(*(extra or []), "install", "-DskipTests", "-pl", module, "-am", *(settings.get("run", "skip_flags", []) or []),
+                 *(flags or []))
     r = proc.run(cmd, cwd=workdir, env=te.env, timeout=settings.get("run", "timeout_s"), log_path=log,
                  on_line=on_line)
     r["command"] = cmd

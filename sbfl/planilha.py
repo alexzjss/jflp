@@ -203,8 +203,9 @@ def _bugs_do_lote(home: Home, chaves: list[str] | None) -> list[dict]:
         b["jobs"][j["kind"]] = j
         if b["origem"] is None and j.get("origem"):
             b["origem"] = j["origem"]
+    ativas = cb.kinds_ativos(home)
     for b in por_bug.values():
-        b["situacao"] = cb.situacao(b["etapas"])
+        b["situacao"] = cb.situacao(b["etapas"], ativas)
     return list(por_bug.values())
 
 

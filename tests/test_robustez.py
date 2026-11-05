@@ -128,7 +128,7 @@ class BestAttemptTest(Tmp):
 
     def test_status_comes_from_attempt_that_went_furthest(self):
         compile_err = ("[INFO] BUILD FAILURE\n[ERROR] COMPILATION ERROR :\n"
-                       "[ERROR] Source option 5 is no longer supported\n")
+                       "[ERROR] /w/A.java:[3,1] cannot find symbol\n")
         run = self.go([JAVAAGENT, compile_err, compile_err, compile_err, compile_err, compile_err],
                       [8, 11, 17, 21, 21, 21])
         self.assertEqual(run["status"], "plugin_incompativel")

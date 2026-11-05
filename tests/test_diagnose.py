@@ -81,7 +81,7 @@ class DiagnoseTest(unittest.TestCase):
         d = self.c(log, kind="jaguar2")
         self.assertEqual(d.status, "plugin_incompativel")
         self.assertIn("Apache RAT", d.cause)
-        self.assertEqual(d.suggestions[0].fix, "skip-rat")
+        self.assertEqual([s.fix for s in d.suggestions], ["rat-flags", "skip-rat"])
 
     def test_remote_resources_failure(self):
         log = ("[ERROR] Failed to execute goal org.apache.maven.plugins:maven-remote-resources-plugin:1.5:process "

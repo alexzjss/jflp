@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import replace
 
 from . import status as st
 from .diagnose import Diagnosis, Suggestion, _keep
-from .run_maven import AttemptConfig
+from .run_maven import UNBLOCK_HTTP, AttemptConfig, reactor_flags
 from .toolchain.detect import find_jdks, find_mavens
 from .toolchain.profiles import PROFILES
 
@@ -14,6 +15,7 @@ SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin"
 SUREFIRE_VERSIONS = ("3.5.3", "3.2.5", "3.0.0-M5")
 COMPILER_VERSIONS = ("3.8.0", "3.1", "3.11.0")
 JDKS = (8, 17, 11)
+REACTOR_FIXES = frozenset({"javac7", "scr-jdk7"})   # mudam o reactor sem passar por reactor_flags fixas
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -109,9 +111,11 @@ def attempt_cap(settings, params: dict, kind: str) -> int:
 
 
 def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
-               detected: set[str] | None = None, toolenv: dict | None = None) -> list[AttemptConfig]:
+               detected: set[str] | None = None, toolenv: dict | None = None,
+               truncate: bool = True) -> list[AttemptConfig]:
     """Sugestões do diagnóstico e depois Surefire, compiler e JDK; sem repetir (pela configuração efetiva,
-    com o JDK/Maven que a 1ª tentativa resolveu em `toolenv`) e limitado por run.max_attempts."""
+    com o JDK/Maven que a 1ª tentativa resolveu em `toolenv`) e limitado por run.max_attempts.
+    Com `truncate=False` devolve a lista inteira: quem executa aplica o limite só às tentativas que rodam."""
     ejdk, emvn = effective_jdk_maven(toolenv)
     if diag.status == st.PROJETO_INVALIDO:    # erro de escolha da pasta/módulo: nenhuma configuração resolve
         return []
@@ -132,6 +136,44 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
         if k not in seen:
             seen.add(k)
             result.append(c)
+    if not truncate:
+        return result
     cap = attempt_cap(settings, first.params, kind)
     limit = max(0, cap - 1)
     return result[:limit]
+
+
+def reactor_key(cfg: AttemptConfig, jdk: int | None, maven: str | None) -> str:
+    """O que decide o resultado do `install` do reactor (POMs originais): JDK e Maven efetivos, o que muda
+    os argumentos de settings (unblock-http, mirror da cobertura, offline), as flags do reactor e as correções
+    que trocam o javac ou o JDK/Maven só do reactor (javac7, scr-jdk7)."""
+    return json.dumps([cfg.jdk if cfg.jdk is not None else jdk,
+                       cfg.maven if cfg.maven is not None else maven,
+                       UNBLOCK_HTTP in cfg.fixes_on, bool(cfg.params.get("cobertura")),
+                       bool(cfg.params.get("offline")), reactor_flags(cfg),
+                       sorted(REACTOR_FIXES & set(cfg.fixes_on))],
+                      sort_keys=True, default=str)
+
+
+def _no_surefire(cfg: AttemptConfig, detected: set[str], jdk, maven) -> str:
+    """Chave efetiva da configuração sem a versão do Surefire em `override-version`."""
+    on = set(cfg.fixes_on) or set(detected)
+    params = copy.deepcopy(cfg.params)
+    ov = params.get("override-version")
+    if isinstance(ov, dict):
+        plugins = ov.get("plugins")
+        if isinstance(plugins, dict):
+            plugins.pop(SUREFIRE, None)
+            if not plugins:
+                ov.pop("plugins")
+        if not ov:
+            params.pop("override-version")
+            on.discard("override-version")
+    return effective_key(replace(cfg, fixes_on=frozenset(on), params=params), jdk, maven)
+
+
+def surefire_only_variant(cand: AttemptConfig, ran: AttemptConfig, detected: set[str],
+                          cand_env: tuple, ran_env: tuple) -> bool:
+    """`cand` só difere de `ran` pela versão do Surefire (`override-version`)? `*_env` = (JDK, Maven) efetivos."""
+    return (cand.key() != ran.key()
+            and _no_surefire(cand, detected, *cand_env) == _no_surefire(ran, detected, *ran_env))

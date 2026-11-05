@@ -130,9 +130,24 @@ def etapa(job: dict, run: dict | None) -> str:
     return SIT_FALHOU
 
 
-def situacao(etapas: dict) -> str:
+def kinds_ativos(home: Home) -> tuple[str, ...]:
+    """Etapas que a cobertura roda (`cobertura.kinds`; vazio ou inválido = todas), como o worker decide."""
+    from .home import load_settings
+    try:
+        v = load_settings(home).get("cobertura", "kinds", None)
+    except Exception:
+        v = None
+    ok = tuple(k for k in KINDS if isinstance(v, (list, tuple)) and k in v)
+    return ok or KINDS
+
+
+def situacao(etapas: dict, ativas=None) -> str:
     """Situação do bug a partir das etapas. Só é `parcial` (concluído) quando nenhuma etapa está
-    pendente ou rodando: algumas ok e outras falhadas/não executáveis."""
+    pendente ou rodando: algumas ok e outras falhadas/não executáveis. Com `ativas`, uma etapa
+    pendente que a cobertura não roda (fora de `cobertura.kinds`) não segura o bug como pendente."""
+    if ativas is not None:
+        filtradas = {k: e for k, e in etapas.items() if k in ativas or e != SIT_PENDENTE}
+        etapas = filtradas or etapas
     v = list(etapas.values())
     if any(e == SIT_RODANDO for e in v):
         return SIT_RODANDO
@@ -200,8 +215,9 @@ def _montar(home: Home, bid: int, detalhe: bool) -> tuple[list[dict], dict[str, 
         if b["origem"] is None and j.get("origem"):
             b["origem"] = j["origem"]
     out = list(por_bug.values())
+    ativas = kinds_ativos(home)
     for b in out:
-        b["situacao"] = situacao(b["etapas"])
+        b["situacao"] = situacao(b["etapas"], ativas)
     return out, rows
 
 
@@ -254,9 +270,13 @@ def _resumir(lista: list[dict], rows: dict[str, dict]) -> dict:
     projetos: dict[str, dict] = {}
     agora = datetime.now()
     fins, abertos = [], 0
+    por_etapa = {k: {s: 0 for s in (SIT_OK, SIT_FALHOU, SIT_NAO_EXEC, SIT_RODANDO, SIT_PENDENTE)} for k in KINDS}
     for b in lista:
         s = b["situacao"]
         por_sit[s] += 1
+        for k, e in b["etapas"].items():
+            if k in por_etapa and e in por_etapa[k]:
+                por_etapa[k][e] += 1
         p = projetos.setdefault(b["projeto"], {"projeto": b["projeto"], "total": 0, "concluidos": 0, **{
             k: 0 for k in (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC, SIT_PENDENTE)}})
         p["total"] += 1
@@ -264,8 +284,7 @@ def _resumir(lista: list[dict], rows: dict[str, dict]) -> dict:
             p[s] += 1
         if s in (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC):
             p["concluidos"] += 1
-        estados = b["etapas"].values()
-        if any(e in (SIT_PENDENTE, SIT_RODANDO) for e in estados):
+        if s in (SIT_PENDENTE, SIT_RODANDO):     # já descontadas as etapas fora de cobertura.kinds
             abertos += 1
             continue
         tempos = [_fim(j, rows) for j in b["jobs"].values()]
@@ -280,6 +299,7 @@ def _resumir(lista: list[dict], rows: dict[str, dict]) -> dict:
     concluidos = sum(por_sit[s] for s in (SIT_OK, SIT_PARCIAL, SIT_FALHOU, SIT_NAO_EXEC))
     return {"total": len(lista), "concluidos": concluidos, "por_situacao": por_sit,
             "por_projeto": sorted(projetos.values(), key=lambda p: p["projeto"]),
+            "por_etapa": por_etapa,
             "ritmo_h": ritmo, "restante_s": restante}
 
 

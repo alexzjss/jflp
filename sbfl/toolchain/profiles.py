@@ -123,6 +123,19 @@ def _build_env(jdk: Jdk, maven: Maven, settings: Settings) -> dict[str, str]:
     return env
 
 
+def javac_of(jdk: Jdk) -> Path:
+    """Executável `javac` de um JDK."""
+    return Path(jdk.home) / "bin" / ("javac.exe" if detect._is_windows() else "javac")
+
+
+def find_jdk_with_javac(home: Home, settings: Settings, major: int) -> Jdk:
+    """JDK `major` com `javac` (um JRE não serve para compilar); MissingTool se não houver."""
+    for j in find_jdks(home, settings):
+        if j.major == major and javac_of(j).is_file():
+            return j
+    raise _missing_jdk(major)
+
+
 def resolve(profile: str, home: Home, settings: Settings, pom_dir: Path | None = None,
             jdk: int | None = None, maven: str | None = None) -> ToolEnv:
     """Escolhe JDK e Maven do perfil e monta o ambiente isolado."""

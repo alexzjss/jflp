@@ -587,5 +587,141 @@ class TentativasCoberturaTest(Base):
         self.assertEqual(len(candidates(first, Diagnosis("x"), "jaguar2", self.settings)), 1)
 
 
+class ReuseAndPruneTest(Base):
+    """Cópia de trabalho reaproveitada entre tentativas e poda das tentativas que não mudariam o resultado."""
+
+    def runner_with(self, steps, seen=None):
+        """steps(n, cfg, workdir) -> AttemptResult; `seen` recebe (workdir, havia target/ ao começar)."""
+        def run(home, settings, prep, workdir, cfg, log, toolenv=None, on_line=None):
+            self.cfgs.append(cfg)
+            if seen is not None:
+                seen.append((workdir, (workdir / "target").exists()))
+            log.parent.mkdir(parents=True, exist_ok=True)
+            log.write_text(SNIFFER, encoding="utf-8")
+            return steps(len(self.cfgs), cfg, workdir)
+        return run
+
+    def go_runner(self, runner, opts, lines=None):
+        copies = []
+        real = ex.working_copy
+
+        def counting(prep, home):
+            copies.append(1)
+            return real(prep, home)
+        opts.log_cb = lines.append if lines is not None else None
+        with mock.patch.object(ex, "prepare", return_value=self.prep), \
+                mock.patch.object(ex, "working_copy", counting), \
+                mock.patch.object(ex, "run_jaguar2", runner):
+            rel = ex.execute(self.home, self.settings, BUG, "jaguar2", opts)
+        return load_run(self.home, rel), self.home.runs.joinpath(*rel.split("/")), len(copies)
+
+    def steps_best_then_worse(self, n, cfg, workdir):
+        env = {"jdk": {"major": 11}}
+        if n == 2:      # chegou aos testes: a melhor, mas não é sucesso
+            rep = workdir / "target" / "surefire-reports"
+            rep.mkdir(parents=True)
+            (rep / "TEST-a.xml").write_text("<testsuite/>")
+            pom = workdir / "jaguar2-pom.xml"
+            pom.write_text("<project/>")
+            return AttemptResult(1, False, 1.0, workdir / "x", {"surefire": rep, "pom": pom}, {}, ["mvn"], env, {})
+        return AttemptResult(1, False, 1.0, workdir / "x", {}, {}, ["mvn"], env, {})
+
+    def test_uma_copia_so_e_saidas_da_melhor_tentativa(self):
+        self.settings.set("run", "max_attempts", 4)
+        seen = []
+        run, d, copies = self.go_runner(self.runner_with(self.steps_best_then_worse, seen),
+                                        ex.RunOptions(archive_checkout=False))
+        self.assertEqual(copies, 1)
+        self.assertGreaterEqual(len(self.cfgs), 3)
+        self.assertEqual(len({w for w, _ in seen}), 1)
+        self.assertTrue(all(not t for _, t in seen), seen)       # target/ sumiu entre as tentativas
+        self.assertEqual(run["attempts"], len(self.cfgs))
+        self.assertTrue((d / "outputs" / "surefire-reports" / "TEST-a.xml").exists())
+        self.assertTrue((d / "pom" / "jaguar2-pom.xml").exists())
+        self.assertEqual(list((self.home.work / "w").iterdir()), [])
+        stage = self.home.work / "s"
+        self.assertEqual(list(stage.iterdir()) if stage.exists() else [], [])
+
+    def test_empate_vai_para_a_mais_recente(self):
+        self.settings.set("run", "max_attempts", 3)
+
+        def steps(n, cfg, workdir):
+            rep = workdir / "target" / "surefire-reports"
+            rep.mkdir(parents=True)
+            (rep / f"TEST-{n}.xml").write_text("<testsuite/>")
+            return AttemptResult(1, False, 1.0, workdir / "x", {"surefire": rep}, {}, ["mvn"],
+                                 {"jdk": {"major": 11}}, {})
+        run, d, copies = self.go_runner(self.runner_with(steps), ex.RunOptions(archive_checkout=False))
+        self.assertEqual(copies, 1)
+        self.assertEqual([f.name for f in (d / "outputs" / "surefire-reports").iterdir()], ["TEST-3.xml"])
+
+    def test_com_arquivamento_mantem_uma_copia_por_tentativa(self):
+        self.settings.set("run", "max_attempts", 3)
+        run, d, copies = self.go_runner(self.runner_with(self.steps_best_then_worse),
+                                        ex.RunOptions(archive_checkout=True))
+        self.assertEqual(copies, len(self.cfgs))
+        self.assertGreaterEqual(copies, 3)
+        self.assertTrue((d / "outputs" / "surefire-reports" / "TEST-a.xml").exists())
+        self.assertIn("checkout", run)
+        self.assertEqual(list((self.home.work / "w").iterdir()), [])
+
+    def test_falha_no_reactor_pula_candidatas_so_de_pom(self):
+        self.settings.set("run", "max_attempts", 3)
+
+        def steps(n, cfg, workdir):
+            return AttemptResult(1, False, 1.0, workdir / "x", {}, {}, ["mvn"], {"jdk": {"major": 11}},
+                                 {"fase": "reactor"})
+        lines = []
+        diag = Diagnosis("plugin_incompativel", suggestions=[Suggestion(fix="skip-animal-sniffer", label="a"),
+                                                             Suggestion(fix="unblock-http", label="b")])
+        with mock.patch.object(ex, "classify", return_value=diag):
+            run, d, copies = self.go_runner(self.runner_with(steps), ex.RunOptions(archive_checkout=False), lines)
+        # skip-animal-sniffer é só POM (pulada); unblock-http muda o settings do reactor (roda)
+        self.assertTrue(any("unblock-http" in c.fixes_on for c in self.cfgs[1:]))
+        self.assertFalse(any("skip-animal-sniffer" in c.fixes_on for c in self.cfgs[1:]))
+        self.assertEqual(len(self.cfgs), 3)          # as puladas não gastam o limite
+        self.assertTrue(any(ln.startswith("# jflp tentativa pulada: ") for ln in lines), lines)
+        self.assertEqual(run["attempts"], 3)
+        self.assertEqual(len(list(d.glob("attempts/*/attempt.json"))), 3)
+
+    def test_falha_antes_dos_testes_pula_so_versao_do_surefire(self):
+        self.settings.set("run", "max_attempts", 20)
+
+        def steps(n, cfg, workdir):
+            return AttemptResult(1, False, 1.0, workdir / "x", {}, {}, ["mvn"], {"jdk": {"major": 11}}, {})
+        self.go_runner(self.runner_with(steps), ex.RunOptions(archive_checkout=False))
+        from sbfl.autosearch import SUREFIRE
+        for c in self.cfgs:
+            self.assertNotIn(SUREFIRE, ((c.params.get("override-version") or {}).get("plugins") or {}))
+        self.assertTrue(any("compiler-java" in c.fixes_on for c in self.cfgs))
+
+    def test_reactor_key_e_variante_so_de_surefire(self):
+        from sbfl.autosearch import SUREFIRE, reactor_key, surefire_only_variant
+        a = AttemptConfig()
+        self.assertEqual(reactor_key(a, 11, "3.9"), reactor_key(AttemptConfig(jdk=11), 8, "3.9"))
+        self.assertNotEqual(reactor_key(a, 11, "3.9"), reactor_key(a, 8, "3.9"))
+        self.assertNotEqual(reactor_key(a, 11, "3.9"),
+                            reactor_key(AttemptConfig(params={"reactor_flags": ["-Drat.skip"]}), 11, "3.9"))
+        self.assertNotEqual(reactor_key(a, 11, "3.9"),
+                            reactor_key(AttemptConfig(fixes_on=frozenset({"unblock-http"})), 11, "3.9"))
+        self.assertEqual(reactor_key(a, 11, "3.9"),
+                         reactor_key(AttemptConfig(fixes_on=frozenset({"junit4"})), 11, "3.9"))
+        # correções que alcançam o reactor: flags próprias (FIX_FLAGS) e troca de javac/JDK do reactor
+        for fix in ("rat-flags", "exec-skip", "javac7", "scr-jdk7"):
+            self.assertNotEqual(reactor_key(a, 8, "3.9"),
+                                reactor_key(AttemptConfig(fixes_on=frozenset({fix})), 8, "3.9"), fix)
+        sf = AttemptConfig(fixes_on=frozenset({"override-version"}),
+                           params={"override-version": {"plugins": {SUREFIRE: "3.0.0"}}})
+        env = (11, "3.9")
+        self.assertTrue(surefire_only_variant(sf, a, set(), env, env))
+        sf2 = AttemptConfig(fixes_on=frozenset({"junit4", "override-version"}), params=sf.params)
+        self.assertTrue(surefire_only_variant(sf2, AttemptConfig(fixes_on=frozenset({"junit4"})), set(), env, env))
+        self.assertTrue(surefire_only_variant(sf2, a, {"junit4"}, env, env))      # a = "as detectadas"
+        self.assertFalse(surefire_only_variant(sf, AttemptConfig(jdk=8), set(), env, env))
+        other = AttemptConfig(fixes_on=frozenset({"override-version"}),
+                              params={"override-version": {"plugins": {"x:y": "1"}}})
+        self.assertFalse(surefire_only_variant(other, a, set(), env, env))
+
+
 if __name__ == "__main__":
     unittest.main()
