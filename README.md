@@ -291,7 +291,7 @@ As regras de diagnóstico (regex sobre o log, só em linhas de erro quando neces
 | `scr-jdk7` | `maven-scr-plugin:1.9.0:scr ... is not an ImageIO SPI class` (Oak) | O reactor roda no JDK 7 + Maven 3.6.3 (`-Dhttps.protocols=TLSv1.2`); o POM gerado desliga as execuções do scr (fase `none`), então só os módulos do reactor têm os descritores OSGi-INF, e compila com o javac 7 (`javac7` sem flags no reactor; o javac 8 recusa, por exemplo, `assertEquals` ambíguo no Oak) |
 | `rat-flags` | `apache-rat-plugin:0.10:check ... Too many files with unapproved license` | `-Drat.ignoreErrors=true -Drat.numUnapprovedLicenses=999999` (a 0.10 não tem `rat.skip`) |
 | `exec-skip` | `exec-maven-plugin ... Cannot run program ... .sh` / `CreateProcess error=193` (Accumulo, Windows) | `-Dskip=true`; vale porque o código gerado pelo script (thrift) já está no repositório |
-| `sortpom-warn` | `maven-sortpom-plugin:verify ... is not sorted` (reprova o `jaguar2-pom.xml`) | `-Dsort.verifyFail=warn` |
+| `sortpom-warn` | `maven-sortpom-plugin:verify ... is not sorted` (reprova o `jaguar2-pom.xml`) | `-Dsort.verifyFail=warn` e, no POM gerado, `verifyFail` = `warn` (o POM do Accumulo fixa `Stop`, que vence a propriedade) |
 
 Se uma tentativa com outro JDK chegou até os testes (sucesso ou `jaguar_sem_saida`), as candidatas seguintes sem JDK próprio herdam esse JDK.
 

@@ -328,6 +328,25 @@ def _apply_nada(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     """Correção só de linha de comando (ver FIX_FLAGS): o POM fica como está."""
 
 
+SORTPOM = ("com.google.code.sortpom", "maven-sortpom-plugin")
+
+
+def _apply_sortpom_warn(doc: PomDoc, ctx: PomContext, params: dict) -> None:
+    """O POM do Accumulo fixa `<verifyFail>Stop</verifyFail>`, que vence a propriedade `sort.verifyFail`: no
+    POM gerado a configuração vira `warn`. Sem o plugin na cadeia de POMs não há o que mudar."""
+    version = None
+    found = False
+    for d in _chain_docs(ctx):
+        for p in _plugin_entries(d, *SORTPOM):
+            found = True
+            if not version and d.child(p, "version") is not None:
+                version = (d.child(p, "version").text or "").strip()
+    if not found:
+        return
+    p = doc.ensure_plugin(*SORTPOM, version, overwrite=False)
+    doc.set_child(doc.child(p, "configuration", create=True), "verifyFail", "warn")
+
+
 def _apply_scr_skip(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     """O maven-scr-plugin 1.9.0 não roda em JDK >= 8; o reactor o executa no JDK 7 (scr-jdk7) e o POM gerado
     desliga as execuções dele (fase `none`), então os descritores OSGi-INF só existem nos módulos do reactor."""
@@ -395,8 +414,9 @@ FIXES: dict[str, Fix] = {f.id: f for f in [
         "(vale quando o código gerado por ele já está no repositório).",
         _never, _apply_nada, {}),
     Fix("sortpom-warn", "Só avisar no sortpom",
-        "O maven-sortpom-plugin:verify reprova o jaguar2-pom.xml gerado; `-Dsort.verifyFail=warn` só avisa.",
-        _never, _apply_nada, {}),
+        "O maven-sortpom-plugin:verify reprova o jaguar2-pom.xml gerado; `-Dsort.verifyFail=warn` (e `verifyFail` "
+        "no POM gerado, quando o POM fixa `Stop`) só avisa.",
+        _never, _apply_sortpom_warn, {}),
     Fix("scr-jdk7", "Rodar o maven-scr-plugin no JDK 7",
         "O maven-scr-plugin 1.9.0 falha em JDK >= 8 (`not an ImageIO SPI class`): o reactor roda no JDK 7 com "
         "Maven 3.6.3 e o POM gerado desliga o plugin.",
