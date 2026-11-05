@@ -45,7 +45,9 @@ def make_writable(path) -> None:
     items = [p] + (list(p.rglob("*")) if p.is_dir() else [])
     for item in items:
         with contextlib.suppress(OSError):
-            os.chmod(item, stat.S_IWRITE | stat.S_IREAD)
+            # pasta sem o bit de execução fica inacessível no Linux: só acrescenta o que falta
+            extra = stat.S_IRWXU if item.is_dir() else stat.S_IWRITE | stat.S_IREAD
+            os.chmod(item, (os.stat(item).st_mode & 0o7777) | extra)
 
 
 def _lock_files(folder: Path) -> None:

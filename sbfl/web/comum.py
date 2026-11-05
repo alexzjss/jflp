@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -77,15 +79,41 @@ def add_recente(home, spec: str, nome: str, kinds: list[str], tests: list[str], 
 # ---------------------------------------------------------------- formulário
 
 def _tk_available() -> bool:
+    """Há como abrir um seletor de pastas? tkinter, ou (Linux) zenity/kdialog."""
     try:
         import tkinter  # noqa: F401
     except ImportError:
-        return False
+        return _linux_picker() is not None
     return True
+
+
+def _linux_picker() -> list[str] | None:
+    """Comando de um seletor de pastas externo (Linux, quando o tkinter/libtk não está instalado)."""
+    if os.name == "nt":
+        return None
+    titulo = "Escolha a pasta do projeto"
+    if shutil.which("zenity"):
+        return ["zenity", "--file-selection", "--directory", f"--title={titulo}"]
+    if shutil.which("kdialog"):
+        return ["kdialog", "--getexistingdirectory", str(Path.home()), "--title", titulo]
+    return None
+
+
+def _pick_folder_externo(cmd: list[str]) -> str:
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
 
 
 def _pick_folder() -> str:
     """Seletor de pastas nativo, numa thread própria e com a janela no topo. "" se cancelar ou falhar."""
+    try:
+        import tkinter  # noqa: F401
+    except ImportError:
+        cmd = _linux_picker()
+        return _pick_folder_externo(cmd) if cmd else ""
     out = [""]
 
     def work() -> None:

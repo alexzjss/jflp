@@ -12,6 +12,9 @@ Todas as mudanças relevantes deste projeto estão aqui. O formato segue o [Keep
 
 ### Corrigido
 
+- **Linux:** `make_writable` e o `_rmtree` tiravam o bit de execução das pastas (`chmod 0o600`), deixando-as inacessíveis: o export do dataset perdia os arquivos e o cancelamento de um job deixava a execução parcial no disco. Agora só acrescentam permissões.
+- **Linux:** o botão "Escolher pasta…" desaparecia quando o `libtk` não estava instalado; agora há fallback para `zenity`/`kdialog`.
+- `redirected_path` passa a tratar o caminho como caminho do Windows em qualquer sistema; o teste de navegador do Windows só roda no Windows; `[dev]` inclui `httpx2` (exigido pelo Starlette recente).
 - Um JDK 7 configurado em `[tools] jdks` não é mais usado para sondar a versão dos Mavens (o Maven 3.9 não roda em Java 7 e o Maven era dado como ausente).
 
 ## [0.3.0] - 2026-10-31

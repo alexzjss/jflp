@@ -6,7 +6,7 @@ import re
 import tomllib
 import dataclasses
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 # Flags que desligam verificações de qualidade do Maven que atrapalham o checkout antigo.
 SKIP_FLAGS = [
@@ -68,7 +68,7 @@ def redirected_path(plain: str, real: str) -> str | None:
     if r == p:
         return None
     if "\\packages\\" in r and "\\localcache\\" in r and "\\packages\\" not in p:
-        return str(Path(real).parent)
+        return str(PureWindowsPath(real).parent)
     return None
 
 

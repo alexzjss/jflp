@@ -66,7 +66,13 @@ cd jflp
 ./jflp.sh doctor
 ```
 
-> O `jflp.sh` foi escrito junto com o resto, mas só teve a sintaxe conferida (`bash -n`); a execução em Arch ainda não foi verificada.
+> Verificado em Arch Linux (Python 3.14): o `jflp.sh` cria o `.venv`, `doctor` funciona, a interface sobe e a suíte de testes passa. O `jflp tools get` (JDK 11 e Maven 3.9.9) e o `jflp selftest` (Maven e Jaguar 2) também passaram; o Jaguar 1 (JDK 8 e jars) ainda não foi exercitado no Linux.
+>
+> Particularidades do Linux:
+>
+> - **Seletor de pastas** ("Escolher pasta…"): usa o `tkinter` (no Arch, `sudo pacman -S tk`; sem o pacote o `import tkinter` falha) ou, se não houver, `zenity` ou `kdialog`. Sem nenhum deles o botão não aparece e basta colar o caminho.
+> - **JDK 7** não tem download automático fora do Windows x64. As correções `javac7` e `scr-jdk7` e o perfil legado precisam dele: instale um JDK 7 por conta própria e aponte em `[tools] jdks = { "7" = "/caminho/do/jdk7" }`. JDK 8 e 11 (Temurin) e o Maven são baixados normalmente pela tela Ambiente.
+> - **Janela própria** (`ui --app`): precisa de `chromium`, `google-chrome` ou `microsoft-edge` no PATH; `ui --window` precisa do `pywebview` com um backend (Qt ou GTK).
 
 **Pasta do JFLP** (`tools/`, `m2/`, `work/`, `runs/`, `recipes/`, `datasets/`, `jflp.db`, `config.toml`):
 
@@ -542,7 +548,7 @@ Variável de ambiente: `JFLP_HOME` muda a pasta do JFLP.
 ```text
 python -m venv .venv
 .venv\Scripts\activate          # Linux: source .venv/bin/activate
-pip install -e .[dev]           # [dev] traz httpx, usado nos testes da interface
+pip install -e .[dev]           # [dev] traz httpx/httpx2, usados nos testes da interface
 python -m unittest discover -s tests -q
 ```
 

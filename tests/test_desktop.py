@@ -29,6 +29,7 @@ class Tmp(unittest.TestCase):
 
 
 class TestNavegador(Tmp):
+    @unittest.skipUnless(os.name == "nt", "caminhos do Windows")
     def test_windows_prefere_edge_x86_e_depois_chrome(self):
         env = {"ProgramFiles": r"C:\PF", "ProgramFiles(x86)": r"C:\PF86", "LOCALAPPDATA": r"C:\L"}
         edge = Path(r"C:\PF86") / "Microsoft/Edge/Application/msedge.exe"
