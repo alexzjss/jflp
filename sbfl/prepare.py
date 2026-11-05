@@ -723,6 +723,103 @@ def working_copy(prep: Prepared, home: Home) -> Path:
     return dest
 
 
+@dataclass
+class Manifest:
+    """Árvore que a cópia de trabalho teria: arquivos (relpath -> (tamanho, mtime_ns)) e pastas."""
+    files: dict[str, tuple[int, int]]
+    dirs: set[str]
+
+
+def pristine_manifest(pristine: Path) -> Manifest:
+    """Percorre o pristine como `working_copy` copiaria (mesmas regras de `_ignore_work`), sem ler conteúdo."""
+    files: dict[str, tuple[int, int]] = {}
+    dirs: set[str] = {""}
+
+    def walk(path: str, rel: str) -> None:
+        with os.scandir(path) as it:
+            entries = list(it)
+        skip = _ignore_work(path, {e.name for e in entries})
+        for e in entries:
+            if e.name in skip:
+                continue
+            r = f"{rel}/{e.name}" if rel else e.name
+            if e.is_dir(follow_symlinks=False):
+                dirs.add(r)
+                walk(e.path, r)
+            else:
+                try:
+                    stt = e.stat()
+                except OSError:
+                    continue
+                files[r] = (stt.st_size, stt.st_mtime_ns)
+
+    walk(long_path(pristine), "")
+    return Manifest(files, dirs)
+
+
+def _remove_entry(path: str) -> None:
+    """Apaga arquivo ou pasta (inclusive somente-leitura, como o store deixa)."""
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            _rmtree(path)
+            return
+        try:
+            os.unlink(path)
+        except PermissionError:
+            os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+            os.unlink(path)
+    except FileNotFoundError:
+        pass
+
+
+def reset_working_copy(prep: Prepared, workdir: Path, manifest: Manifest | None = None) -> Manifest:
+    """Volta uma cópia de trabalho existente ao estado do pristine, no lugar: apaga o que não existe nele
+    (target/, jaguar2-pom.xml, qualquer coisa gerada pelo build) e recopia o que sumiu ou mudou de tamanho
+    ou mtime. Sem hash: o `copy2` da cópia original preserva o mtime. Devolve o manifesto (reutilize-o)."""
+    m = manifest or pristine_manifest(prep.pristine)
+    wroot = long_path(workdir)
+    proot = long_path(prep.pristine)
+
+    kept: set[str] = set()      # arquivos já corretos na cópia
+
+    def clean(path: str, rel: str) -> None:
+        try:
+            with os.scandir(path) as it:
+                entries = list(it)
+        except OSError:
+            return
+        for e in entries:
+            r = f"{rel}/{e.name}" if rel else e.name
+            if e.is_dir(follow_symlinks=False):
+                if r in m.dirs:
+                    clean(e.path, r)
+                else:
+                    _remove_entry(e.path)
+                continue
+            want = m.files.get(r)
+            if want is not None:
+                try:
+                    stt = e.stat()
+                    if (stt.st_size, stt.st_mtime_ns) == want and not e.is_symlink():
+                        kept.add(r)
+                        continue
+                except OSError:
+                    pass
+            _remove_entry(e.path)       # sobra, mudou, ou virou arquivo onde havia pasta
+
+    os.makedirs(wroot, exist_ok=True)
+    clean(wroot, "")
+    for d in sorted(m.dirs):
+        if d:
+            os.makedirs(os.path.join(wroot, *d.split("/")), exist_ok=True)
+    for r in m.files:
+        parts = r.split("/")
+        dest = os.path.join(wroot, *parts)
+        if r not in kept:
+            shutil.copy2(os.path.join(proot, *parts), dest)
+    return m
+
+
 def list_bugs(settings: Settings, benchmark: str, project: str | None = None) -> list[Bug]:
     if benchmark == "bugsjar":
         return _bugsjar_bugs(settings, project)

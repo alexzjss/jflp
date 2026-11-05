@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.metadata
 import platform
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -16,13 +17,14 @@ from . import proc, recipes
 from .proc import NO_WINDOW
 from . import status as st
 from .adapters.base import Bug
-from .autosearch import attempt_cap, candidates, deep_merge, effective_jdk_maven, effective_key
+from .autosearch import (attempt_cap, candidates, deep_merge, effective_jdk_maven, effective_key, reactor_key,
+                         surefire_only_variant)
 from .diagnose import Diagnosis, _read_tail, classify
 from .errors import StageError
 from .home import Home, Settings
 from .outputs import parse_surefire_failures
 from .pomgen import generate as pom_generate
-from .prepare import _rmtree, prepare, working_copy
+from .prepare import _rmtree, prepare, reset_working_copy, working_copy
 from .winpath import long_path
 from .run_jaguar1 import run_jaguar1
 from .run_jaguar2 import run_jaguar2
@@ -184,6 +186,35 @@ def _label(n: int, cfg: AttemptConfig, res: AttemptResult, status: str) -> str:
     return f"tentativa {n}" + (f" (JDK {jdk})" if jdk is not None else "") + f": {status}"
 
 
+def _snapshot_outputs(res: AttemptResult, stage: Path) -> None:
+    """Copia as saídas da tentativa para `stage` e aponta `res.outputs` para as cópias (o workdir será resetado)."""
+    stage.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for i, (key, src) in enumerate(res.outputs.items()):
+        if not src or not Path(src).exists():
+            out[key] = src
+            continue
+        dest = stage / str(i) / Path(src).name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if Path(src).is_dir():
+            shutil.copytree(long_path(src), long_path(dest), dirs_exist_ok=True)
+        else:
+            shutil.copy2(long_path(src), long_path(dest))
+        out[key] = dest
+    res.outputs = out
+
+
+def _prune_reason(cfg: AttemptConfig, eff: tuple, reactor_failed: set[str],
+                  early_failed: list[tuple[AttemptConfig, tuple]], detected: set[str] | None) -> str | None:
+    """Motivo para não rodar a candidata (não mudaria o resultado), ou None."""
+    if reactor_key(cfg, *eff) in reactor_failed:
+        return "o reactor já falhou com o mesmo JDK/Maven/flags (POM e Surefire não entram nele)"
+    for ran, env in early_failed:
+        if surefire_only_variant(cfg, ran, set(detected or ()), eff, env):
+            return "só muda a versão do Surefire e a anterior nem chegou aos testes"
+    return None
+
+
 def _stopped(w: RunWriter, status: str, cause: str, **extra) -> Path:
     return w.finish({"status": status, "diagnosis": {"status": status, "cause": cause, "evidence": [],
                                                       "suggestions": [], "warnings": []},
@@ -241,7 +272,16 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         outcomes: list[tuple[int, str]] = []   # (n, "tentativa N (JDK X): status") de cada tentativa real
         ran_keys: set[str] = set()     # configurações efetivas já executadas
         eff: tuple = (None, None)      # JDK/Maven que o perfil resolveu na 1ª tentativa
-        keep: Path | None = None       # cópia de trabalho da melhor tentativa
+        keep: Path | None = None       # cópia de trabalho da melhor tentativa (só com checkout arquivado)
+        archive = (opts.archive_checkout if opts.archive_checkout is not None
+                   else settings.get("run", "archive_checkout", True))
+        reuse = not archive            # uma cópia por execução; entre tentativas, reset no lugar
+        work: Path | None = None       # a cópia reaproveitada
+        manifest = None                # manifesto do pristine (calculado uma vez)
+        stage: Path | None = None      # saídas da melhor tentativa, guardadas antes do reset
+        reactor_failed: set[str] = set()       # chaves de reactor que já falharam no reactor
+        early_failed: list[tuple[AttemptConfig, tuple]] = []   # tentativas que nem chegaram aos testes
+        detected_set: set[str] | None = None
         missing: MissingTool | None = None
         carry_jdk: int | None = None   # JDK que levou o build até a fase de testes
         skipped: list[str] = []        # candidatas ignoradas por falta de ferramenta
@@ -251,19 +291,36 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
             while cfg is not None:
                 if cfg.jdk is None and carry_jdk is not None:
                     cfg = replace(cfg, jdk=carry_jdk)
-                if n and effective_key(cfg, *eff) in ran_keys:     # mesma configuração efetiva: não repete
-                    cfg = queue.pop(0) if queue and n < max_attempts else None
-                    continue
+                if n:
+                    dup = effective_key(cfg, *eff) in ran_keys     # mesma configuração efetiva: não repete
+                    why = None if dup else _prune_reason(cfg, eff, reactor_failed, early_failed, detected_set)
+                    if dup or why:
+                        if why and cb:
+                            cb(f"# jflp tentativa pulada: {why}")
+                        cfg = queue.pop(0) if queue and n < max_attempts else None
+                        continue
                 n += 1
                 configs.append(cfg)
                 if cb:
                     cb(f"# jflp tentativa {n}")
-                workdir = working_copy(prep, home)
+                if not reuse:
+                    workdir = working_copy(prep, home)
+                else:
+                    if work is None:
+                        work = working_copy(prep, home)
+                    else:
+                        try:
+                            manifest = reset_working_copy(prep, work, manifest)
+                        except (OSError, StageError):     # reset falhou: recomeça com cópia nova
+                            _rmtree(work, strict=False)
+                            work = working_copy(prep, home)
+                    workdir = work
                 log = w.attempt_dir(n) / "log.txt"
                 try:
                     r = _runner(kind)(home, settings, prep, workdir, cfg, log, on_line=cb)
                 except MissingTool as e:
-                    _rmtree(workdir)
+                    if not reuse:
+                        _rmtree(workdir)
                     w.write_json(f"attempts/{n}/attempt.json", {"config": cfg.to_dict(), "skipped": e.message})
                     if cb:
                         cb(f"# jflp tentativa {n}: ignorada")
@@ -274,11 +331,13 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                     cfg = queue.pop(0) if queue and n < max_attempts else None
                     continue
                 except proc.Aborted:
-                    _rmtree(workdir)
+                    if not reuse:
+                        _rmtree(workdir)
                     aborted = True
                     break
                 except BaseException:
-                    _rmtree(workdir)
+                    if not reuse:
+                        _rmtree(workdir)
                     raise
                 d = classify(kind, r)
                 rank = phase_rank(kind, d, r)       # antes de _write_attempt: ele apaga o log
@@ -288,11 +347,31 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 outcomes.append((n, _label(n, cfg, r, d.status)))
                 if cb:
                     cb(f"# jflp tentativa {n}: {d.status}")
+                stop = (st.is_success(d.status) or not opts.auto_search or n >= max_attempts
+                        or d.status in (st.TIMEOUT, st.PROJETO_INVALIDO, st.SEM_TESTE_FALHANDO))
+                if n == 1 and not stop:
+                    detected_set = _detected(prep, settings, kind, r)
+                    # lista inteira: as podadas não gastam o limite (ele vale só para as que rodam)
+                    queue = candidates(first, d, kind, settings, detected_set, r.toolenv, truncate=False)
+                this_env = effective_jdk_maven(r.toolenv)
+                if (r.extra or {}).get("fase") == "reactor" and not st.is_success(d.status):
+                    reactor_failed.add(reactor_key(cfg, *this_env))
+                if rank < 4:
+                    early_failed.append((cfg, this_env))
                 if rank >= best_rank:       # empate: a mais recente
-                    if keep is not None:
-                        _rmtree(keep)
-                    res, diag, keep, real_n, best_rank = r, d, workdir, n, rank
-                else:
+                    if reuse:
+                        if stage is not None:
+                            _rmtree(stage, strict=False)
+                            stage = None
+                        if not stop and queue:      # a cópia vai ser resetada: guarda as saídas
+                            stage = home.work / "s" / secrets.token_hex(4)
+                            _snapshot_outputs(r, stage)
+                    else:
+                        if keep is not None:
+                            _rmtree(keep)
+                        keep = workdir
+                    res, diag, real_n, best_rank = r, d, n, rank
+                elif not reuse:
                     _rmtree(workdir)
                 if cfg.jdk is not None and (d.status == st.JAGUAR_SEM_SAIDA or st.is_success(d.status)):
                     carry_jdk = cfg.jdk
@@ -300,10 +379,6 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
                 if proc.aborted():
                     aborted = True
                     break
-                stop = (st.is_success(d.status) or not opts.auto_search or n >= max_attempts
-                        or d.status in (st.TIMEOUT, st.PROJETO_INVALIDO, st.SEM_TESTE_FALHANDO))
-                if n == 1 and not stop:
-                    queue = candidates(first, d, kind, settings, _detected(prep, settings, kind, r), r.toolenv)
                 cfg = None if stop or not queue else queue.pop(0)
 
             if aborted:
@@ -320,6 +395,10 @@ def execute(home: Home, settings: Settings, bug: Bug, kind: str, opts: RunOption
         finally:
             if keep is not None:
                 _rmtree(keep)
+            if work is not None:
+                _rmtree(work, strict=False)
+            if stage is not None:
+                _rmtree(stage, strict=False)
     return w.rel
 
 

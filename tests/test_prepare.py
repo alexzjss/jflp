@@ -233,6 +233,65 @@ class PrepareTests(Base):
         self.assertEqual((prep.pristine / "a.txt").read_text(), "1")
         self.assertNotEqual(w, P.working_copy(prep, self.home))
 
+    def test_reset_working_copy_restaura_o_pristine(self):
+        import os
+        import stat
+        src = self.root / "p4"
+        (src / "sub" / "deep").mkdir(parents=True)
+        (src / "a.txt").write_text("um")
+        (src / "sub" / "b.txt").write_text("dois")
+        (src / "sub" / "deep" / "c.txt").write_text("tres")
+        (src / "ro.txt").write_text("ro")
+        (src / "pom.xml").write_text("<project/>")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        w = P.working_copy(prep, self.home)
+        m = P.reset_working_copy(prep, w)           # nada mudou: não mexe em nada
+        self.assertEqual((w / "a.txt").read_text(), "um")
+        # o build sujou a cópia
+        (w / "a.txt").write_text("alterado!")
+        (w / "sub" / "b.txt").unlink()
+        (w / "sub" / "deep").rename(w / "sub" / "deep2")
+        (w / "target" / "classes").mkdir(parents=True)
+        (w / "target" / "classes" / "X.class").write_text("x")
+        (w / "jaguar2-pom.xml").write_text("<p/>")
+        (w / ".git").mkdir()
+        os.chmod(w / "ro.txt", stat.S_IWRITE | stat.S_IREAD)
+        (w / "ro.txt").write_text("RO!!")
+        os.chmod(w / "ro.txt", stat.S_IREAD)         # somente-leitura e alterado
+        (w / "sub" / "novo").mkdir()
+        (w / "sub" / "novo" / "z.txt").write_text("z")
+        os.chmod(w / "sub" / "novo" / "z.txt", stat.S_IREAD)
+        P.reset_working_copy(prep, w, m)
+        self.assertEqual((w / "a.txt").read_text(), "um")
+        self.assertEqual((w / "a.txt").stat().st_mtime_ns, (prep.pristine / "a.txt").stat().st_mtime_ns)
+        self.assertEqual((w / "sub" / "b.txt").read_text(), "dois")
+        self.assertEqual((w / "sub" / "deep" / "c.txt").read_text(), "tres")
+        self.assertEqual((w / "ro.txt").read_text(), "ro")
+        for gone in ("target", "jaguar2-pom.xml", ".git", "sub/deep2", "sub/novo"):
+            self.assertFalse((w / gone).exists(), gone)
+
+    def test_reset_working_copy_segue_as_regras_de_ignorar(self):
+        src = self.root / "p5"
+        (src / "m" / "target").mkdir(parents=True)
+        (src / "m" / "pom.xml").write_text("<project/>")
+        (src / "m" / "target" / "kept.txt").write_text("k")      # target com pom ao lado: fora da cópia
+        (src / "dados" / "target").mkdir(parents=True)             # sem pom ao lado: entrada de teste, fica
+        (src / "dados" / "target" / "t.txt").write_text("t")
+        (src / ".idea").mkdir()
+        (src / ".idea" / "i.xml").write_text("i")
+        prep = P.prepare(self.home, self.settings, P.local_bug(str(src)), self.log)
+        w = P.working_copy(prep, self.home)
+        self.assertFalse((w / "m" / "target").exists())
+        (w / "m" / "target").mkdir()
+        (w / "m" / "target" / "gerado.txt").write_text("g")
+        (w / "dados" / "target" / "t.txt").unlink()
+        (w / P.MARKER).write_text("{}")
+        P.reset_working_copy(prep, w)
+        self.assertFalse((w / "m" / "target").exists())
+        self.assertFalse((w / ".idea").exists())
+        self.assertFalse((w / P.MARKER).exists())
+        self.assertEqual((w / "dados" / "target" / "t.txt").read_text(), "t")
+
     def test_working_copy_skips_bugsjar_metadata(self):
         src = self.root / "p3"
         (src / ".bugs-dot-jar").mkdir(parents=True)
