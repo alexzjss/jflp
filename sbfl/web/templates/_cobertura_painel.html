@@ -48,6 +48,7 @@
     {% elif planilha.tipo == 'erro' %}{% if planilha.ha %}Planilha sem enviar há {{ planilha.ha }}{% else %}Planilha ainda não enviada{% endif %} · {{ planilha.pendentes }} pendentes · {{ planilha.erro }}
     {% else %}Planilha não configurada · <a href="/ambiente#planilha">configurar</a>{% endif %}
     {% if planilha.tipo != 'nao_configurada' and planilha.falhas %} · <span class="erro">{{ planilha.falhas }} linhas com erro</span>{% endif %}
+    {% if planilha.remotas %} · {{ planilha.remotas }} {{ 'bug rodando' if planilha.remotas == 1 else 'bugs rodando' }} em outra máquina{% endif %}
   </p>
   {% endif %}
 </section>

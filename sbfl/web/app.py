@@ -20,6 +20,7 @@ from .. import planilha
 from ..home import Home, Settings, apply_work_dir, load_settings
 from ..planilha import Enviador
 from ..queue import Worker, WorkerPool
+from ..sincronia import Sincronizador
 
 COOKIE = "jflp_token"
 _HERE = Path(__file__).parent
@@ -136,10 +137,14 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
     token = secrets.token_urlsafe(24)
     home, aviso_work_dir = apply_work_dir(home, settings)
     enviador = Enviador(home, settings)
-    worker = WorkerPool(home, settings, on_bug_change=lambda k: (planilha.enfileirar(home, [k]), enviador.acordar()))
+    sinc = Sincronizador(home, settings)
+    worker = WorkerPool(home, settings,
+                        on_bug_change=lambda k: (planilha.enfileirar(home, [k]), enviador.acordar(), sinc.acordar()),
+                        reservar_remoto=sinc.reservar_remoto, restante_remoto=sinc.reservas.restante_s)
     app = create_app(home, settings, worker, token, port)
     app.state.aviso_work_dir = aviso_work_dir
     app.state.enviador = enviador
+    app.state.sincronizador = sinc
     url = f"http://127.0.0.1:{port}/?t={token}"
     server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=server.run, name="jflp-uvicorn", daemon=True)
@@ -151,6 +156,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
               "a porta pode estar em uso (tente --port 0).", file=sys.stderr)
         return 1
     enviador.start()
+    sinc.start()
     worker.start()
     desktop.write_ui_state(home, url)
     print(f"JFLP Studio em {url}")
@@ -183,6 +189,7 @@ def serve(home: Home, port: int = 0, open_browser: bool = True, window: bool = F
         desktop.remove_ui_state(home)
         server.should_exit = True
         enviador.stop()
+        sinc.stop()
         worker.stop()                 # mata o Maven em andamento e devolve o job à fila
         if worker.is_alive():
             worker.join(10)

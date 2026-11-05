@@ -370,6 +370,30 @@ class CoberturaCliTests(unittest.TestCase):
         self.assertEqual(rc, 1)
         self.assertIn("recusou", err)
 
+    def test_cli_cobertura_sincronia_resumo(self):
+        self._com_url()
+        res = {"pedacos_enviados": 1, "pacotes_pendentes": 0, "aplicadas": 2, "mantidas": 1, "recusadas": [],
+               "reservas_remotas": 3, "cursor": 5, "renovadas": 0, "liberadas": 0}
+        with mock.patch("sbfl.sincronia.sincronizar_uma_vez", return_value=res):
+            rc, out, err = _run_main(["cobertura", "sincronia"], self.h)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("2 execução(ões) recebida(s)", out)
+        self.assertIn("reservados por outros computadores: 3", out)
+
+    def test_cli_cobertura_sincronia_hub_antigo_e_sem_url(self):
+        from sbfl.sincronia import HubAntigo
+        self._com_url()
+        with mock.patch("sbfl.sincronia.sincronizar_uma_vez", side_effect=HubAntigo("x")):
+            rc, out, err = _run_main(["cobertura", "sincronia"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("Nova versão", err)
+        cfg = load_settings(Home(self.h).ensure())
+        cfg.set("planilha", "url", "")
+        cfg.save()
+        rc, out, err = _run_main(["cobertura", "sincronia"], self.h)
+        self.assertEqual(rc, 1)
+        self.assertIn("URL", err)
+
 
 if __name__ == "__main__":
     unittest.main()

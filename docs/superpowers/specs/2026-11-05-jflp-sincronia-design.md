@@ -162,7 +162,7 @@ Corpo: `{token, maquina, chaves}`. Remove as reservas dessas chaves que são da 
 - Ambiente › Planilha: nome da máquina (editável), estado da sincronia (último puxar, execuções recebidas, pacotes a
   enviar, bugs reservados por outras máquinas, erro, aviso "atualize o Apps Script"), botão "Sincronizar agora".
 - Painel da cobertura: "N bugs rodando em outra máquina" quando houver.
-- CLI: `jflp cobertura sincronizar` (um ciclo completo de puxar/subir, imprime o resumo); o `cobertura rodar` da CLI
+- CLI: `jflp cobertura sincronia` (um ciclo completo de puxar/subir, imprime o resumo); o `cobertura rodar` da CLI
   liga o `Sincronizador` e as reservas como o app.
 
 ## Testes

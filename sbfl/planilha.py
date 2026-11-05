@@ -8,6 +8,7 @@ import contextlib
 import json
 import logging
 import secrets
+import socket
 import sqlite3
 import threading
 import time
@@ -19,14 +20,14 @@ from . import cobertura as cb
 from . import queue as jq
 from . import status as st
 from . import store
-from .home import Home, Settings
+from .home import Home, Settings, load_settings
 from .outputs import ranking_rows
 from .prepare import bugsjar_label
 
 COLUNAS = ["Projeto", "Bug", "Resumo", "Link JIRA", "Situação", "Última execução", "Tentativas", "Origem",
            "Maven testes", "Maven falhas", "Maven erros", "Testes que falharam", "Bateu com o catálogo?",
            "J1 status", "J1 posição do patch", "J1 topo", "J2 status", "J2 posição do patch", "J2 topo",
-           "Veredito J1", "Veredito J2", "Concordância J1×J2", "Motivo", "Perfil"]
+           "Veredito J1", "Veredito J2", "Concordância J1×J2", "Motivo", "Perfil", "Máquina"]
 
 LOTE = 100
 TIMEOUT_S = 60
@@ -37,6 +38,7 @@ RECONCILIAR_S = 600
 _SITUACAO = {cb.SIT_OK: "OK", cb.SIT_PARCIAL: "parcial", cb.SIT_FALHOU: "falhou", cb.SIT_NAO_EXEC: "não executável",
              cb.SIT_RODANDO: "rodando", cb.SIT_PENDENTE: "pendente"}
 _MAX_TXT = 500
+_SYNC_ESTADOS = (cb.SIT_OK, cb.SIT_FALHOU, cb.SIT_NAO_EXEC)     # etapas concluídas que entram no `sync`
 
 
 # ------------------------------------------------------------------ uma linha da planilha
@@ -77,8 +79,30 @@ def _topo(b: bv._Bug, kind: str) -> str:
     return f"{rows[0][0].rsplit('.', 1)[-1]}:{rows[0][1]}" if rows else ""
 
 
-def linha(home: Home, bug: dict, resumo: str | None = None) -> list:
-    """Uma linha na ordem de `COLUNAS`. `bug` é um item de `cobertura.bugs`; `resumo` (do JIRA) evita ler o git."""
+def _nome_local(home: Home) -> str:
+    """Nome deste computador (como `sincronia.maquina`, sem gravar nada)."""
+    try:
+        nome = str(load_settings(home).get("planilha", "maquina_nome", "") or "").strip()
+    except ValueError:
+        nome = ""
+    return nome or socket.gethostname() or ""
+
+
+def _maquinas(runs: dict, local: str) -> str:
+    """Quem produziu cada etapa concluída: "maven: pc-lab, J1: notebook"."""
+    partes = []
+    for kind in cb.KINDS:
+        run = runs.get(kind)
+        if not run:
+            continue
+        nome = ((run.get("remoto_de") or {}).get("maquina_nome") or "remoto") if run.get("origem") == "remoto" else local
+        partes.append(f"{bv.KIND_LABEL[kind]}: {nome}")
+    return ", ".join(partes)[:_MAX_TXT]
+
+
+def linha(home: Home, bug: dict, resumo: str | None = None, maquina_nome: str | None = None) -> list:
+    """Uma linha na ordem de `COLUNAS`. `bug` é um item de `cobertura.bugs`; `resumo` (do JIRA) evita ler o git;
+    `maquina_nome` (deste computador) evita reler o config.toml a cada linha."""
     jobs = bug["jobs"]
     primeiro = next(iter(jobs.values()), {})
     extra = primeiro.get("extra") or json.loads(primeiro.get("bug_extra") or "{}")
@@ -130,7 +154,8 @@ def linha(home: Home, bug: dict, resumo: str | None = None) -> list:
             testes.get("total", "") if mv else "", testes.get("failed", "") if mv else "",
             testes.get("error", "") if mv else "", falhas_txt, bate,
             *jag["jaguar1"], *jag["jaguar2"], vers["jaguar1"], vers["jaguar2"], conc,
-            _motivo(bug, runs), _perfil(runs)]
+            _motivo(bug, runs), _perfil(runs),
+            _maquinas(runs, maquina_nome if maquina_nome is not None else _nome_local(home))]
 
 
 # ------------------------------------------------------------------ caixa de saída
@@ -143,12 +168,14 @@ _falhas_lock = threading.Lock()
 def _con(home: Home) -> sqlite3.Connection:
     con = jq._connect(home)
     con.execute("CREATE TABLE IF NOT EXISTS planilha_outbox("
-                "bug_key TEXT PRIMARY KEY, linha TEXT, atualizado TEXT, enviado TEXT, assinatura TEXT)")
-    if "assinatura" not in {r[1] for r in con.execute("PRAGMA table_info(planilha_outbox)")}:
-        try:
-            con.execute("ALTER TABLE planilha_outbox ADD COLUMN assinatura TEXT")
-        except sqlite3.OperationalError:    # outra conexão migrou primeiro
-            pass
+                "bug_key TEXT PRIMARY KEY, linha TEXT, atualizado TEXT, enviado TEXT, assinatura TEXT, sync TEXT)")
+    colunas = {r[1] for r in con.execute("PRAGMA table_info(planilha_outbox)")}
+    for nova in ("assinatura", "sync"):
+        if nova not in colunas:
+            try:
+                con.execute(f"ALTER TABLE planilha_outbox ADD COLUMN {nova} TEXT")
+            except sqlite3.OperationalError:    # outra conexão migrou primeiro
+                pass
     return con
 
 
@@ -156,6 +183,24 @@ def assinatura(bug: dict) -> str:
     """Impressão digital barata do estado de um bug (situação + etapas + origem): muda quando a linha deve mudar."""
     return json.dumps([bug["situacao"], sorted(bug["etapas"].items()), bug.get("origem") or ""],
                       ensure_ascii=False)
+
+
+def _sync_do_bug(home: Home, bug: dict) -> dict:
+    """{kind: {estado, revisao, run_rel}} das etapas concluídas aqui (as vindas de outro computador ficam de fora)."""
+    out = {}
+    for kind, job in bug["jobs"].items():
+        estado = bug["etapas"].get(kind)
+        if job.get("state") != "done" or estado not in _SYNC_ESTADOS or not job.get("run_rel"):
+            continue
+        if str(job.get("origem") or "").startswith("remoto"):
+            continue
+        try:
+            run = store.load_run(home, job["run_rel"]) or {}
+        except (OSError, ValueError):
+            run = {}
+        out[kind] = {"estado": estado, "revisao": run.get("finished") or run.get("started") or "",
+                     "run_rel": job["run_rel"]}
+    return out
 
 
 def falhas_linha(home: Home) -> dict:
@@ -234,7 +279,9 @@ def _gravar(home: Home, bugs: list[dict], ant: dict | None = None, tentativas: i
     Anti-sobrescrita: cada gravação só vale se `atualizado` ainda é o que foi lido antes de montar a linha; se outro
     escritor mexeu no meio, o bug é remontado a partir do estado atual (na última tentativa grava de qualquer jeito).
     `ant` é a leitura da caixa de saída feita ANTES do retrato dos `bugs`; sem ela, lê aqui."""
+    from . import sincronia
     pend = {b["key"]: b for b in bugs}
+    nome = _nome_local(home)
     n = 0
     for t in range(tentativas):
         if not pend:
@@ -249,28 +296,33 @@ def _gravar(home: Home, bugs: list[dict], ant: dict | None = None, tentativas: i
             except (ValueError, IndexError, TypeError):
                 anterior = None
             try:
-                row = linha(home, bug, resumo=anterior or None)
+                row = linha(home, bug, resumo=anterior or None, maquina_nome=nome)
             except Exception as e:      # noqa: BLE001 - uma linha impossível de montar não trava as outras
                 _registrar_falha(home, chave, e)
                 continue
             _registrar_falha(home, chave, None)
-            prontas.append((chave, json.dumps(row, ensure_ascii=False), assinatura(bug)))
+            sync = _sync_do_bug(home, bug)
+            for kind, e in sync.items():
+                sincronia.registrar_pacote(home, chave, kind, e["run_rel"])
+            prontas.append((chave, json.dumps(row, ensure_ascii=False), assinatura(bug),
+                            json.dumps(sync, ensure_ascii=False) if sync else None))
         conflitos = []
         agora = datetime.now().isoformat()
         for i in range(0, len(prontas), LOTE):
             with contextlib.closing(_con(home)) as con, con:
-                for j, (chave, texto, ass) in enumerate(prontas[i:i + LOTE]):
+                for j, (chave, texto, ass, sync) in enumerate(prontas[i:i + LOTE]):
                     marca, velho = f"{agora}#{i + j:06d}", ant.get(chave, (None, None, None))[1]
                     if velho is None:
                         cur = con.execute("INSERT OR IGNORE INTO planilha_outbox(bug_key, linha, atualizado, enviado, "
-                                          "assinatura) VALUES(?,?,?,NULL,?)", (chave, texto, marca, ass))
+                                          "assinatura, sync) VALUES(?,?,?,NULL,?,?)",
+                                          (chave, texto, marca, ass, sync))
                     elif ultima:
                         cur = con.execute("UPDATE planilha_outbox SET linha=?, atualizado=?, enviado=NULL, "
-                                          "assinatura=? WHERE bug_key=?", (texto, marca, ass, chave))
+                                          "assinatura=?, sync=? WHERE bug_key=?", (texto, marca, ass, sync, chave))
                     else:
                         cur = con.execute("UPDATE planilha_outbox SET linha=?, atualizado=?, enviado=NULL, "
-                                          "assinatura=? WHERE bug_key=? AND atualizado=?",
-                                          (texto, marca, ass, chave, velho))
+                                          "assinatura=?, sync=? WHERE bug_key=? AND atualizado=?",
+                                          (texto, marca, ass, sync, chave, velho))
                     if cur.rowcount:
                         n += 1
                     else:
@@ -426,12 +478,25 @@ class Enviador(threading.Thread):
         try:
             token = garantir_token(self.settings)
             with contextlib.closing(_con(self.home)) as con:
-                rows = con.execute("SELECT bug_key, linha, atualizado FROM planilha_outbox WHERE enviado IS NULL "
+                rows = con.execute("SELECT bug_key, linha, atualizado, sync FROM planilha_outbox WHERE enviado IS NULL "
                                    "ORDER BY atualizado LIMIT ?", (LOTE,)).fetchall()
             if not rows:
                 return self._ociosa
             body = {"token": token, "colunas": COLUNAS,
                     "linhas": [[r["bug_key"], *json.loads(r["linha"])] for r in rows]}
+            from . import sincronia
+            body["maquina"], body["maquina_nome"] = sincronia.maquina(self.settings)
+            if sincronia.ativa(self.settings):
+                sync = {}
+                for r in rows:
+                    try:
+                        d = json.loads(r["sync"]) if r["sync"] else None
+                    except ValueError:
+                        d = None
+                    if d:
+                        sync[r["bug_key"]] = d
+                if sync:
+                    body["sync"] = sync
             resp = self.post(url, body)
             if not isinstance(resp, dict) or not resp.get("ok"):
                 erro = resp.get("erro") if isinstance(resp, dict) else None

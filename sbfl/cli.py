@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import cobertura as cb
-from . import planilha
+from . import planilha, sincronia
 from . import status as st
 from .adapters.base import Bug
 from .compare import compare_runs
@@ -26,6 +26,7 @@ from .planilha import Enviador, enfileirar_todos, garantir_token, linhas_total, 
 from .prepare import bug_from_key, list_bugs, local_bug, prepare
 from .proc import NO_WINDOW
 from .queue import Worker, WorkerPool, active_batch_ids, batch_status, create_batch, delete_batch
+from .sincronia import HubAntigo, Sincronizador
 from .store import list_runs, load_run, reindex, run_dir
 from .toolchain.detect import find_jdks, find_mavens, wsl_status
 from .toolchain.download import DownloadError, fetch, plan_jaguar1, plan_jdk, plan_maven
@@ -348,12 +349,15 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
         return 1
     # planilha configurada: como no app, cada bug da cobertura que muda vai para a caixa de saída e é enviado
     enviador = Enviador(home, settings) if (settings.get("planilha", "url", "") or "").strip() else None
-    aviso = (lambda k: (planilha.enfileirar(home, [k]), enviador.acordar())) if enviador else None
+    sinc = Sincronizador(home, settings) if enviador else None      # sem URL não há com quem sincronizar
+    aviso = (lambda k: (planilha.enfileirar(home, [k]), enviador.acordar(), sinc.acordar())) if enviador else None
+    ganchos = {"reservar_remoto": sinc.reservar_remoto, "restante_remoto": sinc.reservas.restante_s} if sinc else {}
     worker = WorkerPool(home, settings, getattr(args, "workers", None) or 1, lock,   # a trava passa para o pool
-                        on_bug_change=aviso)
+                        on_bug_change=aviso, **ganchos)
     seen: set[int] = set()
     if enviador:
         enviador.start()
+        sinc.start()
     worker.start()
     try:
         time.sleep(1.5)   # deixa o worker recuperar jobs interrompidos antes de olhar a fila
@@ -369,16 +373,23 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
             worker.join(15)
         if enviador:
             enviador.stop()
+            sinc.stop()
         return 130
     worker.stop(kill=False)
     worker.join(timeout=10)
     if enviador:
         enviador.stop()
+        sinc.stop()
         enviador.join(timeout=30)
         try:
             enviador.ciclo()        # última rodada de envio antes de sair
         except Exception as e:      # noqa: BLE001 - a fila já terminou; o envio fica para a próxima
             print(f"aviso: envio final à planilha falhou: {e}")
+        if sincronia.ativa(settings):
+            try:
+                sincronia.sincronizar_uma_vez(home, settings)       # sobe os últimos pacotes e libera as reservas
+            except Exception as e:      # noqa: BLE001
+                print(f"aviso: sincronização final falhou: {e}")
     for i in sorted(seen):
         _print_batch(batch_status(home, i))
     err = worker.status()["last_error"]
@@ -432,6 +443,8 @@ def cmd_cobertura(home: Home, settings: Settings, args) -> int:
         return 1 if r["erros"] else 0
     if acao == "planilha":
         return _cobertura_planilha(home, settings, args)
+    if acao == "sincronia":
+        return _cobertura_sincronia(home, settings)
     bid = _cobertura_bid(home)
     if bid is None:
         return 1
@@ -459,6 +472,28 @@ def cmd_cobertura(home: Home, settings: Settings, args) -> int:
         print(f"[OK] {n} job(s) devolvido(s) à fila; rode `jflp batch run` para processá-los.")
         return 0
     return 1
+
+
+def _cobertura_sincronia(home: Home, settings: Settings) -> int:
+    """Um ciclo completo de sincronia com os outros computadores (sobe pacotes, puxa, aplica, renova reservas)."""
+    try:
+        r = sincronia.sincronizar_uma_vez(home, settings)
+    except HubAntigo:
+        print(f"erro: {sincronia.AVISO_ANTIGO}", file=sys.stderr)
+        return 1
+    except RuntimeError as e:
+        print(f"erro: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:      # noqa: BLE001 - rede, planilha fora do ar etc.
+        print(f"erro: a sincronização falhou: {e}", file=sys.stderr)
+        return 1
+    print(f"[OK] {r['aplicadas']} execução(ões) recebida(s) de outros computadores "
+          f"({r['mantidas']} mantida(s) como estavam, {len(r['recusadas'])} recusada(s))")
+    print(f"  pedaços enviados: {r['pedacos_enviados']}; pacotes ainda a enviar: {r['pacotes_pendentes']}; "
+          f"bugs reservados por outros computadores: {r['reservas_remotas']}")
+    for e in r["recusadas"]:
+        print(f"aviso: pacote recusado: {e}", file=sys.stderr)
+    return 0
 
 
 def _cobertura_planilha(home: Home, settings: Settings, args) -> int:
@@ -663,7 +698,8 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("id", type=int)
     s = bs.add_parser("delete", help="exclui um lote encerrado do histórico")
     s.add_argument("id", type=int)
-    p = add("cobertura", cmd_cobertura, "cobertura do bugs-dot-jar: sincronizar, status, importar, refazer, planilha")
+    p = add("cobertura", cmd_cobertura,
+            "cobertura do bugs-dot-jar: sincronizar, status, importar, refazer, planilha, sincronia")
     cs = p.add_subparsers(dest="action", required=True, metavar="ação")
     s = cs.add_parser("sincronizar", help="cria o lote de cobertura e acrescenta os bugs novos da coleção")
     s.add_argument("pasta", nargs="?", help="pasta da coleção (padrão: bugsjar.root)")
@@ -674,6 +710,7 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--todos", action="store_true", help="refaz todos os jobs concluídos, não só as falhas")
     s = cs.add_parser("planilha", help="envia linhas à planilha do Google")
     s.add_argument("--reenviar", action="store_true", help="reenvia todas as linhas da cobertura")
+    cs.add_parser("sincronia", help="sincroniza agora com os outros computadores (envia, recebe e renova reservas)")
     p = add("export", cmd_export, "exporta um dataset")
     p.add_argument("name")
     p.add_argument("--batch", type=int)
