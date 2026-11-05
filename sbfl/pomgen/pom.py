@@ -287,6 +287,22 @@ def build_context(module_dir: Path, settings, jdk: int) -> PomContext:
 _PROP_REF = re.compile(r"\$\{([^}]+)\}")
 
 
+def junit_main_scope(texts: list[str]) -> bool:
+    """O junit:junit está em `<dependencies>` da cadeia sem `<scope>test</scope>` (compile/provided ou sem
+    escopo)? Projetos antigos (Wicket 1.x: `WicketTester`) usam o JUnit no código de produção."""
+    for t in texts:
+        try:
+            d = PomDoc.from_text(t)
+        except ET.ParseError:
+            continue
+        deps = d.child(d.root, "dependencies")
+        for dep in (deps.findall(d.q("dependency")) if deps is not None else []):
+            if _text(d.child(dep, "groupId")) == "junit" and _text(d.child(dep, "artifactId")) == "junit":
+                if (_text(d.child(dep, "scope")) or "compile") != "test":
+                    return True
+    return False
+
+
 def junit_declared(texts: list[str]) -> tuple[str | None, str | None]:
     """(versão efetiva do junit:junit, propriedade de onde ela vem) na cadeia de POMs.
 

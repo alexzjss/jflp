@@ -7,7 +7,7 @@ from dataclasses import replace
 
 from . import status as st
 from .diagnose import Diagnosis, Suggestion, _keep
-from .run_maven import UNBLOCK_HTTP, AttemptConfig
+from .run_maven import UNBLOCK_HTTP, AttemptConfig, reactor_flags
 from .toolchain.detect import find_jdks, find_mavens
 from .toolchain.profiles import PROFILES
 
@@ -15,6 +15,7 @@ SUREFIRE = "org.apache.maven.plugins:maven-surefire-plugin"
 SUREFIRE_VERSIONS = ("3.5.3", "3.2.5", "3.0.0-M5")
 COMPILER_VERSIONS = ("3.8.0", "3.1", "3.11.0")
 JDKS = (8, 17, 11)
+REACTOR_FIXES = frozenset({"javac7", "scr-jdk7"})   # mudam o reactor sem passar por reactor_flags fixas
 
 
 def deep_merge(base: dict, over: dict) -> dict:
@@ -144,11 +145,13 @@ def candidates(first: AttemptConfig, diag: Diagnosis, kind: str, settings,
 
 def reactor_key(cfg: AttemptConfig, jdk: int | None, maven: str | None) -> str:
     """O que decide o resultado do `install` do reactor (POMs originais): JDK e Maven efetivos, o que muda
-    os argumentos de settings (unblock-http, mirror da cobertura, offline) e as flags do reactor."""
+    os argumentos de settings (unblock-http, mirror da cobertura, offline), as flags do reactor e as correções
+    que trocam o javac ou o JDK/Maven só do reactor (javac7, scr-jdk7)."""
     return json.dumps([cfg.jdk if cfg.jdk is not None else jdk,
                        cfg.maven if cfg.maven is not None else maven,
                        UNBLOCK_HTTP in cfg.fixes_on, bool(cfg.params.get("cobertura")),
-                       bool(cfg.params.get("offline")), cfg.params.get("reactor_flags")],
+                       bool(cfg.params.get("offline")), reactor_flags(cfg),
+                       sorted(REACTOR_FIXES & set(cfg.fixes_on))],
                       sort_keys=True, default=str)
 
 

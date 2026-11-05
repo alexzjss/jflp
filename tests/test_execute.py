@@ -706,6 +706,10 @@ class ReuseAndPruneTest(Base):
                             reactor_key(AttemptConfig(fixes_on=frozenset({"unblock-http"})), 11, "3.9"))
         self.assertEqual(reactor_key(a, 11, "3.9"),
                          reactor_key(AttemptConfig(fixes_on=frozenset({"junit4"})), 11, "3.9"))
+        # correções que alcançam o reactor: flags próprias (FIX_FLAGS) e troca de javac/JDK do reactor
+        for fix in ("rat-flags", "exec-skip", "javac7", "scr-jdk7"):
+            self.assertNotEqual(reactor_key(a, 8, "3.9"),
+                                reactor_key(AttemptConfig(fixes_on=frozenset({fix})), 8, "3.9"), fix)
         sf = AttemptConfig(fixes_on=frozenset({"override-version"}),
                            params={"override-version": {"plugins": {SUREFIRE: "3.0.0"}}})
         env = (11, "3.9")

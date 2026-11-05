@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import cobertura as cb
+from . import planilha
 from . import status as st
 from .adapters.base import Bug
 from .compare import compare_runs
@@ -345,8 +346,14 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
     if not lock.acquire():
         print(f"erro: {MSG_OUTRA_INSTANCIA}.", file=sys.stderr)
         return 1
-    worker = WorkerPool(home, settings, getattr(args, "workers", None) or 1, lock)   # a trava passa para o pool
+    # planilha configurada: como no app, cada bug da cobertura que muda vai para a caixa de saída e é enviado
+    enviador = Enviador(home, settings) if (settings.get("planilha", "url", "") or "").strip() else None
+    aviso = (lambda k: (planilha.enfileirar(home, [k]), enviador.acordar())) if enviador else None
+    worker = WorkerPool(home, settings, getattr(args, "workers", None) or 1, lock,   # a trava passa para o pool
+                        on_bug_change=aviso)
     seen: set[int] = set()
+    if enviador:
+        enviador.start()
     worker.start()
     try:
         time.sleep(1.5)   # deixa o worker recuperar jobs interrompidos antes de olhar a fila
@@ -360,9 +367,18 @@ def cmd_batch(home: Home, settings: Settings, args) -> int:
             print("Encerrando os processos em andamento...")
             worker.stop()     # mata o Maven; o job volta para a fila
             worker.join(15)
+        if enviador:
+            enviador.stop()
         return 130
     worker.stop(kill=False)
     worker.join(timeout=10)
+    if enviador:
+        enviador.stop()
+        enviador.join(timeout=30)
+        try:
+            enviador.ciclo()        # última rodada de envio antes de sair
+        except Exception as e:      # noqa: BLE001 - a fila já terminou; o envio fica para a próxima
+            print(f"aviso: envio final à planilha falhou: {e}")
     for i in sorted(seen):
         _print_batch(batch_status(home, i))
     err = worker.status()["last_error"]
@@ -428,6 +444,11 @@ def cmd_cobertura(home: Home, settings: Settings, args) -> int:
             print(f"  {p['projeto']}: {p['concluidos']} de {p['total']} concluídos "
                   f"(OK {p[cb.SIT_OK]}, parcial {p[cb.SIT_PARCIAL]}, falhou {p[cb.SIT_FALHOU]}, "
                   f"não executável {p[cb.SIT_NAO_EXEC]}, pendente {p[cb.SIT_PENDENTE]})")
+        ativas = cb.kinds_ativos(home)
+        for k, c in r["por_etapa"].items():
+            print(f"  etapa {k}{'' if k in ativas else ' (fora de cobertura.kinds)'}: OK {c[cb.SIT_OK]}, "
+                  f"falhou {c[cb.SIT_FALHOU]}, não executável {c[cb.SIT_NAO_EXEC]}, rodando {c[cb.SIT_RODANDO]}, "
+                  f"pendente {c[cb.SIT_PENDENTE]}")
         if r["ritmo_h"] is not None:
             print(f"Ritmo: {r['ritmo_h']:.1f} bugs por hora")
         if r["restante_s"] is not None:

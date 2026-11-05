@@ -212,6 +212,14 @@ class TestPomgen(Base):
         d = self._junit_module("", dep % "4.11")
         self.assertNotIn("junit4", self.gen(d).detected)
 
+    def test_junit_de_producao_mantem_o_escopo(self):
+        # Wicket 1.x: junit 3.8.1 em escopo compile (WicketTester); forçar `test` quebra o main
+        d = self._junit_module("", "<dependencies><dependency><groupId>junit</groupId><artifactId>junit</artifactId>"
+                                   "<version>3.8.1</version><scope>compile</scope></dependency></dependencies>")
+        plan = self.gen(d)
+        self.assertIn("junit4", plan.applied)
+        self.assertEqual(self._junit_deps(plan)[0], [("4.12", "compile")])
+
     def test_fixes_on_explicit_and_params(self):
         d = self.module("minimal.xml")
         plan = self.gen(d, fixes_on={"override-version", "exclude-duplicates"}, params={

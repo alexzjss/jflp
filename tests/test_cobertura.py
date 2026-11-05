@@ -355,3 +355,16 @@ class TestPainel(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSituacaoEtapasAtivas(unittest.TestCase):
+    def test_etapa_pendente_fora_de_kinds_nao_segura_o_bug(self):
+        e = {"maven": cb.SIT_PENDENTE, "jaguar1": cb.SIT_PENDENTE, "jaguar2": cb.SIT_OK}
+        self.assertEqual(cb.situacao(e), cb.SIT_PENDENTE)
+        self.assertEqual(cb.situacao(e, ("jaguar2",)), cb.SIT_OK)
+        # etapa fora de kinds que JÁ rodou continua contando
+        e2 = {"maven": cb.SIT_FALHOU, "jaguar1": cb.SIT_PENDENTE, "jaguar2": cb.SIT_OK}
+        self.assertEqual(cb.situacao(e2, ("jaguar2",)), cb.SIT_PARCIAL)
+        # a etapa ativa pendente segura o bug
+        e3 = {"maven": cb.SIT_OK, "jaguar2": cb.SIT_PENDENTE}
+        self.assertEqual(cb.situacao(e3, ("jaguar2",)), cb.SIT_PENDENTE)

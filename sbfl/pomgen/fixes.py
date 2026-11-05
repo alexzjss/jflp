@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from ..jdk import declared_level
-from .pom import DEFAULT_GROUP, PomContext, PomDoc, junit_declared, junit_is_old
+from .pom import DEFAULT_GROUP, PomContext, PomDoc, junit_declared, junit_is_old, junit_main_scope
 
 JAGUAR_GROUP = "br.usp.each.saeg"
 JAGUAR_ARTIFACTS = ["jaguar2-junit4", "jaguar2-jacoco-provider", "jaguar2-core",
@@ -230,7 +230,8 @@ def _apply_source_dirs(doc: PomDoc, ctx: PomContext, params: dict) -> None:
 
 def _apply_junit4(doc: PomDoc, ctx: PomContext, params: dict) -> None:
     version = ctx.versions["junit"]
-    doc.ensure_dependency("junit", "junit", version, "test")
+    # JUnit usado pelo código de produção: troca só a versão; forçar `test` quebra a compilação do main
+    doc.ensure_dependency("junit", "junit", version, None if junit_main_scope(ctx.chain_texts) else "test")
     prop = junit_declared(ctx.chain_texts)[1]
     if prop:        # versão vem de uma propriedade: quem usa dependencyManagement também passa a ver 4.x
         doc.set_child(doc.child(doc.root, "properties", create=True), prop, version)
