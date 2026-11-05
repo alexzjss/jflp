@@ -6,6 +6,12 @@ Todas as mudanças relevantes deste projeto estão aqui. O formato segue o [Keep
 
 ### Adicionado
 
+- **Sincronização entre computadores pela planilha:** dois ou mais computadores apontando para a mesma planilha recebem a execução completa dos bugs que os outros concluírem. Configure o nome de cada máquina na tela Ambiente (seção Planilha); a linha de comando é `jflp cobertura sincronia`. Ver README, seção 9.
+- **Reserva de bugs entre máquinas:** antes de começar um bug da cobertura, o worker reserva o bug no hub, e os outros computadores pulam os bugs reservados.
+- **Apps Script versão 2 (`tools/planilha/Code.gs`):** hub de sincronia com as ações `puxar`, `pacote`, `baixar`, `reservar` e `liberar`, aba oculta `_sync` e pacotes na pasta "JFLP pacotes" do Drive. Exige publicar uma nova versão da implantação; o app avisa quando o script está desatualizado.
+- **Funcionamento offline:** sem rede ou sem hub configurado, a cobertura roda como antes, e a sincronia retoma quando a conexão volta.
+- **Coluna "Máquina"** na aba Bugs da planilha, com o nome da máquina que produziu cada etapa.
+- **Configurações `[planilha]`:** `sincronizar`, `maquina_id`, `maquina_nome`, `puxar_cada_s` e `reserva_ttl_s`.
 - **Correções para famílias de falha do Jaguar 2**, sugeridas pelo diagnóstico e aplicadas pela busca automática: `javac7` (compila com o javac do JDK 7 e mantém Maven/Surefire no JDK 8; Wicket, Camel, Flink), `asm-shadow` (ASM antigo do `cglib-full` sobrepondo o do JaCoCo; log4j2), `scr-jdk7` (reactor no JDK 7 + Maven 3.6.3 para o `maven-scr-plugin`; Oak), `rat-flags` (RAT 0.10), `exec-skip` (`exec-maven-plugin` rodando `.sh` no Windows) e `sortpom-warn` (sortpom reprovando o `jaguar2-pom.xml`; Accumulo). Ver README, seção 7.
 - **Flags extras do reactor** (`params["reactor_flags"]` e `params[<correção>]["reactor_flags"]`): vão para o `mvn install -pl M -am` e para o `mvn -f jaguar2-pom.xml`, depois do `run.skip_flags`.
 - O diagnóstico passa a reconhecer: ASM antigo na JVM do Surefire (`jaguar_sem_saida` com causa), `jdk.tools`/`lib/tools.jar` (pede JDK 8), pacotes Java EE ausentes no JDK 11 e `Source option 5 is no longer supported` (agora `jdk_incompativel`, antes escondido atrás do `COMPILATION ERROR` genérico).
