@@ -8,7 +8,7 @@ can always be traced back to files.
 Times are test-run times as the runner reports them (JUnitCore's "Time:" for
 Defects4J, Maven's "Total time" for Bugs.jar), without JFLP's report step.
 
-Usage: bench/summarize.py --d4j-work DIR --bugsjar-work DIR [--d4j DEFECTS4J_HOME] [--markdown]
+Usage: bench/summarize.py --d4j-work DIR --bugsjar-work DIR --bears-work DIR [--d4j DEFECTS4J_HOME] [--markdown]
 """
 
 import argparse
@@ -106,16 +106,24 @@ def d4j_rows(work, d4j_home):
         yield row
 
 
-def bugsjar_rows(work):
+def maven_rows(work, benchmark):
+    """Bugs.jar and Bears share bugsjar.measure's layout; only metadata differs."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from bugsjar import bugsjar_failing
     for bug in sorted(os.listdir(work)):
         d = os.path.join(work, bug)
         if not os.path.isdir(os.path.join(d, "jflp")):
             continue
-        meta = os.path.join(d, "checkout", ".bugs-dot-jar")
-        row = {"benchmark": "Bugs.jar", "bug": bug}
-        row["failing_expected"] = len(bugsjar_failing(os.path.join(meta, "test-results.txt")))
+        row = {"benchmark": benchmark, "bug": bug}
+        if benchmark == "Bears":
+            import json
+            meta = json.load(open(os.path.join(d, "bears.json")))
+            row["failing_expected"] = len(meta["tests"].get("failureDetails", []))
+            patch = os.path.join(d, "patch.diff")
+        else:
+            meta = os.path.join(d, "checkout", ".bugs-dot-jar")
+            row["failing_expected"] = len(bugsjar_failing(os.path.join(meta, "test-results.txt")))
+            patch = os.path.join(meta, "developer-patch.diff")
         j2 = os.path.join(d, "jaguar2")
         row["failing_jaguar2"] = matrix_failing(os.path.join(j2, "coverageMatrix.txt"))
         row["failing_jflp"] = len(failing(os.path.join(d, "jflp", "coverageMatrix.tests.csv")))
@@ -125,7 +133,7 @@ def bugsjar_rows(work):
                           ("jflp_jc", "jflp_jc/run.log")):
             row["time_" + mode] = maven_time(os.path.join(d, log))
         compare(row, os.path.join(j2, "jaguar2.csv"), os.path.join(j2, "coverageMatrix.txt"), d)
-        ranks(row, os.path.join(meta, "developer-patch.diff"), "-", os.path.join(j2, "jaguar2.csv"), d)
+        ranks(row, patch, "-", os.path.join(j2, "jaguar2.csv"), d)
         yield row
 
 
@@ -147,13 +155,16 @@ def main():
     ap.add_argument("--d4j-work")
     ap.add_argument("--d4j")
     ap.add_argument("--bugsjar-work")
+    ap.add_argument("--bears-work")
     ap.add_argument("--markdown", action="store_true")
     args = ap.parse_args()
     rows = []
     if args.d4j_work:
         rows += list(d4j_rows(args.d4j_work, args.d4j))
     if args.bugsjar_work:
-        rows += list(bugsjar_rows(args.bugsjar_work))
+        rows += list(maven_rows(args.bugsjar_work, "Bugs.jar"))
+    if args.bears_work:
+        rows += list(maven_rows(args.bears_work, "Bears"))
     if args.markdown:
         print("| " + " | ".join(COLUMNS) + " |")
         print("|" + "---|" * len(COLUMNS))
