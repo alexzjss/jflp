@@ -61,6 +61,12 @@ public final class Instrumenter {
         final List<Branches.Site> branches = new ArrayList<Branches.Site>();
         /** Local id of the first branch probe (branch site ids are relative to it). */
         int branchOffset;
+        final List<Duas.Site> duas = new ArrayList<Duas.Site>();
+        /** Local id of the first DUA bit, and the class's number of 64-bit DUA words. */
+        int duaOffset;
+        int duaWords;
+        /** Methods left out of DUA coverage (too many DUAs). */
+        public final List<String> duaSkipped = new ArrayList<String>();
         /** Methods that the probes pushed over {@link #HUGE_METHOD_LIMIT}; filled by {@link #instrument}. */
         public final List<String> grownHuge = new ArrayList<String>();
 
@@ -94,6 +100,11 @@ public final class Instrumenter {
 
     /** As {@link #analyze(byte[])}, plus a probe per branch edge when {@code branches}. */
     public static Analysis analyze(final byte[] classFile, final boolean branches) {
+        return analyze(classFile, branches, false);
+    }
+
+    /** ... and def-use coverage of local variables when {@code duas}. */
+    public static Analysis analyze(final byte[] classFile, final boolean branches, final boolean duas) {
         final ClassReader reader = new ClassReader(classFile);
         if ((reader.getAccess() & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_MODULE)) != 0) {
             return null;
@@ -112,6 +123,9 @@ public final class Instrumenter {
         final List<Integer> branchArgs = new ArrayList<Integer>();
         final List<Integer> branchLines = new ArrayList<Integer>();
         final Branches.Probes branchProbes = new Branches.Probes(branchLines, branchKinds, branchArgs);
+        final List<Duas.Site> duaSites = new ArrayList<Duas.Site>();
+        final List<Object[]> duaBits = new ArrayList<Object[]>(); // per bit: {useLine, {method, var, def, target}} or null
+        final List<String> duaSkipped = new ArrayList<String>();
 
         for (final Object o : cn.methods) {
             final MethodNode m = (MethodNode) o;
@@ -147,28 +161,63 @@ public final class Instrumenter {
             if (branches) {
                 Branches.plan(cn, m, verdict, lineOf, branchProbes, sites);
             }
+            if (duas && ((m.access & Opcodes.ACC_SYNTHETIC) == 0 || m.name.startsWith("lambda$"))) {
+                final DefUse du = DefUse.of(cn.name, m, lineOf);
+                if (du != null && du.duas.size() > Duas.MAX_DUAS) {
+                    duaSkipped.add(cn.name.replace('/', '.') + "." + m.name + " (" + du.duas.size() + " DUAs)");
+                } else if (du != null && !du.duas.isEmpty()) {
+                    final int words = (du.duas.size() + 63) / 64;
+                    duaSites.add(new Duas.Site(m, du, duaBits.size() / 64, words));
+                    for (int i = 0; i < words * 64; i++) {
+                        if (i < du.duas.size()) {
+                            final DefUse.Dua d = du.duas.get(i);
+                            duaBits.add(new Object[] { Integer.valueOf(d.useLine), new Object[] { m.name + m.desc,
+                                d.varName, Integer.valueOf(d.defLine), Integer.valueOf(d.targetLine) } });
+                        } else {
+                            duaBits.add(null);
+                        }
+                    }
+                }
+            }
         }
 
-        // Line probes first, then branch probes (whose local ids are offset by the line count).
+        // Line probes, then branch probes, then DUA bits (one id per bit of each word).
         final int nLines = lines.size();
-        final int n = nLines + branchLines.size();
+        final int nBranches = branchLines.size();
+        final int n = nLines + nBranches + duaBits.size();
         final int[] probeLines = new int[n];
         final byte[] kinds = new byte[n];
         final int[] args = new int[n];
+        final Object[][] duaInfo = new Object[n][];
         for (int i = 0; i < n; i++) {
             if (i < nLines) {
                 probeLines[i] = lines.get(i);
                 kinds[i] = RawFormat.KIND_LINE;
-            } else {
+            } else if (i < nLines + nBranches) {
                 probeLines[i] = branchLines.get(i - nLines);
                 kinds[i] = branchKinds.get(i - nLines);
                 args[i] = branchArgs.get(i - nLines);
+            } else {
+                final Object[] bit = duaBits.get(i - nLines - nBranches);
+                if (bit == null) {
+                    probeLines[i] = -1;
+                    kinds[i] = RawFormat.KIND_PAD;
+                } else {
+                    probeLines[i] = ((Integer) bit[0]).intValue();
+                    kinds[i] = RawFormat.KIND_DUA;
+                    duaInfo[i] = (Object[]) bit[1];
+                }
             }
         }
-        final ClassInfo info = new ClassInfo(cn.name, cn.sourceFile, crc(classFile), probeLines, kinds, args);
+        final ClassInfo info = new ClassInfo(cn.name, cn.sourceFile, crc(classFile), probeLines, kinds, args,
+                duaInfo);
         final Analysis a = new Analysis(info, cn, insertions);
         a.branches.addAll(sites);
         a.branchOffset = nLines;
+        a.duas.addAll(duaSites);
+        a.duaOffset = nLines + nBranches;
+        a.duaWords = duaBits.size() / 64;
+        a.duaSkipped.addAll(duaSkipped);
         return a;
     }
 
@@ -199,6 +248,18 @@ public final class Instrumenter {
             final int stack = Branches.apply(site, base + a.branchOffset);
             final Integer prev = touched.get(site.method);
             touched.put(site.method, Integer.valueOf(Math.max(stack, prev == null ? 0 : prev.intValue())));
+        }
+        if (a.duaWords > 0) {
+            // After lines and branches: the DUA locals must also enter the trampolines' frames.
+            final int longs = jflp.rt.R.registerLongs(base + a.duaOffset, a.duaWords);
+            for (final Duas.Site site : a.duas) {
+                if (!sizeBefore.containsKey(site.method)) {
+                    sizeBefore.put(site.method, Integer.valueOf(codeSize(site.method)));
+                }
+                final int stack = Duas.apply(site, longs);
+                final Integer prev = touched.get(site.method);
+                touched.put(site.method, Integer.valueOf(Math.max(stack, prev == null ? 0 : prev.intValue())));
+            }
         }
         for (final Map.Entry<MethodNode, Integer> e : touched.entrySet()) {
             final MethodNode m = e.getKey();

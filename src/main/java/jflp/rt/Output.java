@@ -71,6 +71,12 @@ public final class Output {
                 out.writeByte(c.probeKinds[i]);
                 if (c.probeKinds[i] == RawFormat.KIND_BRANCH) {
                     out.writeInt(c.probeArgs[i]);
+                } else if (c.probeKinds[i] == RawFormat.KIND_DUA) {
+                    final Object[] d = c.probeDuas[i];
+                    RawFormat.writeString(out, (String) d[0]);
+                    RawFormat.writeString(out, (String) d[1]);
+                    out.writeInt(((Integer) d[2]).intValue());
+                    out.writeInt(((Integer) d[3]).intValue());
                 }
             }
             out.flush();

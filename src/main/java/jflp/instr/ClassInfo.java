@@ -29,6 +29,9 @@ public final class ClassInfo {
      */
     public final int[] probeArgs;
 
+    /** For DUA probes: {method name+descriptor, variable, def line, target line}; null otherwise. */
+    public final Object[][] probeDuas;
+
     public ClassInfo(final String name, final String source, final long crc,
             final int[] probeLines, final byte[] probeKinds) {
         this(name, source, crc, probeLines, probeKinds, new int[probeLines.length]);
@@ -36,12 +39,18 @@ public final class ClassInfo {
 
     public ClassInfo(final String name, final String source, final long crc,
             final int[] probeLines, final byte[] probeKinds, final int[] probeArgs) {
+        this(name, source, crc, probeLines, probeKinds, probeArgs, new Object[probeLines.length][]);
+    }
+
+    public ClassInfo(final String name, final String source, final long crc, final int[] probeLines,
+            final byte[] probeKinds, final int[] probeArgs, final Object[][] probeDuas) {
         this.name = name;
         this.source = source;
         this.crc = crc;
         this.probeLines = probeLines;
         this.probeKinds = probeKinds;
         this.probeArgs = probeArgs;
+        this.probeDuas = probeDuas;
     }
 
     public int probeCount() {

@@ -26,7 +26,9 @@ import jflp.rt.Session;
  * reaches it; {@code jacoco}: as JaCoCo and Jaguar2 count it, which leaves the
  * line that throws an exception uncovered;</li>
  * <li>{@code branches} — {@code true} adds a probe per branch edge (conditional
- * jumps and switches) and the branch reports; default {@code false}.</li>
+ * jumps and switches) and the branch reports; default {@code false};</li>
+ * <li>{@code duas} — {@code true} adds def-use coverage of local variables and
+ * the DUA reports; default {@code false}.</li>
  * </ul>
  * Relative paths are resolved against the JVM's working directory.
  */
@@ -36,11 +38,14 @@ public final class AgentMain implements ClassFileTransformer {
     private final Map<String, Integer> bases = new HashMap<String, Integer>();
     private final JacocoMode jacoco;
     private final boolean branches;
+    private final boolean duas;
 
-    private AgentMain(final File[] classDirs, final JacocoMode jacoco, final boolean branches) {
+    private AgentMain(final File[] classDirs, final JacocoMode jacoco, final boolean branches,
+            final boolean duas) {
         this.classDirs = classDirs;
         this.jacoco = jacoco;
         this.branches = branches;
+        this.duas = duas;
     }
 
     public static void start(final String args, final Instrumentation inst) throws Exception {
@@ -70,8 +75,12 @@ public final class AgentMain implements ClassFileTransformer {
             throw new IllegalArgumentException("[jflp] branches=true needs lines=entry (JaCoCo's probes do not"
                     + " tell which edge of a branch ran)");
         }
+        final boolean duas = flag(opts, "duas");
+        if (duas && "jacoco".equals(lines)) {
+            throw new IllegalArgumentException("[jflp] duas=true needs lines=entry");
+        }
         inst.addTransformer(new AgentMain(dirs.toArray(new File[dirs.size()]),
-                "jacoco".equals(lines) ? new JacocoMode() : null, "true".equals(branches)));
+                "jacoco".equals(lines) ? new JacocoMode() : null, "true".equals(branches), duas));
     }
 
     public byte[] transform(final ClassLoader loader, final String name, final Class<?> redefined,
@@ -95,7 +104,7 @@ public final class AgentMain implements ClassFileTransformer {
     }
 
     private byte[] instrument(final String name, final byte[] buffer) {
-        final Instrumenter.Analysis a = Instrumenter.analyze(buffer, branches);
+        final Instrumenter.Analysis a = Instrumenter.analyze(buffer, branches, duas);
         if (a == null) {
             return null;
         }
@@ -110,6 +119,9 @@ public final class AgentMain implements ClassFileTransformer {
             }
         }
         final byte[] out = Instrumenter.instrument(a, base.intValue());
+        for (final String m : a.duaSkipped) {
+            Session.warn("method " + m + " left out of def-use coverage: more than " + "1024 DUAs");
+        }
         for (final String m : a.grownHuge) {
             hugeWarning(m);
         }
@@ -156,11 +168,20 @@ public final class AgentMain implements ClassFileTransformer {
             }
         }
         for (final String k : m.keySet()) {
-            if (!"destdir".equals(k) && !"classdirs".equals(k) && !"lines".equals(k) && !"branches".equals(k)) {
+            if (!"destdir".equals(k) && !"classdirs".equals(k) && !"lines".equals(k) && !"branches".equals(k)
+                    && !"duas".equals(k)) {
                 throw new IllegalArgumentException("[jflp] unknown agent option '" + k + "'");
             }
         }
         return m;
+    }
+
+    private static boolean flag(final Map<String, String> m, final String k) {
+        final String v = value(m, k, "false");
+        if (!"true".equals(v) && !"false".equals(v)) {
+            throw new IllegalArgumentException("[jflp] " + k + " must be true or false, not '" + v + "'");
+        }
+        return "true".equals(v);
     }
 
     private static String value(final Map<String, String> m, final String k, final String dflt) {

@@ -35,7 +35,8 @@ java -jar /caminho/jflp.jar report
 Opções do agente (`-javaagent:jflp.jar=chave=valor,...`): `destdir` (padrão
 `target/jflp`), `classdirs` (padrão `target/classes`, separados por `:` no
 Linux, `;` no Windows), `lines` (`entry`, o padrão, ou `jacoco`; veja abaixo) e
-`branches` (`true` mede também ramos; padrão `false`).
+`branches` (`true` mede também ramos; padrão `false`) e `duas` (`true` mede
+também associações definição-uso; padrão `false`).
 
 ### Ramos
 
@@ -55,7 +56,28 @@ O ramo é `n:aresta`: o n-ésimo desvio ou `switch` da linha, e `taken` (desviou
 pelos filtros do JaCoCo, e o número de ramos por linha é idêntico ao do JaCoCo
 (verificado no `rt.jar` do JDK 8, em módulos do JDK 21 e em JUnit/ASM). Os
 espectros de linha não mudam com `branches=true`. Não combina com
-`lines=jacoco`. Opções do `report`: `java -jar jflp.jar` sem argumentos
+`lines=jacoco`.
+
+### Fluxo de dados (associações definição-uso)
+
+Com `duas=true`, cada associação definição-uso (DUA) de variável local vira um
+elemento do espectro, como no BA-DUA: uma definição e um uso que ela alcança
+sem redefinição. Um uso num bloco com um só sucessor é um c-use; num bloco que
+termina em desvio, gera um p-use por aresta de saída. Os parâmetros contam como
+definidos na entrada do método; o `this` fica de fora. A cobertura é medida com
+o algoritmo bitwise do BA-DUA: cada invocação guarda as definições vivas em
+variáveis locais novas, atualizadas na entrada de cada bloco.
+
+| arquivo | formato |
+|---|---|
+| `duas.csv` | `classe,método,variável,linha_def,linha_uso,linha_alvo,cef,cnf,cep,cnp,susp` (`linha_alvo` vazia num c-use) |
+| `duaMatrix.txt` | como a `coverageMatrix.txt`, uma coluna por DUA |
+| `duaMatrix.columns.csv`, `duaMatrix.tests.csv` | a DUA de cada coluna; teste e resultado de cada linha |
+
+Limites: só variáveis locais (campos não); as definições de um bloco passam a
+contar na entrada do bloco, como no BA-DUA, então uma exceção no meio do bloco
+pode deixar viva uma definição que não chegou a executar; métodos com mais de
+1.024 DUAs ficam de fora, com aviso. Não combina com `lines=jacoco`. Opções do `report`: `java -jar jflp.jar` sem argumentos
 lista todas, entre elas `--heuristic` (ochiai, tarantula, jaccard, zoltar, op,
 minus, mccon, drt, kulczynski2, wong3) e `--strict` (sai com status 3 se houver
 qualquer aviso).

@@ -17,7 +17,8 @@ import java.io.UnsupportedEncodingException;
  * </pre>
  *
  * {@code arg} is present for {@link #KIND_BRANCH} probes only (version 2; a
- * version 1 file has no branch probes).
+ * version 1 file has no branch probes); {@link #KIND_DUA} probes carry
+ * {@code method:str var:str defLine:int targetLine:int} (version 3).
  *
  * A missing END means the JVM died before shutdown; every record before that
  * point is complete because records are flushed one at a time.
@@ -25,7 +26,7 @@ import java.io.UnsupportedEncodingException;
 public final class RawFormat {
 
     public static final int MAGIC = 0x4A464C50; // "JFLP"
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     public static final byte CLASS = 'C';
     public static final byte TEST = 'T';
@@ -47,6 +48,16 @@ public final class RawFormat {
 
     /** Probe kind: one edge of a conditional jump or switch ({@code branches=true}). */
     public static final byte KIND_BRANCH = 2;
+
+    /**
+     * Probe kind: one def-use association of a local variable ({@code duas=true}).
+     * Its line is the use's; the record adds method:str var:str defLine:int targetLine:int
+     * (targetLine -1 for a c-use).
+     */
+    public static final byte KIND_DUA = 3;
+
+    /** Probe kind: an unused bit of a DUA word (DUAs of each method start on a 64-bit word). */
+    public static final byte KIND_PAD = 4;
 
     public static final int EDGE_TAKEN = 0;
     public static final int EDGE_NOT_TAKEN = 1;

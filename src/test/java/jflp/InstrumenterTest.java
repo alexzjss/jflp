@@ -103,6 +103,23 @@ public class InstrumenterTest {
     }
 
     @Test
+    public void defUseAssociationsFollowExecution() throws Exception {
+        // DUAs of f: x (parameter) has p-uses on both edges of `if (x > 0)` (line 8) and
+        // a c-use at line 9; y has c-uses at line 11 from its definitions at 7 and 9.
+        // Labels: "var def->use" or, for a p-use, "var def->use->target".
+        final Loaded t = loadWith("jflp.fixture.Flow", false, true);
+        assertEquals(new TreeSet<String>(Arrays.asList("x 7->8->9", "x 7->8->11", "x 7->9", "y 7->11", "y 9->11")),
+                t.allDuas());
+        final Object o = t.instance();
+        final java.lang.reflect.Method f = t.cls.getMethod("f", int.class);
+        Probes.reset();
+        f.invoke(o, 5);
+        assertEquals(new TreeSet<String>(Arrays.asList("x 7->8->9", "x 7->9", "y 9->11")), t.coveredDuas());
+        f.invoke(o, -1);
+        assertEquals(new TreeSet<String>(Arrays.asList("x 7->8->11", "y 7->11")), t.coveredDuas());
+    }
+
+    @Test
     public void lineSetMatchesJaCoCo() throws Exception {
         // Same code lines JaCoCo reports for these classes; a different line set
         // would shift every column of the coverage matrix against Jaguar2's.
@@ -153,6 +170,35 @@ public class InstrumenterTest {
             return lines;
         }
 
+        TreeSet<String> allDuas() {
+            final TreeSet<String> out = new TreeSet<String>();
+            for (int i = 0; i < info.probeCount(); i++) {
+                if (info.probeKinds[i] == jflp.data.RawFormat.KIND_DUA) {
+                    out.add(duaLabel(i));
+                }
+            }
+            return out;
+        }
+
+        /** Covered DUAs, and resets the probes. */
+        TreeSet<String> coveredDuas() {
+            final TreeSet<String> out = new TreeSet<String>();
+            for (final int id : Probes.collect()) {
+                if (id >= base && id < base + info.probeCount()
+                        && info.probeKinds[id - base] == jflp.data.RawFormat.KIND_DUA) {
+                    out.add(duaLabel(id - base));
+                }
+            }
+            return out;
+        }
+
+        private String duaLabel(final int i) {
+            // parameters are defined at the method's first line (7 here)
+            final Object[] d = info.probeDuas[i];
+            final int target = ((Integer) d[3]).intValue();
+            return d[1] + " " + d[2] + "->" + info.probeLines[i] + (target < 0 ? "" : "->" + target);
+        }
+
         /** Covered branch edges as "line jump:edge", and resets the probes. */
         TreeSet<String> coveredBranches() {
             final TreeSet<String> out = new TreeSet<String>();
@@ -178,7 +224,11 @@ public class InstrumenterTest {
     }
 
     static Loaded load(final String name, final boolean branches) throws Exception {
-        final Instrumenter.Analysis a = Instrumenter.analyze(bytes(name), branches);
+        return loadWith(name, branches, false);
+    }
+
+    static Loaded loadWith(final String name, final boolean branches, final boolean duas) throws Exception {
+        final Instrumenter.Analysis a = Instrumenter.analyze(bytes(name), branches, duas);
         final int base = Probes.allocate(a.info.probeCount());
         final byte[] instrumented = Instrumenter.instrument(a, base);
         final ClassLoader loader = new ClassLoader(InstrumenterTest.class.getClassLoader()) {

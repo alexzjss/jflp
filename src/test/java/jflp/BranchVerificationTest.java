@@ -24,11 +24,24 @@ public class BranchVerificationTest {
 
     @Test
     public void instrumentedThirdPartyClassesVerify() throws Exception {
+        verify(true, false);
+    }
+
+    /**
+     * DUA coverage adds local variables, which must appear in every frame of the
+     * method; with branches too, also in the frames of the branch trampolines.
+     */
+    @Test
+    public void classesWithDefUseCoverageVerify() throws Exception {
+        verify(true, true);
+    }
+
+    private static void verify(final boolean branches, final boolean duas) throws Exception {
         final Map<String, byte[]> classes = new HashMap<String, byte[]>();
         for (final String jar : System.getProperty("java.class.path").split(File.pathSeparator)) {
             if (jar.matches(".*(junit-4|asm-9|asm-tree-9|asm-commons-9|hamcrest-core|org.jacoco.core).*\\.jar")) {
                 for (final byte[] b : LineSetVsJaCoCoTest.classesOf(new File(jar))) {
-                    final Instrumenter.Analysis a = Instrumenter.analyze(b, true);
+                    final Instrumenter.Analysis a = Instrumenter.analyze(b, branches, duas);
                     if (a != null) {
                         final int base = Probes.allocate(a.info.probeCount());
                         classes.put(a.info.name.replace('/', '.'), Instrumenter.instrument(a, base));

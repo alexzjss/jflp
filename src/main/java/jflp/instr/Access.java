@@ -28,6 +28,7 @@ public final class Access {
     public static final String PAGES = "$jflpPages";
     public static final String ARRAYS = "$jflpArrays";
     public static final String EVENTS = "$jflpEvents";
+    public static final String LONGS = "$jflpLongs";
 
     private static volatile String holder;
 
@@ -101,6 +102,20 @@ public final class Access {
             out.add(new VarInsnNode(Opcodes.ALOAD, vars[i]));
             out.add(new InsnNode(Opcodes.AASTORE));
         }
+    }
+
+    /** Pushes DUA bit set {@code index} (a {@code long[]}); returns the stack it needs. */
+    static int duaArray(final InsnList out, final int index) {
+        final String h = holder;
+        if (h == null) {
+            out.add(Instrumenter.push(index));
+            out.add(new MethodInsnNode(Opcodes.INVOKESTATIC, Instrumenter.RUNTIME, "l", "(I)[J", false));
+            return 1;
+        }
+        out.add(new FieldInsnNode(Opcodes.GETSTATIC, h, LONGS, "[[J"));
+        out.add(Instrumenter.push(index));
+        out.add(new InsnNode(Opcodes.AALOAD));
+        return 2;
     }
 
     /** Pushes JaCoCo probe array {@code index} ({@code lines=jacoco}); returns the stack it needs. */

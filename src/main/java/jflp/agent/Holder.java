@@ -76,6 +76,7 @@ final class Holder {
                 cv.visitField(pub, Access.EVENTS, "Ljava/lang/Object;", null, null).visitEnd();
                 // Volatile: a class initialised on another thread must see the latest array table.
                 cv.visitField(pub | Opcodes.ACC_VOLATILE, Access.ARRAYS, "[[Z", null, null).visitEnd();
+                cv.visitField(pub | Opcodes.ACC_VOLATILE, Access.LONGS, "[[J", null, null).visitEnd();
                 super.visitEnd();
             }
         }, 0);

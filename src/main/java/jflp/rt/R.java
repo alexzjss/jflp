@@ -25,6 +25,15 @@ public final class R {
     private static boolean[][] arrays = new boolean[64][];
     /** The holder's $jflpArrays field, kept pointing at {@link #arrays} as it grows. */
     private static java.lang.reflect.Field arraysField;
+
+    /**
+     * DUA bit sets ({@code duas=true}), one {@code long[]} per class; bit b of
+     * array k is global probe {@code longBase[k] + b}.
+     */
+    private static long[][] longs = new long[64][];
+    private static int[] longBase = new int[64];
+    private static int longCount;
+    private static java.lang.reflect.Field longsField;
     private static int[] arrayBase = new int[64];
     private static int arrayCount;
 
@@ -68,6 +77,33 @@ public final class R {
         return arrayCount++;
     }
 
+    /** Registers a DUA bit set of {@code words} words for probes {@code base ..}; returns its index. */
+    public static synchronized int registerLongs(final int base, final int words) {
+        if (longCount == longs.length) {
+            final long[][] a = new long[longCount * 2][];
+            System.arraycopy(longs, 0, a, 0, longCount);
+            longs = a;
+            final int[] b = new int[longCount * 2];
+            System.arraycopy(longBase, 0, b, 0, longCount);
+            longBase = b;
+        }
+        longs[longCount] = new long[words];
+        longBase[longCount] = base;
+        if (longsField != null) {
+            try {
+                longsField.set(null, longs);
+            } catch (final IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+        return longCount++;
+    }
+
+    /** DUA bit set {@code index}. Called once per instrumented method invocation. */
+    public static synchronized long[] l(final int index) {
+        return longs[index];
+    }
+
     private static void publishArrays() {
         if (arraysField != null) {
             try {
@@ -84,6 +120,8 @@ public final class R {
         holder.getField(jflp.instr.Access.EVENTS).set(null, new Events());
         arraysField = holder.getField(jflp.instr.Access.ARRAYS);
         publishArrays();
+        longsField = holder.getField(jflp.instr.Access.LONGS);
+        longsField.set(null, longs);
     }
 
     /** Probe array {@code index}. Called once per class by JaCoCo's {@code $jacocoInit}. */
@@ -137,6 +175,34 @@ public final class R {
                 }
             }
         }
+        final long[][] ls;
+        final int[] lbase;
+        final int lcount;
+        synchronized (R.class) {
+            ls = longs;
+            lbase = longBase;
+            lcount = longCount;
+        }
+        for (int k = 0; k < lcount; k++) {
+            final long[] w = ls[k];
+            for (int i = 0; i < w.length; i++) {
+                long bits = w[i];
+                if (bits == 0) {
+                    continue;
+                }
+                w[i] = 0;
+                while (bits != 0) {
+                    final int b = Long.numberOfTrailingZeros(bits);
+                    bits &= bits - 1;
+                    if (size == out.length) {
+                        final int[] grown = new int[size * 2];
+                        System.arraycopy(out, 0, grown, 0, size);
+                        out = grown;
+                    }
+                    out[size++] = lbase[k] + i * 64 + b;
+                }
+            }
+        }
         // Array probes come after page probes of other classes: keep ids ascending.
         final int[] result = new int[size];
         System.arraycopy(out, 0, result, 0, size);
@@ -153,6 +219,9 @@ public final class R {
         synchronized (R.class) {
             for (int k = 0; k < arrayCount; k++) {
                 java.util.Arrays.fill(arrays[k], false);
+            }
+            for (int k = 0; k < longCount; k++) {
+                java.util.Arrays.fill(longs[k], 0L);
             }
         }
     }
