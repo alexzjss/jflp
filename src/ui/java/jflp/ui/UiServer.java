@@ -40,6 +40,8 @@ public final class UiServer {
     private final Sources sources;
     private final String token;
     private int port;
+    /** Tool detection runs several commands (gradle --version takes seconds); refreshed on settings changes. */
+    private volatile List<Map<String, Object>> tools;
 
     private UiServer(final Workspace ws, final File agentJar) {
         this.ws = ws;
@@ -88,6 +90,7 @@ public final class UiServer {
 
     private void start(final int wanted) throws IOException {
         Env.settings = ws.settings();
+        refreshTools();
         final HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), wanted), 64);
         server.createContext("/", this::handle);
         server.setExecutor(Executors.newFixedThreadPool(8));
@@ -146,15 +149,18 @@ public final class UiServer {
             final Map<String, Object> e = new LinkedHashMap<>();
             final Map<String, Object> settings = ws.settings();
             e.put("jdks", Env.jdks(settings));
-            e.put("tools", Env.tools(settings));
+            e.put("tools", tools != null ? tools : Env.tools(settings));
             e.put("settings", settings);
             e.put("java", System.getProperty("java.version"));
             e.put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"));
             json(x, 200, e);
+        } else if (r0.equals("jdks")) {
+            json(x, 200, Env.jdks(ws.settings()));
         } else if (r0.equals("settings") && m.equals("PUT")) {
             final Map<String, Object> s = body(x);
             ws.saveSettings(s);
             Env.settings = ws.settings();
+            tools = Env.tools(Env.settings);
             json(x, 200, s);
         } else if (r0.equals("projects")) {
             projects(x, m, p, q);
@@ -335,6 +341,12 @@ public final class UiServer {
     }
 
     // ---- helpers ----
+
+    private void refreshTools() {
+        final Thread t = new Thread(() -> tools = Env.tools(ws.settings()), "jflp-tools");
+        t.setDaemon(true);
+        t.start();
+    }
 
     private static Map<String, Object> brief(final Map<String, Object> r) {
         final Map<String, Object> b = new LinkedHashMap<>();
