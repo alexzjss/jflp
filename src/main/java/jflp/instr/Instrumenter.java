@@ -14,6 +14,7 @@ import jflp.data.RawFormat;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.commons.JSRInlinerAdapter;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
@@ -27,7 +28,6 @@ import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
-import org.objectweb.asm.tree.VarInsnNode;
 
 /**
  * Line probes.
@@ -87,14 +87,21 @@ public final class Instrumenter {
         }
         final ClassNode cn = new ClassNode();
         reader.accept(cn, 0);
+        inlineSubroutines(cn);
 
         final Map<Integer, Integer> probeOfLine = new HashMap<Integer, Integer>();
         final List<Integer> lines = new ArrayList<Integer>();
         final List<Insertion> insertions = new ArrayList<Insertion>();
+        final SourceFilter filter = new SourceFilter(cn);
 
         for (final Object o : cn.methods) {
             final MethodNode m = (MethodNode) o;
-            if (m.instructions.size() == 0 || Filters.ignored(cn, m)) {
+            if (m.instructions.size() == 0) {
+                continue;
+            }
+            final Set<AbstractInsnNode> excluded = filter.excluded(m);
+            final Set<Integer> codeLines = codeLines(m, excluded);
+            if (codeLines.isEmpty()) {
                 continue;
             }
             final Set<LabelNode> targets = targets(m);
@@ -104,12 +111,12 @@ public final class Instrumenter {
                 final AbstractInsnNode insn = it.next();
                 if (insn instanceof LineNumberNode) {
                     current = ((LineNumberNode) insn).line;
-                    pending = current;
+                    pending = codeLines.contains(current) ? current : -1;
                 } else if (insn instanceof LabelNode) {
-                    if (current > 0 && targets.contains(insn)) {
+                    if (targets.contains(insn) && codeLines.contains(current)) {
                         pending = current;
                     }
-                } else if (insn.getOpcode() >= 0 && pending > 0) {
+                } else if (insn.getOpcode() >= 0 && pending > 0 && !excluded.contains(insn)) {
                     Integer probe = probeOfLine.get(pending);
                     if (probe == null) {
                         probe = lines.size();
@@ -148,6 +155,43 @@ public final class Instrumenter {
         final ClassWriter cw = new ClassWriter(0);
         a.node.accept(cw);
         return cw.toByteArray();
+    }
+
+    /**
+     * Class files for Java 1.4 and older compile finally blocks to JSR/RET
+     * subroutines. They are inlined, as JaCoCo does before analyzing, so that
+     * the filters see the same code; the inlined code behaves identically.
+     */
+    private static void inlineSubroutines(final ClassNode cn) {
+        for (int i = 0; i < cn.methods.size(); i++) {
+            final MethodNode m = cn.methods.get(i);
+            boolean jsr = false;
+            for (Iterator<AbstractInsnNode> it = m.instructions.iterator(); it.hasNext() && !jsr;) {
+                jsr = it.next().getOpcode() == Opcodes.JSR;
+            }
+            if (jsr) {
+                final String[] exceptions = m.exceptions.toArray(new String[m.exceptions.size()]);
+                final MethodNode inlined = new MethodNode(Opcodes.ASM9, m.access, m.name, m.desc, m.signature,
+                        exceptions);
+                m.accept(new JSRInlinerAdapter(inlined, m.access, m.name, m.desc, m.signature, exceptions));
+                cn.methods.set(i, inlined);
+            }
+        }
+    }
+
+    /** Lines holding at least one instruction that JaCoCo would report. */
+    private static Set<Integer> codeLines(final MethodNode m, final Set<AbstractInsnNode> excluded) {
+        final Set<Integer> lines = new HashSet<Integer>();
+        int current = -1;
+        for (Iterator<AbstractInsnNode> it = m.instructions.iterator(); it.hasNext();) {
+            final AbstractInsnNode insn = it.next();
+            if (insn instanceof LineNumberNode) {
+                current = ((LineNumberNode) insn).line;
+            } else if (insn.getOpcode() >= 0 && current > 0 && !excluded.contains(insn)) {
+                lines.add(Integer.valueOf(current));
+            }
+        }
+        return lines;
     }
 
     private static Set<LabelNode> targets(final MethodNode m) {
@@ -195,10 +239,5 @@ public final class Instrumenter {
         final CRC32 c = new CRC32();
         c.update(b, 0, b.length);
         return c.getValue();
-    }
-
-    /** True for {@code ALOAD 0} — used by the filters to match trivial constructors. */
-    static boolean isAload0(final AbstractInsnNode insn) {
-        return insn.getOpcode() == Opcodes.ALOAD && ((VarInsnNode) insn).var == 0;
     }
 }

@@ -17,6 +17,9 @@
     <!-- The jar must load on Java 5 JVMs: build with JDK 8, the newest javac that still emits Java 5 class files. -->
     <maven.compiler.source>1.5</maven.compiler.source>
     <maven.compiler.target>1.5</maven.compiler.target>
+    <!-- Test fixtures use Java 8 constructs (lambdas, try-with-resources, string switch). -->
+    <maven.compiler.testSource>1.8</maven.compiler.testSource>
+    <maven.compiler.testTarget>1.8</maven.compiler.testTarget>
     <asm.version>9.11.1</asm.version>
   </properties>
 
@@ -30,6 +33,25 @@
       <groupId>org.ow2.asm</groupId>
       <artifactId>asm-tree</artifactId>
       <version>${asm.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-commons</artifactId>
+      <version>${asm.version}</version>
+    </dependency>
+    <dependency>
+      <!-- Only its filters are used, to decide which lines hold source code exactly
+           as JaCoCo does. 0.8.7 is the version the Jaguar2 fork uses, so the line
+           sets, and with them the coverage matrix columns, are the same. -->
+      <groupId>org.jacoco</groupId>
+      <artifactId>org.jacoco.core</artifactId>
+      <version>0.8.7</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.ow2.asm</groupId>
+          <artifactId>*</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>junit</groupId>
@@ -92,7 +114,12 @@
                   <pattern>org.objectweb.asm</pattern>
                   <shadedPattern>jflp.internal.asm</shadedPattern>
                 </relocation>
+                <relocation>
+                  <pattern>org.jacoco</pattern>
+                  <shadedPattern>jflp.internal.jacoco</shadedPattern>
+                </relocation>
               </relocations>
+              <minimizeJar>false</minimizeJar>
               <filters>
                 <filter>
                   <artifact>*:*</artifact>

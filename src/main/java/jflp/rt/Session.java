@@ -1,7 +1,6 @@
 package jflp.rt;
 
 import java.io.File;
-import java.io.IOException;
 
 import jflp.instr.ClassInfo;
 
@@ -13,7 +12,7 @@ public final class Session {
     private Session() {
     }
 
-    public static synchronized void start(final File destDir) throws IOException {
+    public static synchronized void start(final File destDir) {
         if (output != null) {
             return;
         }
