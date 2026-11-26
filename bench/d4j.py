@@ -53,7 +53,7 @@ def one_bug(args, bug, java):
     project, bug_id = bug.split("-")
     out = os.path.join(args.work, bug)
     src = os.path.join(out, "checkout")
-    row = {"bug": bug, "status": "ok", "note": ""}
+    row = {"bug": bug, "status": "ok", "note": ""}  # note accumulates
     os.makedirs(out, exist_ok=True)
     if not os.path.exists(os.path.join(src, ".defects4j.config")):
         shutil.rmtree(src, ignore_errors=True)
@@ -61,7 +61,10 @@ def one_bug(args, bug, java):
     d4j(args, src, "compile")
     classes = os.path.join(src, d4j(args, src, "export", "-p", "dir.bin.classes").strip())
     tests_dir = os.path.join(src, d4j(args, src, "export", "-p", "dir.bin.tests").strip())
-    cp = d4j(args, src, "export", "-p", "cp.test").strip()
+    # JUnit 3 projects (Cli, Time, ...) have no JUnitCore; append the JUnit 4 that
+    # Defects4J's own runner uses, after the project's jars so their junit.framework wins.
+    cp = d4j(args, src, "export", "-p", "cp.test").strip() + os.pathsep + os.path.join(
+        args.d4j, "framework", "projects", "lib", "junit-4.12-hamcrest-1.3.jar")
     tests = d4j(args, src, "export", "-p", "tests.all").split()
     trigger = d4j(args, src, "export", "-p", "tests.trigger").split()
     row["tests"] = len(tests)
@@ -84,6 +87,12 @@ def one_bug(args, bug, java):
     for f in ("jaguar2.csv", "coverageMatrix.txt"):
         if os.path.exists(os.path.join(src, "target", f)):
             os.remove(os.path.join(src, "target", f))
+    if not os.path.isdir(os.path.join(src, "target")):
+        # The fork writes target/coverageMatrix.txt and target/jaguar2.csv without
+        # creating target/; in Ant layouts (Chart: build/) every test then fails
+        # inside its listener. Create it so the data can be compared at all.
+        os.makedirs(os.path.join(src, "target"))
+        row["note"] = "created target/ for Jaguar2 (fork fails without it); "
     code, t = run([java, "-javaagent:%s=destfile=%s" % (os.path.join(args.tools, "jacocoagent.jar"),
                                                         os.path.join(j2, "target", "jacoco.exec")),
                    "-Djaguar2.classesDirs=" + classes,
@@ -154,7 +163,7 @@ def one_bug(args, bug, java):
             scores = {k: v[4] for k, v in read_csv(path).items()}
             row["rank_" + mode] = rank(scores, universe, targets)
     else:
-        row["note"] = "no buggy line holds code (omission fault outside code lines?)"
+        row["note"] += "no buggy line holds code (omission fault outside code lines?)"
     return row
 
 
