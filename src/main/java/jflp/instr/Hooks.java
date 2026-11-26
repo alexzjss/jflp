@@ -1,0 +1,74 @@
+package jflp.instr;
+
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.MethodInsnNode;
+import org.objectweb.asm.tree.MethodNode;
+import org.objectweb.asm.tree.VarInsnNode;
+
+/**
+ * Test boundaries come from the test frameworks themselves, not from a build
+ * listener, so no build file has to change and any launcher works (Surefire,
+ * Ant, Gradle, IDE, Defects4J's runner).
+ *
+ * <ul>
+ * <li>JUnit 4 (and JUnit 3 run by a JUnit 4 runner, and the JUnit 5 vintage
+ * engine): {@code RunNotifier}.</li>
+ * <li>JUnit 3 run directly (Ant, Surefire's junit3 provider): {@code TestResult}.</li>
+ * </ul>
+ *
+ * Adapters between the two report the same test twice, nested; the runtime
+ * ignores a start for the test that is already running.
+ */
+public final class Hooks {
+
+    private static final String EVENTS = "jflp/rt/T";
+
+    private Hooks() {
+    }
+
+    /** Returns the hooked class, or {@code null} when {@code name} is not a hook point. */
+    public static byte[] hook(final String name, final byte[] classFile) {
+        if ("org/junit/runner/notification/RunNotifier".equals(name)) {
+            return rewrite(classFile, new String[][] {
+                { "fireTestStarted", "(Lorg/junit/runner/Description;)V", "j4Started" },
+                { "fireTestFinished", "(Lorg/junit/runner/Description;)V", "j4Finished" },
+                { "fireTestFailure", "(Lorg/junit/runner/notification/Failure;)V", "j4Failure" },
+                { "fireTestAssumptionFailed", "(Lorg/junit/runner/notification/Failure;)V", "j4Assumption" },
+            });
+        }
+        if ("junit/framework/TestResult".equals(name)) {
+            return rewrite(classFile, new String[][] {
+                { "startTest", "(Ljunit/framework/Test;)V", "j3Started" },
+                { "endTest", "(Ljunit/framework/Test;)V", "j3Finished" },
+                { "addError", "(Ljunit/framework/Test;Ljava/lang/Throwable;)V", "j3Failure" },
+                { "addFailure", "(Ljunit/framework/Test;Ljunit/framework/AssertionFailedError;)V", "j3Failure" },
+            });
+        }
+        return null;
+    }
+
+    private static byte[] rewrite(final byte[] classFile, final String[][] points) {
+        final ClassNode cn = new ClassNode();
+        new ClassReader(classFile).accept(cn, 0);
+        for (final Object o : cn.methods) {
+            final MethodNode m = (MethodNode) o;
+            for (final String[] p : points) {
+                if (p[0].equals(m.name) && p[1].equals(m.desc) && m.instructions.size() > 0) {
+                    final InsnList call = new InsnList();
+                    call.add(new VarInsnNode(Opcodes.ALOAD, 1));
+                    call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, EVENTS, p[2],
+                            "(Ljava/lang/Object;)V", false));
+                    m.instructions.insert(call);
+                    m.maxStack += 1;
+                }
+            }
+        }
+        final ClassWriter cw = new ClassWriter(0);
+        cn.accept(cw);
+        return cw.toByteArray();
+    }
+}
