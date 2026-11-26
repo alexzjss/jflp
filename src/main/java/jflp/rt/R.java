@@ -23,6 +23,8 @@ public final class R {
      * class. Their probes still get global ids, {@code arrayBase[k] + index}.
      */
     private static boolean[][] arrays = new boolean[64][];
+    /** The holder's $jflpArrays field, kept pointing at {@link #arrays} as it grows. */
+    private static java.lang.reflect.Field arraysField;
     private static int[] arrayBase = new int[64];
     private static int arrayCount;
 
@@ -62,7 +64,26 @@ public final class R {
         }
         arrays[arrayCount] = new boolean[count];
         arrayBase[arrayCount] = base;
+        publishArrays();
         return arrayCount++;
+    }
+
+    private static void publishArrays() {
+        if (arraysField != null) {
+            try {
+                arraysField.set(null, arrays);
+            } catch (final IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+        }
+    }
+
+    /** Points the holder's fields at the runtime (see {@code jflp.instr.Access}). */
+    public static synchronized void attachHolder(final Class<?> holder) throws Exception {
+        holder.getField(jflp.instr.Access.PAGES).set(null, PAGES);
+        holder.getField(jflp.instr.Access.EVENTS).set(null, new Events());
+        arraysField = holder.getField(jflp.instr.Access.ARRAYS);
+        publishArrays();
     }
 
     /** Probe array {@code index}. Called once per class by JaCoCo's {@code $jacocoInit}. */

@@ -2,12 +2,9 @@ package jflp.instr;
 
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.objectweb.asm.tree.VarInsnNode;
 
 /**
  * Test boundaries come from the test frameworks themselves, not from a build
@@ -24,8 +21,6 @@ import org.objectweb.asm.tree.VarInsnNode;
  * ignores a start for the test that is already running.
  */
 public final class Hooks {
-
-    private static final String EVENTS = "jflp/rt/T";
 
     private Hooks() {
     }
@@ -59,11 +54,8 @@ public final class Hooks {
             for (final String[] p : points) {
                 if (p[0].equals(m.name) && p[1].equals(m.desc) && m.instructions.size() > 0) {
                     final InsnList call = new InsnList();
-                    call.add(new VarInsnNode(Opcodes.ALOAD, 1));
-                    call.add(new MethodInsnNode(Opcodes.INVOKESTATIC, EVENTS, p[2],
-                            "(Ljava/lang/Object;)V", false));
+                    m.maxStack += Access.event(call, p[2], 1);
                     m.instructions.insert(call);
-                    m.maxStack += 1;
                 }
             }
         }

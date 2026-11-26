@@ -54,6 +54,10 @@ public final class AgentMain implements ClassFileTransformer {
             throw new IllegalArgumentException("[jflp] lines must be entry or jacoco, not '" + lines + "'");
         }
         Session.start(dest);
+        if (!Holder.install(inst)) {
+            System.err.println("[jflp] WARNING: no runtime holder; classes defined by isolating class loaders"
+                    + " (Ant, OSGi) will fail with NoClassDefFoundError jflp/rt/R");
+        }
         inst.addTransformer(new AgentMain(dirs.toArray(new File[dirs.size()]),
                 "jacoco".equals(lines) ? new JacocoMode() : null));
     }

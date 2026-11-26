@@ -8,7 +8,6 @@ import jflp.rt.Session;
 
 import org.jacoco.core.runtime.IExecutionDataAccessorGenerator;
 import org.objectweb.asm.MethodVisitor;
-import org.objectweb.asm.Opcodes;
 
 /**
  * {@code lines=jacoco}: classes are instrumented by JaCoCo 0.8.7 itself, so a
@@ -37,8 +36,6 @@ public final class JacocoMode implements IExecutionDataAccessorGenerator {
                 arrays.put(Long.valueOf(classId), index);
             }
         }
-        mv.visitLdcInsn(index);
-        mv.visitMethodInsn(Opcodes.INVOKESTATIC, Instrumenter.RUNTIME, "a", "(I)[Z", false);
-        return 1;
+        return Access.jacocoArray(mv, index.intValue());
     }
 }

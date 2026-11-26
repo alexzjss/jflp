@@ -24,7 +24,6 @@ import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.LineNumberNode;
 import org.objectweb.asm.tree.LookupSwitchInsnNode;
-import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.TableSwitchInsnNode;
 import org.objectweb.asm.tree.TryCatchBlockNode;
@@ -139,16 +138,15 @@ public final class Instrumenter {
 
     /** Emits the instrumented class with probe ids {@code base .. base + probeCount - 1}. */
     public static byte[] instrument(final Analysis a, final int base) {
-        final Set<MethodNode> touched = new HashSet<MethodNode>();
+        final Map<MethodNode, Integer> touched = new HashMap<MethodNode, Integer>();
         for (final Insertion ins : a.insertions) {
             final InsnList probe = new InsnList();
-            probe.add(push(base + ins.probe));
-            probe.add(new MethodInsnNode(Opcodes.INVOKESTATIC, RUNTIME, "h", "(I)V", false));
+            final int stack = Access.probe(probe, base + ins.probe);
             ins.method.instructions.insertBefore(ins.before, probe);
-            touched.add(ins.method);
+            touched.put(ins.method, Integer.valueOf(stack));
         }
-        for (final MethodNode m : touched) {
-            m.maxStack += 1;
+        for (final Map.Entry<MethodNode, Integer> e : touched.entrySet()) {
+            e.getKey().maxStack += e.getValue().intValue();
         }
         final ClassWriter cw = new ClassWriter(0);
         a.node.accept(cw);
