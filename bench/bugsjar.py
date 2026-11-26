@@ -136,8 +136,9 @@ def measure(args, row, out, src, module, patch):
     classes = os.path.join(mod_dir, "target", "classes")
 
     mvn_env = dict(os.environ, JAVA_HOME=args.build_jdk)
-    common = ["-B", "-Drat.skip", "-Dcheckstyle.skip", "-Danimal.sniffer.skip", "-Denforcer.skip"]
-    build = ["mvn", *common, "-DskipTests", "install"] + (["-pl", module, "-am"] if module else [])
+    common = ["-B", "-Drat.skip", "-Dcheckstyle.skip", "-Danimal.sniffer.skip", "-Denforcer.skip", "-Dlicense.skip"]
+    # Some builds run tests during install despite -DskipTests (HikariCP); a failing one must not stop it.
+    build = ["mvn", *common, "-DskipTests", "-Dmaven.test.failure.ignore=true", "install"] + (["-pl", module, "-am"] if module else [])
     code, _ = run(build, cwd=src, env=mvn_env, timeout=args.timeout, log=os.path.join(out, "build.log"))
     if code != 0:
         raise RuntimeError("build failed, see %s" % os.path.join(out, "build.log"))
