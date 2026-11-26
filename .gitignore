@@ -1,3 +1,4 @@
 target/
 src/it/sample/target/
 src/it/sample/target-jaguar2/
+__pycache__/
