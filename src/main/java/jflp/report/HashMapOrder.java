@@ -14,9 +14,10 @@ import java.util.List;
  * that order explicitly, instead of iterating a real HashMap, gives the same
  * columns whatever JVM runs the report (Java 5-7 HashMaps order differently).
  *
- * Keys that share a bucket keep insertion order. The fork inserted classes in
- * file-system listing order, which is not reproducible; callers insert in
- * name order, so only such bucket collisions can differ from a fork run.
+ * Keys that share a bucket keep insertion order. The fork inserts classes in
+ * file-system listing order, so its own layout can change when the same
+ * classes sit in another directory or on another machine; given the same
+ * directory, this order is the fork's.
  */
 final class HashMapOrder {
 

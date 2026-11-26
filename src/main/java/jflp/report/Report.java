@@ -176,12 +176,16 @@ public final class Report {
         }
     }
 
+    /**
+     * Walks the directory as JaCoCo's {@code Analyzer.analyzeAll} does, in
+     * {@code listFiles()} order, which is the order the Jaguar2 fork fills its
+     * class map in. That order breaks ties in the coverage matrix layout.
+     */
     private void addUnloadedClasses(final File dir) throws IOException {
         final File[] entries = dir.listFiles();
         if (entries == null) {
             return;
         }
-        Arrays.sort(entries);
         for (final File f : entries) {
             if (f.isDirectory()) {
                 addUnloadedClasses(f);
@@ -193,7 +197,11 @@ public final class Report {
                     summary.warnings.add("cannot analyze " + f + ": " + e);
                     continue;
                 }
-                if (a == null || model.classes.containsKey(a.info.name)) {
+                if (a == null) {
+                    continue;
+                }
+                model.directoryOrder.add(a.info.name);
+                if (model.classes.containsKey(a.info.name)) {
                     continue;
                 }
                 final Model.Clazz c = model.clazz(a.info.name);

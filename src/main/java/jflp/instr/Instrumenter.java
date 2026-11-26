@@ -99,32 +99,30 @@ public final class Instrumenter {
             if (m.instructions.size() == 0) {
                 continue;
             }
-            final Set<AbstractInsnNode> excluded = filter.excluded(m);
-            final Set<Integer> codeLines = codeLines(m, excluded);
-            if (codeLines.isEmpty()) {
-                continue;
-            }
+            final SourceFilter.Result verdict = filter.filter(m);
+            final Map<AbstractInsnNode, Integer> lineOf = lineOf(m);
             final Set<LabelNode> targets = targets(m);
-            int current = -1;
-            int pending = -1;
+            // A probe goes wherever a segment starts or the line credited changes, so
+            // every line JaCoCo reports gets a probe and each probe credits one line.
+            Integer last = null;
             for (Iterator<AbstractInsnNode> it = m.instructions.iterator(); it.hasNext();) {
                 final AbstractInsnNode insn = it.next();
-                if (insn instanceof LineNumberNode) {
-                    current = ((LineNumberNode) insn).line;
-                    pending = codeLines.contains(current) ? current : -1;
-                } else if (insn instanceof LabelNode) {
-                    if (targets.contains(insn) && codeLines.contains(current)) {
-                        pending = current;
+                if (insn instanceof LineNumberNode || (insn instanceof LabelNode && targets.contains(insn))) {
+                    last = null; // a new code segment starts
+                } else if (insn.getOpcode() >= 0) {
+                    final AbstractInsnNode rep = verdict.countsFor(insn);
+                    final Integer line = rep == null ? null : lineOf.get(rep);
+                    if (line == null || line.equals(last)) {
+                        continue;
                     }
-                } else if (insn.getOpcode() >= 0 && pending > 0 && !excluded.contains(insn)) {
-                    Integer probe = probeOfLine.get(pending);
+                    Integer probe = probeOfLine.get(line);
                     if (probe == null) {
                         probe = lines.size();
-                        probeOfLine.put(pending, probe);
-                        lines.add(pending);
+                        probeOfLine.put(line, probe);
+                        lines.add(line);
                     }
                     insertions.add(new Insertion(m, insn, probe));
-                    pending = -1;
+                    last = line;
                 }
             }
         }
@@ -179,16 +177,16 @@ public final class Instrumenter {
         }
     }
 
-    /** Lines holding at least one instruction that JaCoCo would report. */
-    private static Set<Integer> codeLines(final MethodNode m, final Set<AbstractInsnNode> excluded) {
-        final Set<Integer> lines = new HashSet<Integer>();
-        int current = -1;
+    /** Source line of each instruction (the last line entry before it), as JaCoCo assigns them. */
+    private static Map<AbstractInsnNode, Integer> lineOf(final MethodNode m) {
+        final Map<AbstractInsnNode, Integer> lines = new HashMap<AbstractInsnNode, Integer>();
+        Integer current = null;
         for (Iterator<AbstractInsnNode> it = m.instructions.iterator(); it.hasNext();) {
             final AbstractInsnNode insn = it.next();
             if (insn instanceof LineNumberNode) {
-                current = ((LineNumberNode) insn).line;
-            } else if (insn.getOpcode() >= 0 && current > 0 && !excluded.contains(insn)) {
-                lines.add(Integer.valueOf(current));
+                current = Integer.valueOf(((LineNumberNode) insn).line);
+            } else if (insn.getOpcode() >= 0 && current != null) {
+                lines.put(insn, current);
             }
         }
         return lines;

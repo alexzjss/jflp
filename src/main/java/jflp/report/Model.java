@@ -43,6 +43,8 @@ final class Model {
     }
 
     final Map<String, Clazz> classes = new TreeMap<String, Clazz>();
+    /** Classes in the order the class directories listed them. */
+    final List<String> directoryOrder = new ArrayList<String>();
     Clazz[] byCol;
     int[] lineOfCol;
     int columns;

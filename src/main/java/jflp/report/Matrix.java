@@ -26,7 +26,16 @@ final class Matrix {
     private int rows;
 
     Matrix(final Model model, final File dir) throws IOException {
-        final List<String> names = new ArrayList<String>(model.classes.keySet());
+        // Insertion order of the fork's class map: directory listing order, then
+        // (normally none) classes seen only at run time, by name.
+        final java.util.LinkedHashSet<String> inserted = new java.util.LinkedHashSet<String>();
+        for (final String n : model.directoryOrder) {
+            if (model.classes.containsKey(n)) {
+                inserted.add(n);
+            }
+        }
+        inserted.addAll(model.classes.keySet());
+        final List<String> names = new ArrayList<String>(inserted);
         order = new int[model.columns];
         int k = 0;
         for (final String name : HashMapOrder.of(names)) {

@@ -47,6 +47,23 @@ public class InstrumenterTest {
     }
 
     @Test
+    public void finallyRunOnTheNormalPathIsCovered() throws Exception {
+        // javac copies the finally block onto every exit; JaCoCo reports the
+        // copies as one. Whichever copy runs, the finally line must count.
+        final Loaded t = load("jflp.fixture.Cleanup");
+        final Object o = t.instance();
+        Probes.reset();
+        t.cls.getMethod("run", boolean.class).invoke(o, false);
+        assertEquals(new TreeSet<Integer>(Arrays.asList(10, 13, 15)), t.coveredLines());
+        try {
+            t.cls.getMethod("run", boolean.class).invoke(o, true);
+        } catch (final InvocationTargetException expected) {
+            assertTrue(expected.getCause() instanceof IllegalStateException);
+        }
+        assertEquals(new TreeSet<Integer>(Arrays.asList(10, 11, 15)), t.coveredLines());
+    }
+
+    @Test
     public void lineSetMatchesJaCoCo() throws Exception {
         // Same code lines JaCoCo reports for these classes; a different line set
         // would shift every column of the coverage matrix against Jaguar2's.
