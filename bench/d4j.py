@@ -30,12 +30,13 @@ import subprocess
 import sys
 
 from sbfl_common import (class_lines, failing, jaguar2_failing, map_to_classes, matrix_diff, patch_lines, rank,
-                         read_csv, run, same_file)
+                         read_csv, rows_matched, run, same_file, test_order)
 
 FIELDS = [
     "bug", "status", "tests", "failing_d4j", "failing_jaguar2", "failing_jflp", "failing_jflp_jc",
     "failing_d4j_runner_jflp", "time_plain_s", "time_jaguar2_s", "time_jflp_s", "time_jflp_jc_s", "lines",
-    "jc_csv_identical", "jc_matrix_identical", "jflp_matrix_cells_differ", "jflp_matrix_0to1",
+    "order_stable", "jc_csv_identical", "jc_csv_rows_matched", "jc_matrix_identical", "jc_matrix_rows_matched",
+    "jflp_matrix_cells_differ", "jflp_matrix_0to1",
     "jflp_matrix_1to0", "buggy_lines", "rank_jaguar2", "rank_jflp", "note",
 ]
 
@@ -130,8 +131,17 @@ def one_bug(args, bug, java):
                                         os.path.join(out, "jflp_jc", "jaguar2.csv"))
     row["jc_matrix_identical"] = same_file(os.path.join(j2, "target", "coverageMatrix.txt"),
                                            os.path.join(out, "jflp_jc", "coverageMatrix.txt"))
+    stable = test_order(os.path.join(out, "jflp", "coverageMatrix.tests.csv")) == \
+        test_order(os.path.join(out, "jflp_jc", "coverageMatrix.tests.csv"))
+    row["order_stable"] = stable
+    for key, a, b in (("jc_csv_rows_matched", os.path.join(j2, "target", "jaguar2.csv"), os.path.join(out, "jflp_jc", "jaguar2.csv")),
+                      ("jc_matrix_rows_matched", os.path.join(j2, "target", "coverageMatrix.txt"), os.path.join(out, "jflp_jc", "coverageMatrix.txt"))):
+        m = rows_matched(a, b)
+        if m:
+            row[key] = "%d/%d" % m
+    # Cell by cell only makes sense when both runs executed the tests in the same order.
     md = matrix_diff(os.path.join(j2, "target", "coverageMatrix.txt"), os.path.join(out, "jflp", "coverageMatrix.txt"))
-    if md:
+    if md and stable:
         row["jflp_matrix_cells_differ"], row["jflp_matrix_0to1"], row["jflp_matrix_1to0"] = md
     universe = class_lines(os.path.join(out, "jflp", "coverageMatrix.columns.csv"))
     row["lines"] = len(universe)

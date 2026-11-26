@@ -110,6 +110,39 @@ estático de uma classe conta para o primeiro teste que a carrega. Um teste com
 em `@BeforeClass`) não é contada, mas vira aviso. Testes rodando em paralelo no
 mesmo JVM não podem ser separados, e isso vira aviso em vez de dado misturado.
 
+## Comparação em benchmarks
+
+`bench/` tem os harnesses (veja o cabeçalho de cada script):
+`build-jaguar2.sh` constrói o fork; `d4j.py` (Defects4J) e `bugsjar.py`
+(Bugs.jar) rodam por bug o baseline sem ferramenta, o Jaguar2 e o JFLP nos dois
+modos, e comparam tempo, testes falhos, CSV, matriz e o rank médio da linha
+defeituosa (tirada do patch do benchmark) pelo Ochiai.
+
+| bug | testes | sem ferramenta | Jaguar2 | JFLP | JFLP `lines=jacoco` | rank Jaguar2 | rank JFLP |
+|---|---|---|---|---|---|---|---|
+| Defects4J Lang-1 | 2.291 | 30,2 s | 143,4 s | 32,5 s | 45,3 s | 60 | 3,5 |
+| Bugs.jar MATH-1005 | 4.986 | 61,1 s | 1.051,6 s | 69,8 s | 82,3 s | 8,5 | 9,5 |
+
+Tempos com duas execuções em paralelo numa máquina de 4 núcleos. O que cada
+número quer dizer:
+
+- **Lang-1:** o Jaguar2 registra 31 testes falhos, contra o 1 que o Defects4J
+  aponta. O Lang tem um ASM antigo no classpath de teste (cglib/EasyMock), e o
+  ASM 9.1 sem realocar do Jaguar2 conflita com ele em qualquer ordem: com o
+  projeto na frente, o JaCoCo do Jaguar2 quebra; com o Jaguar2 na frente, o
+  cglib quebra. Mais 2 falhas vêm do `$jacocoData` que o JaCoCo injeta nas
+  classes de teste e que aparece nos testes de reflexão. O rank 60 do Jaguar2
+  reflete esse espectro corrompido. O JFLP registra exatamente o teste do
+  Defects4J, também quando roda dentro do runner do próprio Defects4J.
+- **MATH-1005:** o commons-math usa JUnit 4.10, que ordena os métodos de teste
+  pela reflexão do JVM, e a ordem muda a cada execução. Como a matriz do fork não
+  nomeia os testes, as linhas só podem ser comparadas como conjunto. O modo
+  `lines=jacoco` bate com o Jaguar2 em 230 de 231 linhas do CSV e 4.896 de 4.986
+  linhas da matriz, a mesma variação que o próprio JFLP tem entre duas execuções
+  seguidas (4.902 de 4.986, por cobertura que depende da ordem). O segundo teste
+  falho, `FastMathTest.checkMissingFastMathClasses`, também falha sem ferramenta
+  nenhuma: ele compara com o `StrictMath` do JVM, e o fork exige Java 11.
+
 ## Compatibilidade
 
 - O jar é bytecode Java 5 (verificado pelo animal-sniffer com a assinatura

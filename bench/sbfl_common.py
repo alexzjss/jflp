@@ -141,3 +141,26 @@ def same_file(a, b):
     return os.path.exists(a) and os.path.exists(b) and open(a, "rb").read() == open(b, "rb").read()
 
 
+
+
+def test_order(tests_csv):
+    """Test names in matrix row order, from coverageMatrix.tests.csv."""
+    if not os.path.exists(tests_csv):
+        return None
+    return [r[2] for r in list(csv.reader(open(tests_csv)))[1:]]
+
+
+def rows_matched(a, b):
+    """How many lines of file b also occur in file a, counted as multisets.
+
+    Used for matrices and CSVs when test order differs between runs (JUnit
+    < 4.11 orders methods by reflection, which changes from JVM to JVM): rows
+    can then only be compared as a set, since the fork's matrix names no test.
+    Returns (matched, total of b) or None.
+    """
+    if not (os.path.exists(a) and os.path.exists(b)):
+        return None
+    from collections import Counter
+    ca = Counter(open(a).read().splitlines())
+    cb = Counter(open(b).read().splitlines())
+    return sum((ca & cb).values()), sum(cb.values())

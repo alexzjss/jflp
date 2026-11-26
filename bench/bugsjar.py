@@ -28,13 +28,14 @@ import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
-from sbfl_common import (class_lines, failing, map_to_classes, matrix_diff, patch_lines, rank, read_csv, run,
-                         same_file)
+from sbfl_common import (class_lines, failing, map_to_classes, matrix_diff, patch_lines, rank, read_csv,
+                         rows_matched, run, same_file, test_order)
 
 FIELDS = [
     "bug", "status", "module", "failing_bugsjar", "failing_jaguar2", "failing_jflp", "failing_jflp_jc",
     "tests_jflp", "time_plain_s", "time_jaguar2_s", "time_jflp_s", "time_jflp_jc_s", "lines",
-    "jc_csv_identical", "jc_matrix_identical", "jflp_matrix_cells_differ", "jflp_matrix_0to1",
+    "order_stable", "jc_csv_identical", "jc_csv_rows_matched", "jc_matrix_identical", "jc_matrix_rows_matched",
+    "jflp_matrix_cells_differ", "jflp_matrix_0to1",
     "jflp_matrix_1to0", "buggy_lines", "rank_jaguar2", "rank_jflp", "note",
 ]
 
@@ -91,9 +92,13 @@ def bugsjar_failing(results_txt):
             section = True
             continue
         if section:
-            m = re.match(r"^\s+(\w+)\(([\w.$]+)\)", line)
-            if m:
-                out.add("%s(%s)" % (m.group(1), m.group(2)))
+            # Surefire < 2.17: "  testX(org.pkg.FooTest): msg"; later: "  FooTest.testX:42 » Ex"
+            old = re.match(r"^\s+(\w+)\(([\w.$]+)\)", line)
+            new = re.match(r"^\s+([\w$]+)\.(\w+)[:(]", line)
+            if old:
+                out.add("%s(%s)" % (old.group(1), old.group(2)))
+            elif new:
+                out.add("%s(%s)" % (new.group(2), new.group(1)))
             elif not line.strip() or line.startswith("Tests run:"):
                 section = False
     return out
@@ -178,8 +183,17 @@ def one_bug(args, issue):
     # --- comparisons
     row["jc_csv_identical"] = same_file(os.path.join(j2, "jaguar2.csv"), os.path.join(out, "jflp_jc", "jaguar2.csv"))
     row["jc_matrix_identical"] = same_file(j2_matrix, os.path.join(out, "jflp_jc", "coverageMatrix.txt"))
+    stable = test_order(os.path.join(out, "jflp", "coverageMatrix.tests.csv")) == \
+        test_order(os.path.join(out, "jflp_jc", "coverageMatrix.tests.csv"))
+    row["order_stable"] = stable
+    for key, a, b in (("jc_csv_rows_matched", os.path.join(j2, "jaguar2.csv"), os.path.join(out, "jflp_jc", "jaguar2.csv")),
+                      ("jc_matrix_rows_matched", j2_matrix, os.path.join(out, "jflp_jc", "coverageMatrix.txt"))):
+        m = rows_matched(a, b)
+        if m:
+            row[key] = "%d/%d" % m
+    # Cell by cell only makes sense when both runs executed the tests in the same order.
     md = matrix_diff(j2_matrix, os.path.join(out, "jflp", "coverageMatrix.txt"))
-    if md:
+    if md and stable:
         row["jflp_matrix_cells_differ"], row["jflp_matrix_0to1"], row["jflp_matrix_1to0"] = md
     universe = class_lines(os.path.join(out, "jflp", "coverageMatrix.columns.csv"))
     row["lines"] = len(universe)
