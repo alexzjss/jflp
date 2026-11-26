@@ -94,7 +94,7 @@ public class LineSetVsJaCoCoTest {
 
     private static List<byte[]> fixtures() throws IOException {
         final List<byte[]> l = new ArrayList<byte[]>();
-        for (final String n : new String[] { "Target", "Kind", "Holder", "Cleanup" }) {
+        for (final String n : new String[] { "Target", "Kind", "Holder", "Cleanup", "Builder" }) {
             l.add(InstrumenterTest.bytes("jflp.fixture." + n));
         }
         return l;

@@ -64,6 +64,18 @@ public class InstrumenterTest {
     }
 
     @Test
+    public void lineStartingWithNewOfObjectBuiltAcrossBranchesStillVerifies() throws Exception {
+        // The stack map frames inside the ternary hold "uninitialized StringBuilder",
+        // which points at the NEW instruction. A probe placed between that label and
+        // NEW made the JVM reject the class (ClassFormatError; seen on classgraph).
+        final Loaded t = load("jflp.fixture.Builder");
+        final Object o = t.instance();
+        Probes.reset();
+        assertEquals("x", t.cls.getMethod("make", boolean.class).invoke(o, true).toString());
+        assertEquals(new TreeSet<Integer>(Arrays.asList(7)), t.coveredLines());
+    }
+
+    @Test
     public void lineSetMatchesJaCoCo() throws Exception {
         // Same code lines JaCoCo reports for these classes; a different line set
         // would shift every column of the coverage matrix against Jaguar2's.

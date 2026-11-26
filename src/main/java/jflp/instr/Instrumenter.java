@@ -152,7 +152,14 @@ public final class Instrumenter {
             }
             final InsnList probe = new InsnList();
             final int stack = Access.probe(probe, base + ins.probe);
-            ins.method.instructions.insertBefore(ins.before, probe);
+            if (ins.before.getOpcode() == Opcodes.NEW) {
+                // Stack map frames name an uninitialized object by the label of its NEW;
+                // code between that label and NEW breaks the reference. Right after NEW
+                // the (stack-neutral) probe changes no offset any frame relies on.
+                ins.method.instructions.insert(ins.before, probe);
+            } else {
+                ins.method.instructions.insertBefore(ins.before, probe);
+            }
             touched.put(ins.method, Integer.valueOf(stack));
         }
         for (final Map.Entry<MethodNode, Integer> e : touched.entrySet()) {
