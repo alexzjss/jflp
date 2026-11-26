@@ -179,13 +179,14 @@ details.adv summary { cursor: pointer; color: var(--text-2); font-weight: 600; m
 /* ---- tables ---- */
 table.t { width: 100%; border-collapse: collapse; }
 table.t th { text-align: left; color: var(--text-3); font-weight: 600; font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: .5px; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-table.t td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  letter-spacing: .5px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+table.t td { overflow-wrap: break-word; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 table.t tr:hover td { background: var(--panel-2); }
 table.t tr.click { cursor: pointer; }
-table.t td.num, table.t th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.t td.num { white-space: nowrap; }
+table.t td.num, table.t th.num { overflow-wrap: normal; text-align: right; font-variant-numeric: tabular-nums; }
 tr.buggy td { background: rgba(239, 68, 68, .07); }
-.bar { height: 7px; border-radius: 99px; background: var(--line); overflow: hidden; min-width: 90px; }
+.bar { height: 7px; border-radius: 99px; background: var(--line); overflow: hidden; min-width: 60px; }
 .bar i { display: block; height: 100%; border-radius: 99px; background: linear-gradient(90deg, #f59e0b, #ef4444); }
 .cls { color: var(--text-2); }
 .cls b { color: var(--text); font-weight: 600; }
@@ -262,3 +263,6 @@ svg.hist text { fill: var(--text-3); font: 10px var(--sans); }
 .spinner { width: 16px; height: 16px; border: 2px solid var(--line-2); border-top-color: var(--accent-2); border-radius: 50%;
   animation: spin .8s linear infinite; display: inline-block; vertical-align: -3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* a table never pushes its card wider than the grid column */
+.card { overflow-x: auto; }

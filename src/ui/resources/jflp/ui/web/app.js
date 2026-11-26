@@ -107,6 +107,7 @@ function shell() {
 async function route() {
   S.timers.forEach(clearInterval);
   S.timers = [];
+  const gen = S.gen = (S.gen || 0) + 1;
   const h = location.hash.replace(/^#\/?/, "");
   const [path, query] = h.split("?");
   S.route = path;
@@ -122,6 +123,9 @@ async function route() {
     else if (p[0] === "settings") await settings();
     else view().innerHTML = '<div class="empty">Página não encontrada.</div>';
   } catch (e) {
+    // A page still loading when the user moved on fails on elements that are gone:
+    // only the current page may show its error.
+    if (gen !== S.gen) return;
     view().innerHTML = `<div class="card"><h3>Algo deu errado</h3><p class="muted">${esc(e.message)}</p></div>`;
   }
 }
@@ -164,7 +168,7 @@ async function dashboard() {
     <div class="grid g2">
       <div class="card">
         <h3>Análises recentes</h3>
-        ${runs.length ? `<table class="t"><tr><th>Projeto</th><th>Status</th><th class="num">Testes</th><th class="num">Falhos</th><th class="num">Melhor rank do bug</th><th>Quando</th></tr>
+        ${runs.length ? `<table class="t"><tr><th>Projeto</th><th>Status</th><th class="num">Testes</th><th class="num">Falhos</th><th class="num">Rank do bug</th><th>Quando</th></tr>
           ${runs.map((r) => `<tr class="click" onclick="location.hash='#/run/${r.id}'">
             <td><b>${esc(r.projectName)}</b></td><td>${badge(r.status)}</td>
             <td class="num">${num(r.summary && r.summary.tests)}</td><td class="num">${num(r.summary && r.summary.failed)}</td>
@@ -485,8 +489,8 @@ function rankRow(id, r, max) {
   const simple = cls.slice(cls.lastIndexOf(".") + 1);
   return `<tr class="click ${r.buggy ? "buggy" : ""}" onclick="location.hash='#/run/${id}/code?file=${encodeURIComponent(r.source)}&line=${r.line}'">
     <td class="num">${rank(r.rank)}</td>
-    <td><span class="cls">${esc(cls.slice(0, cls.length - simple.length))}<b>${esc(simple)}</b>:${r.line}</span>${r.buggy ? ' <span class="badge bad">bug</span>' : ""}</td>
-    <td><div class="row" style="gap:8px;flex-wrap:nowrap"><div class="bar" style="flex:1"><i style="width:${max > 0 && r.susp > 0 ? Math.max(2, (r.susp / max) * 100) : 0}%"></i></div><span class="mono">${susp(r.susp)}</span></div></td>
+    <td><span class="cls">${esc(cls.slice(0, cls.length - simple.length)).replace(/\./g, ".<wbr>")}<b>${esc(simple)}</b>:${r.line}</span>${r.buggy ? ' <span class="badge bad">bug</span>' : ""}</td>
+    <td><div class="row" style="gap:8px;flex-wrap:nowrap"><div class="bar" style="flex:1"><i style="width:${max > 0 && r.susp > 0 ? Math.max(2, (r.susp / max) * 100) : 0}%"></i></div><span class="mono" style="white-space:nowrap">${susp(r.susp)}</span></div></td>
     <td class="num">${r.cef}</td><td class="num">${r.cep}</td></tr>`;
 }
 
