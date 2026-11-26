@@ -33,6 +33,20 @@ public final class Session {
         return base;
     }
 
+    /**
+     * Allocates the probes of a class instrumented by JaCoCo ({@code lines=jacoco})
+     * and returns the index of its probe array.
+     */
+    public static int defineJacoco(final String name, final long classId, final int probes) {
+        final int base = R.allocate(probes);
+        final int[] lines = new int[probes];
+        final byte[] kinds = new byte[probes];
+        java.util.Arrays.fill(lines, -1);
+        java.util.Arrays.fill(kinds, jflp.data.RawFormat.KIND_JACOCO);
+        output.classDefined(base, new ClassInfo(name, null, classId, lines, kinds));
+        return R.register(base, probes);
+    }
+
     public static void warn(final String message) {
         final Output o = output;
         if (o != null) {

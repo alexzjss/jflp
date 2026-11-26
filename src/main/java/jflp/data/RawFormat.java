@@ -35,6 +35,13 @@ public final class RawFormat {
     /** Probe kind: execution reached the start of a source line. */
     public static final byte KIND_LINE = 0;
 
+    /**
+     * Probe kind: a JaCoCo probe ({@code lines=jacoco}). Its line is written as
+     * -1 and the class's crc field holds JaCoCo's class id; the report finds the
+     * class file with that id and asks JaCoCo which lines each probe covers.
+     */
+    public static final byte KIND_JACOCO = 1;
+
     public static final String SUFFIX = ".jflp";
 
     private RawFormat() {

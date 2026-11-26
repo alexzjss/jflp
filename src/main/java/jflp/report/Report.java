@@ -57,11 +57,13 @@ public final class Report {
     private final Model model = new Model();
     private final Summary summary = new Summary();
     private final List<FileClasses> perFile = new ArrayList<FileClasses>();
+    private final JacocoLines jacoco;
+    private boolean jacocoMode;
 
     /** Class records of one coverage file, kept for mapping its probe ids in pass 2. */
     private static final class FileClasses {
         final File file;
-        final List<Object[]> records = new ArrayList<Object[]>(); // {base, name, lines}
+        final List<Object[]> records = new ArrayList<Object[]>(); // {base, name, int[][] lines of each probe}
         int maxId;
 
         FileClasses(final File file) {
@@ -71,6 +73,7 @@ public final class Report {
 
     private Report(final Options o) {
         this.o = o;
+        this.jacoco = new JacocoLines(o.classDirs);
     }
 
     public static Summary run(final Options o) throws IOException {
@@ -126,11 +129,13 @@ public final class Report {
             perFile.add(fc);
             final boolean complete = RawReader.read(f, new RawReader.Visitor() {
                 public void classRecord(final int base, final String name, final String source,
-                        final long crc, final int[] lines, final byte[] kinds) {
-                    final Model.Clazz c = model.clazz(name);
-                    if (c.source == null) {
-                        c.source = source;
+                        final long crc, final int[] lines, final byte[] kinds) throws IOException {
+                    final boolean jacocoProbes = lines.length > 0 && kinds[0] == RawFormat.KIND_JACOCO;
+                    final JacocoLines.Mapping m = jacocoProbes ? jacoco.get(name, crc, lines.length) : null;
+                    if (m != null && m.excluded) {
+                        return;
                     }
+                    final Model.Clazz c = model.clazz(name);
                     final Long k = Long.valueOf(crc);
                     if (!c.crcs.contains(k)) {
                         if (!c.crcs.isEmpty()) {
@@ -140,12 +145,31 @@ public final class Report {
                         }
                         c.crcs.add(k);
                     }
-                    for (int i = 0; i < lines.length; i++) {
-                        if (kinds[i] == RawFormat.KIND_LINE) {
+                    final int[][] linesOfProbe = new int[lines.length][];
+                    if (jacocoProbes) {
+                        jacocoMode = true;
+                        if (m == null) {
+                            summary.warnings.add("class " + name.replace('/', '.') + " (lines=jacoco): no class file"
+                                    + " with the same bytecode in the class directories; its coverage is dropped");
+                            return;
+                        }
+                        if (c.source == null) {
+                            c.source = m.source;
+                        }
+                        for (final int l : m.lines) {
+                            c.lineSet.add(Integer.valueOf(l));
+                        }
+                        System.arraycopy(m.linesOfProbe, 0, linesOfProbe, 0, lines.length);
+                    } else {
+                        if (c.source == null) {
+                            c.source = source;
+                        }
+                        for (int i = 0; i < lines.length; i++) {
                             c.lineSet.add(Integer.valueOf(lines[i]));
+                            linesOfProbe[i] = new int[] { lines[i] };
                         }
                     }
-                    fc.records.add(new Object[] { Integer.valueOf(base), name, lines });
+                    fc.records.add(new Object[] { Integer.valueOf(base), name, linesOfProbe });
                     fc.maxId = Math.max(fc.maxId, base + lines.length);
                 }
 
@@ -256,14 +280,17 @@ public final class Report {
         final int[] testIndex = { 0 };
         try {
             for (final FileClasses fc : perFile) {
-                final int[] idToCol = new int[fc.maxId];
-                Arrays.fill(idToCol, -1);
+                final int[][] idToCols = new int[fc.maxId][];
                 for (final Object[] r : fc.records) {
                     final int base = ((Integer) r[0]).intValue();
                     final Model.Clazz c = model.classes.get(r[1]);
-                    final int[] lines = (int[]) r[2];
+                    final int[][] lines = (int[][]) r[2];
                     for (int i = 0; i < lines.length; i++) {
-                        idToCol[base + i] = c.col(lines[i]);
+                        final int[] cols = new int[lines[i].length];
+                        for (int j = 0; j < cols.length; j++) {
+                            cols[j] = c.col(lines[i][j]);
+                        }
+                        idToCols[base + i] = cols;
                     }
                 }
                 RawReader.read(fc.file, new RawReader.Visitor() {
@@ -274,11 +301,22 @@ public final class Report {
                     public void testRecord(final boolean failed, final String name, final int[] ids)
                             throws IOException {
                         final int t = testIndex[0]++;
-                        final int[] cols = new int[ids.length];
+                        int[] cols = new int[ids.length];
                         int n = 0;
                         for (final int id : ids) {
-                            final int col = id < idToCol.length ? idToCol[id] : -1;
-                            if (col >= 0 && seen[col] != t) {
+                            final int[] mapped = id < idToCols.length ? idToCols[id] : null;
+                            if (mapped == null) {
+                                continue;
+                            }
+                            for (final int col : mapped) {
+                                if (col < 0 || seen[col] == t) {
+                                    continue;
+                                }
+                                if (n == cols.length) {
+                                    final int[] grown = new int[n * 2 + 1];
+                                    System.arraycopy(cols, 0, grown, 0, n);
+                                    cols = grown;
+                                }
                                 seen[col] = t;
                                 cols[n++] = col;
                                 if (failed) {
@@ -403,6 +441,7 @@ public final class Report {
             w.write("classes: " + summary.classes + "\n");
             w.write("lines: " + summary.lines + "\n");
             w.write("heuristic: " + o.heuristic.name().toLowerCase() + "\n");
+            w.write("line semantics: " + (jacocoMode ? "jacoco (as Jaguar2)" : "entry") + "\n");
             w.write("warnings: " + summary.warnings.size() + "\n");
             for (final String s : summary.warnings) {
                 w.write("  " + s + "\n");
@@ -416,7 +455,7 @@ public final class Report {
         return new BufferedWriter(new OutputStreamWriter(new FileOutputStream(f), "UTF-8"), 1 << 16);
     }
 
-    private static byte[] readAll(final File f) throws IOException {
+    static byte[] readAll(final File f) throws IOException {
         final InputStream in = new FileInputStream(f);
         try {
             final byte[] b = new byte[(int) f.length()];

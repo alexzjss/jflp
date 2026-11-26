@@ -33,8 +33,8 @@ java -jar /caminho/jflp.jar report
 | `jflp-summary.txt` | contagens e todos os avisos |
 
 Opções do agente (`-javaagent:jflp.jar=chave=valor,...`): `destdir` (padrão
-`target/jflp`) e `classdirs` (padrão `target/classes`, separados por `:` no
-Linux, `;` no Windows). Opções do `report`: `java -jar jflp.jar` sem argumentos
+`target/jflp`), `classdirs` (padrão `target/classes`, separados por `:` no
+Linux, `;` no Windows) e `lines` (`entry`, o padrão, ou `jacoco`; veja abaixo). Opções do `report`: `java -jar jflp.jar` sem argumentos
 lista todas, entre elas `--heuristic` (ochiai, tarantula, jaccard, zoltar, op,
 minus, mccon, drt, kulczynski2, wong3) e `--strict` (sai com status 3 se houver
 qualquer aviso).
@@ -68,6 +68,13 @@ SBFL essa costuma ser a linha defeituosa. No jsoup, isso explica as 67 células,
 de 4,7 milhões, em que as matrizes diferem: todas 0→1, em testes que esperam
 exceção, mais as 3 linhas do teste que falha (`conn.connect()` e a cadeia de
 chamadas até ela).
+
+**Para reproduzir o Jaguar2 bit a bit, use `lines=jacoco`**
+(`-javaagent:jflp.jar=lines=jacoco`). Nesse modo as classes são instrumentadas
+pelo próprio JaCoCo 0.8.7, e o `report` calcula uma única vez, por classe, quais
+linhas cada probe do JaCoCo cobre. No jsoup, o `jaguar2.csv` e a
+`coverageMatrix.txt` saem byte a byte idênticos aos do fork, em 12 s contra 26–34
+s. O `report` detecta o modo sozinho e o registra no `jflp-summary.txt`.
 
 Problemas do Jaguar2/fork que o JFLP não tem:
 

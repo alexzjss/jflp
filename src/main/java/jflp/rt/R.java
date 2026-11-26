@@ -17,6 +17,15 @@ public final class R {
 
     private static int allocated;
 
+    /**
+     * Per-class probe arrays for classes instrumented by JaCoCo's instrumenter
+     * ({@code lines=jacoco}), which wants a {@code boolean[]} of its own per
+     * class. Their probes still get global ids, {@code arrayBase[k] + index}.
+     */
+    private static boolean[][] arrays = new boolean[64][];
+    private static int[] arrayBase = new int[64];
+    private static int arrayCount;
+
     private R() {
     }
 
@@ -39,6 +48,26 @@ public final class R {
         }
         allocated = (int) end;
         return base;
+    }
+
+    /** Registers a JaCoCo probe array whose probes have ids {@code base ..}; returns its index. */
+    public static synchronized int register(final int base, final int count) {
+        if (arrayCount == arrays.length) {
+            final boolean[][] a = new boolean[arrayCount * 2][];
+            System.arraycopy(arrays, 0, a, 0, arrayCount);
+            arrays = a;
+            final int[] b = new int[arrayCount * 2];
+            System.arraycopy(arrayBase, 0, b, 0, arrayCount);
+            arrayBase = b;
+        }
+        arrays[arrayCount] = new boolean[count];
+        arrayBase[arrayCount] = base;
+        return arrayCount++;
+    }
+
+    /** Probe array {@code index}. Called once per class by JaCoCo's {@code $jacocoInit}. */
+    public static synchronized boolean[] a(final int index) {
+        return arrays[index];
     }
 
     static synchronized int allocated() {
@@ -65,8 +94,32 @@ public final class R {
                 }
             }
         }
+        final boolean[][] arr;
+        final int[] base;
+        final int count;
+        synchronized (R.class) {
+            arr = arrays;
+            base = arrayBase;
+            count = arrayCount;
+        }
+        for (int k = 0; k < count; k++) {
+            final boolean[] a = arr[k];
+            for (int i = 0; i < a.length; i++) {
+                if (a[i]) {
+                    a[i] = false;
+                    if (size == out.length) {
+                        final int[] grown = new int[size * 2];
+                        System.arraycopy(out, 0, grown, 0, size);
+                        out = grown;
+                    }
+                    out[size++] = base[k] + i;
+                }
+            }
+        }
+        // Array probes come after page probes of other classes: keep ids ascending.
         final int[] result = new int[size];
         System.arraycopy(out, 0, result, 0, size);
+        java.util.Arrays.sort(result);
         return result;
     }
 
@@ -75,6 +128,11 @@ public final class R {
         final int n = allocated();
         for (int p = 0; p * PAGE_SIZE < n; p++) {
             java.util.Arrays.fill(PAGES[p], false);
+        }
+        synchronized (R.class) {
+            for (int k = 0; k < arrayCount; k++) {
+                java.util.Arrays.fill(arrays[k], false);
+            }
         }
     }
 }

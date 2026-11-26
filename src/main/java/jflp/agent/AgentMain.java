@@ -11,6 +11,7 @@ import java.util.Map;
 
 import jflp.instr.Hooks;
 import jflp.instr.Instrumenter;
+import jflp.instr.JacocoMode;
 import jflp.rt.Session;
 
 /**
@@ -20,7 +21,10 @@ import jflp.rt.Session;
  * <ul>
  * <li>{@code destdir} — where the coverage file goes (default {@code target/jflp});</li>
  * <li>{@code classdirs} — directories whose classes are measured, separated by
- * the platform path separator (default {@code target/classes}, as Jaguar2).</li>
+ * the platform path separator (default {@code target/classes}, as Jaguar2);</li>
+ * <li>{@code lines} — {@code entry} (default): a line is covered once execution
+ * reaches it; {@code jacoco}: as JaCoCo and Jaguar2 count it, which leaves the
+ * line that throws an exception uncovered.</li>
  * </ul>
  * Relative paths are resolved against the JVM's working directory.
  */
@@ -28,9 +32,11 @@ public final class AgentMain implements ClassFileTransformer {
 
     private final File[] classDirs;
     private final Map<String, Integer> bases = new HashMap<String, Integer>();
+    private final JacocoMode jacoco;
 
-    private AgentMain(final File[] classDirs) {
+    private AgentMain(final File[] classDirs, final JacocoMode jacoco) {
         this.classDirs = classDirs;
+        this.jacoco = jacoco;
     }
 
     public static void start(final String args, final Instrumentation inst) throws Exception {
@@ -43,8 +49,13 @@ public final class AgentMain implements ClassFileTransformer {
                 dirs.add(absolute(d));
             }
         }
+        final String lines = value(opts, "lines", "entry");
+        if (!"entry".equals(lines) && !"jacoco".equals(lines)) {
+            throw new IllegalArgumentException("[jflp] lines must be entry or jacoco, not '" + lines + "'");
+        }
         Session.start(dest);
-        inst.addTransformer(new AgentMain(dirs.toArray(new File[dirs.size()])));
+        inst.addTransformer(new AgentMain(dirs.toArray(new File[dirs.size()]),
+                "jacoco".equals(lines) ? new JacocoMode() : null));
     }
 
     public byte[] transform(final ClassLoader loader, final String name, final Class<?> redefined,
@@ -60,7 +71,7 @@ public final class AgentMain implements ClassFileTransformer {
             if (name.startsWith("jflp/") || !measured(name)) {
                 return null;
             }
-            return instrument(name, buffer);
+            return jacoco != null ? jacoco.instrument(buffer, name) : instrument(name, buffer);
         } catch (final Throwable e) {
             Session.warn("class " + name.replace('/', '.') + " not instrumented: " + e);
             return null;
@@ -108,7 +119,7 @@ public final class AgentMain implements ClassFileTransformer {
             }
         }
         for (final String k : m.keySet()) {
-            if (!"destdir".equals(k) && !"classdirs".equals(k)) {
+            if (!"destdir".equals(k) && !"classdirs".equals(k) && !"lines".equals(k)) {
                 throw new IllegalArgumentException("[jflp] unknown agent option '" + k + "'");
             }
         }
