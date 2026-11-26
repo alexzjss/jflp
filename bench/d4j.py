@@ -71,7 +71,8 @@ def one_bug(args, bug, java):
     # --- baseline
     d = os.path.join(out, "plain")
     os.makedirs(d, exist_ok=True)
-    _, t = run([java, "-cp", cp, "org.junit.runner.JUnitCore", *tests], cwd=d, env=junit_env,
+    # Tests read resources by relative path, so every run's working directory is the checkout.
+    _, t = run([java, "-cp", cp, "org.junit.runner.JUnitCore", *tests], cwd=src, env=junit_env,
                timeout=args.timeout, log=os.path.join(d, "run.log"))
     row["time_plain_s"] = round(t, 1)
 
@@ -79,6 +80,9 @@ def one_bug(args, bug, java):
     j2 = os.path.join(out, "jaguar2")
     shutil.rmtree(j2, ignore_errors=True)
     os.makedirs(os.path.join(j2, "target"))
+    for f in ("jaguar2.csv", "coverageMatrix.txt"):
+        if os.path.exists(os.path.join(src, "target", f)):
+            os.remove(os.path.join(src, "target", f))
     code, t = run([java, "-javaagent:%s=destfile=%s" % (os.path.join(args.tools, "jacocoagent.jar"),
                                                         os.path.join(j2, "target", "jacoco.exec")),
                    "-Djaguar2.classesDirs=" + classes,
@@ -87,8 +91,12 @@ def one_bug(args, bug, java):
                    # test class fails with IncompatibleClassChangeError.
                    "-cp", jaguar2_cp + os.pathsep + cp,
                    "br.usp.each.saeg.jaguar2.junit.JaguarTestRunner", *tests],
-                  cwd=j2, env=junit_env, timeout=args.timeout, log=os.path.join(j2, "run.log"))
+                  cwd=src, env=junit_env, timeout=args.timeout, log=os.path.join(j2, "run.log"))
     row["time_jaguar2_s"] = round(t, 1)
+    # Jaguar2 writes target/jaguar2.csv and target/coverageMatrix.txt under its working directory.
+    for f in ("jaguar2.csv", "coverageMatrix.txt"):
+        if os.path.exists(os.path.join(src, "target", f)):
+            shutil.move(os.path.join(src, "target", f), os.path.join(j2, "target", f))
     row["failing_jaguar2"] = len(jaguar2_failing(os.path.join(j2, "run.log")))
 
     # --- JFLP, both line semantics
@@ -99,7 +107,7 @@ def one_bug(args, bug, java):
         _, t1 = run([java, "-javaagent:%s=destdir=%s,classdirs=%s%s" % (args.jflp, os.path.join(d, "data"),
                                                                         classes, opt),
                      "-cp", cp, "org.junit.runner.JUnitCore", *tests],
-                    cwd=d, env=junit_env, timeout=args.timeout, log=os.path.join(d, "run.log"))
+                    cwd=src, env=junit_env, timeout=args.timeout, log=os.path.join(d, "run.log"))
         _, t2 = run([java, "-jar", args.jflp, "report", "--data", os.path.join(d, "data"), "--classes", classes,
                      "--out", d], cwd=d, log=os.path.join(d, "report.log"))
         row["time_%s_s" % mode] = round(t1 + t2, 1)
