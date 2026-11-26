@@ -125,11 +125,15 @@ def one_bug(args, issue):
         subprocess.run(["git", "-C", args.repo, "worktree", "add", "-f", "--detach", src, match[0]], check=True,
                        capture_output=True)
     patch = os.path.join(src, ".bugs-dot-jar", "developer-patch.diff")
-    module = module_of(patch)
+    row["failing_bugsjar"] = len(bugsjar_failing(os.path.join(src, ".bugs-dot-jar", "test-results.txt")))
+    return measure(args, row, out, src, module_of(patch), patch)
+
+
+def measure(args, row, out, src, module, patch):
+    """Builds module of the checkout src and runs the four modes; patch is buggy -> fixed."""
     row["module"] = module or "."
     mod_dir = os.path.join(src, module)
     classes = os.path.join(mod_dir, "target", "classes")
-    row["failing_bugsjar"] = len(bugsjar_failing(os.path.join(src, ".bugs-dot-jar", "test-results.txt")))
 
     mvn_env = dict(os.environ, JAVA_HOME=args.build_jdk)
     common = ["-B", "-Drat.skip", "-Dcheckstyle.skip", "-Danimal.sniffer.skip", "-Denforcer.skip"]
@@ -204,7 +208,7 @@ def one_bug(args, issue):
             if os.path.exists(path):
                 row["rank_" + mode] = rank({k: v[4] for k, v in read_csv(path).items()}, universe, targets)
     else:
-        row["note"] = "no buggy line holds code"
+        row["note"] += "no buggy line holds code"
     return row
 
 
