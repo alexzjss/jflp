@@ -11,10 +11,13 @@ import java.io.UnsupportedEncodingException;
  *
  * <pre>
  * file    := MAGIC VERSION record* END?
- * record  := CLASS base:int name:str source:str crc:long n:int (line:int kind:byte){n}
+ * record  := CLASS base:int name:str source:str crc:long n:int (line:int kind:byte arg:int?){n}
  *          | TEST outcome:byte name:str count:varint (delta:varint){count}
  *          | WARN message:str
  * </pre>
+ *
+ * {@code arg} is present for {@link #KIND_BRANCH} probes only (version 2; a
+ * version 1 file has no branch probes).
  *
  * A missing END means the JVM died before shutdown; every record before that
  * point is complete because records are flushed one at a time.
@@ -22,7 +25,7 @@ import java.io.UnsupportedEncodingException;
 public final class RawFormat {
 
     public static final int MAGIC = 0x4A464C50; // "JFLP"
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
 
     public static final byte CLASS = 'C';
     public static final byte TEST = 'T';
@@ -41,6 +44,13 @@ public final class RawFormat {
      * class file with that id and asks JaCoCo which lines each probe covers.
      */
     public static final byte KIND_JACOCO = 1;
+
+    /** Probe kind: one edge of a conditional jump or switch ({@code branches=true}). */
+    public static final byte KIND_BRANCH = 2;
+
+    public static final int EDGE_TAKEN = 0;
+    public static final int EDGE_NOT_TAKEN = 1;
+    public static final int EDGE_TARGET = 2;
 
     public static final String SUFFIX = ".jflp";
 

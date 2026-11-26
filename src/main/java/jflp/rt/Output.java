@@ -69,6 +69,9 @@ public final class Output {
             for (int i = 0; i < c.probeCount(); i++) {
                 out.writeInt(c.probeLines[i]);
                 out.writeByte(c.probeKinds[i]);
+                if (c.probeKinds[i] == RawFormat.KIND_BRANCH) {
+                    out.writeInt(c.probeArgs[i]);
+                }
             }
             out.flush();
         } catch (final IOException e) {

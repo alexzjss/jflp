@@ -58,6 +58,9 @@ public final class Instrumenter {
         public final ClassInfo info;
         final ClassNode node;
         final List<Insertion> insertions;
+        final List<Branches.Site> branches = new ArrayList<Branches.Site>();
+        /** Local id of the first branch probe (branch site ids are relative to it). */
+        int branchOffset;
         /** Methods that the probes pushed over {@link #HUGE_METHOD_LIMIT}; filled by {@link #instrument}. */
         public final List<String> grownHuge = new ArrayList<String>();
 
@@ -86,18 +89,29 @@ public final class Instrumenter {
      * switch maps, and module descriptors), so they never appear in reports.
      */
     public static Analysis analyze(final byte[] classFile) {
+        return analyze(classFile, false);
+    }
+
+    /** As {@link #analyze(byte[])}, plus a probe per branch edge when {@code branches}. */
+    public static Analysis analyze(final byte[] classFile, final boolean branches) {
         final ClassReader reader = new ClassReader(classFile);
         if ((reader.getAccess() & (Opcodes.ACC_SYNTHETIC | Opcodes.ACC_MODULE)) != 0) {
             return null;
         }
         final ClassNode cn = new ClassNode();
-        reader.accept(cn, 0);
+        // Expanded frames: the branch probes compute the frames of the code they add from them.
+        reader.accept(cn, ClassReader.EXPAND_FRAMES);
         inlineSubroutines(cn);
 
         final Map<Integer, Integer> probeOfLine = new HashMap<Integer, Integer>();
         final List<Integer> lines = new ArrayList<Integer>();
         final List<Insertion> insertions = new ArrayList<Insertion>();
         final SourceFilter filter = new SourceFilter(cn);
+        final List<Branches.Site> sites = new ArrayList<Branches.Site>();
+        final List<Byte> branchKinds = new ArrayList<Byte>();
+        final List<Integer> branchArgs = new ArrayList<Integer>();
+        final List<Integer> branchLines = new ArrayList<Integer>();
+        final Branches.Probes branchProbes = new Branches.Probes(branchLines, branchKinds, branchArgs);
 
         for (final Object o : cn.methods) {
             final MethodNode m = (MethodNode) o;
@@ -130,16 +144,32 @@ public final class Instrumenter {
                     last = line;
                 }
             }
+            if (branches) {
+                Branches.plan(cn, m, verdict, lineOf, branchProbes, sites);
+            }
         }
 
-        final int[] probeLines = new int[lines.size()];
-        final byte[] kinds = new byte[lines.size()];
-        for (int i = 0; i < probeLines.length; i++) {
-            probeLines[i] = lines.get(i);
-            kinds[i] = RawFormat.KIND_LINE;
+        // Line probes first, then branch probes (whose local ids are offset by the line count).
+        final int nLines = lines.size();
+        final int n = nLines + branchLines.size();
+        final int[] probeLines = new int[n];
+        final byte[] kinds = new byte[n];
+        final int[] args = new int[n];
+        for (int i = 0; i < n; i++) {
+            if (i < nLines) {
+                probeLines[i] = lines.get(i);
+                kinds[i] = RawFormat.KIND_LINE;
+            } else {
+                probeLines[i] = branchLines.get(i - nLines);
+                kinds[i] = branchKinds.get(i - nLines);
+                args[i] = branchArgs.get(i - nLines);
+            }
         }
-        final ClassInfo info = new ClassInfo(cn.name, cn.sourceFile, crc(classFile), probeLines, kinds);
-        return new Analysis(info, cn, insertions);
+        final ClassInfo info = new ClassInfo(cn.name, cn.sourceFile, crc(classFile), probeLines, kinds, args);
+        final Analysis a = new Analysis(info, cn, insertions);
+        a.branches.addAll(sites);
+        a.branchOffset = nLines;
+        return a;
     }
 
     /** Emits the instrumented class with probe ids {@code base .. base + probeCount - 1}. */
@@ -161,6 +191,14 @@ public final class Instrumenter {
                 ins.method.instructions.insertBefore(ins.before, probe);
             }
             touched.put(ins.method, Integer.valueOf(stack));
+        }
+        for (final Branches.Site site : a.branches) {
+            if (!sizeBefore.containsKey(site.method)) {
+                sizeBefore.put(site.method, Integer.valueOf(codeSize(site.method)));
+            }
+            final int stack = Branches.apply(site, base + a.branchOffset);
+            final Integer prev = touched.get(site.method);
+            touched.put(site.method, Integer.valueOf(Math.max(stack, prev == null ? 0 : prev.intValue())));
         }
         for (final Map.Entry<MethodNode, Integer> e : touched.entrySet()) {
             final MethodNode m = e.getKey();

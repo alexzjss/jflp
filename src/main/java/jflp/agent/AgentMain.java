@@ -24,7 +24,9 @@ import jflp.rt.Session;
  * the platform path separator (default {@code target/classes}, as Jaguar2);</li>
  * <li>{@code lines} — {@code entry} (default): a line is covered once execution
  * reaches it; {@code jacoco}: as JaCoCo and Jaguar2 count it, which leaves the
- * line that throws an exception uncovered.</li>
+ * line that throws an exception uncovered;</li>
+ * <li>{@code branches} — {@code true} adds a probe per branch edge (conditional
+ * jumps and switches) and the branch reports; default {@code false}.</li>
  * </ul>
  * Relative paths are resolved against the JVM's working directory.
  */
@@ -33,10 +35,12 @@ public final class AgentMain implements ClassFileTransformer {
     private final File[] classDirs;
     private final Map<String, Integer> bases = new HashMap<String, Integer>();
     private final JacocoMode jacoco;
+    private final boolean branches;
 
-    private AgentMain(final File[] classDirs, final JacocoMode jacoco) {
+    private AgentMain(final File[] classDirs, final JacocoMode jacoco, final boolean branches) {
         this.classDirs = classDirs;
         this.jacoco = jacoco;
+        this.branches = branches;
     }
 
     public static void start(final String args, final Instrumentation inst) throws Exception {
@@ -58,8 +62,16 @@ public final class AgentMain implements ClassFileTransformer {
             System.err.println("[jflp] WARNING: no runtime holder; classes defined by isolating class loaders"
                     + " (Ant, OSGi) will fail with NoClassDefFoundError jflp/rt/R");
         }
+        final String branches = value(opts, "branches", "false");
+        if (!"true".equals(branches) && !"false".equals(branches)) {
+            throw new IllegalArgumentException("[jflp] branches must be true or false, not '" + branches + "'");
+        }
+        if ("true".equals(branches) && "jacoco".equals(lines)) {
+            throw new IllegalArgumentException("[jflp] branches=true needs lines=entry (JaCoCo's probes do not"
+                    + " tell which edge of a branch ran)");
+        }
         inst.addTransformer(new AgentMain(dirs.toArray(new File[dirs.size()]),
-                "jacoco".equals(lines) ? new JacocoMode() : null));
+                "jacoco".equals(lines) ? new JacocoMode() : null, "true".equals(branches)));
     }
 
     public byte[] transform(final ClassLoader loader, final String name, final Class<?> redefined,
@@ -83,7 +95,7 @@ public final class AgentMain implements ClassFileTransformer {
     }
 
     private byte[] instrument(final String name, final byte[] buffer) {
-        final Instrumenter.Analysis a = Instrumenter.analyze(buffer);
+        final Instrumenter.Analysis a = Instrumenter.analyze(buffer, branches);
         if (a == null) {
             return null;
         }
@@ -144,7 +156,7 @@ public final class AgentMain implements ClassFileTransformer {
             }
         }
         for (final String k : m.keySet()) {
-            if (!"destdir".equals(k) && !"classdirs".equals(k) && !"lines".equals(k)) {
+            if (!"destdir".equals(k) && !"classdirs".equals(k) && !"lines".equals(k) && !"branches".equals(k)) {
                 throw new IllegalArgumentException("[jflp] unknown agent option '" + k + "'");
             }
         }

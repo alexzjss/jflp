@@ -34,7 +34,28 @@ java -jar /caminho/jflp.jar report
 
 Opções do agente (`-javaagent:jflp.jar=chave=valor,...`): `destdir` (padrão
 `target/jflp`), `classdirs` (padrão `target/classes`, separados por `:` no
-Linux, `;` no Windows) e `lines` (`entry`, o padrão, ou `jacoco`; veja abaixo). Opções do `report`: `java -jar jflp.jar` sem argumentos
+Linux, `;` no Windows), `lines` (`entry`, o padrão, ou `jacoco`; veja abaixo) e
+`branches` (`true` mede também ramos; padrão `false`).
+
+### Ramos
+
+Com `branches=true`, cada aresta de cada desvio condicional e de cada `switch`
+vira um elemento do espectro, e o `report` grava também, no mesmo esquema dos
+arquivos de linha:
+
+| arquivo | formato |
+|---|---|
+| `branches.csv` | como o `jaguar2.csv`, com uma coluna de ramo: `classe,linha,ramo,cef,cnf,cep,cnp,susp` |
+| `branchMatrix.txt` | como a `coverageMatrix.txt`, uma coluna por aresta |
+| `branchMatrix.columns.csv`, `branchMatrix.tests.csv` | classe, linha e ramo de cada coluna; teste e resultado de cada linha |
+
+O ramo é `n:aresta`: o n-ésimo desvio ou `switch` da linha, e `taken` (desviou),
+`not-taken` (seguiu em frente) ou `target-k` (o k-ésimo destino distinto do
+`switch`, casos na ordem e depois o `default`). Que desvios contam é decidido
+pelos filtros do JaCoCo, e o número de ramos por linha é idêntico ao do JaCoCo
+(verificado no `rt.jar` do JDK 8, em módulos do JDK 21 e em JUnit/ASM). Os
+espectros de linha não mudam com `branches=true`. Não combina com
+`lines=jacoco`. Opções do `report`: `java -jar jflp.jar` sem argumentos
 lista todas, entre elas `--heuristic` (ochiai, tarantula, jaccard, zoltar, op,
 minus, mccon, drt, kulczynski2, wong3) e `--strict` (sai com status 3 se houver
 qualquer aviso).
@@ -98,8 +119,9 @@ Problemas do Jaguar2/fork que o JFLP não tem:
   próprio framework (JUnit 3, JUnit 4 e, por consequência, a engine vintage do
   JUnit 5), o que independe do launcher. Testado: Surefire 2.7, 2.22 e 3.2,
   `JUnitCore` e o runner do Defects4J (Ant, inclusive com o `AntClassLoader`
-  isolado). Gradle ainda não foi testado. JUnit 5 Jupiter e TestNG ainda não
-  são detectados;
+  isolado). Gradle ainda não foi testado. Também detecta JUnit 5 (Jupiter e
+  qualquer engine da JUnit Platform, `src/it/sample-junit5`) e TestNG 6 e 7
+  (`src/it/sample-testng`), que o Jaguar2 não suporta;
 - com `forkCount > 1` cada JVM sobrescreve `target/jaguar2.csv`; o JFLP grava um
   arquivo por JVM e o `report` junta tudo (testado com `forkCount=2`);
 - um JVM morto no meio (timeout, `System.exit`) perde tudo; o JFLP grava cada

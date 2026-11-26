@@ -56,6 +56,49 @@ public class LineSetVsJaCoCoTest {
                 + diffs.subList(0, Math.min(5, diffs.size())), 0, diffs.size());
     }
 
+    @Test
+    public void branchCountsPerLineMatchJaCoCo() throws Exception {
+        final List<byte[]> corpus = new ArrayList<byte[]>(fixtures());
+        final String explicit = System.getProperty("jflp.corpus");
+        for (final String jar : (explicit != null ? explicit : System.getProperty("java.class.path"))
+                .split(File.pathSeparator)) {
+            if (explicit != null || jar.matches(".*(junit-4|asm-9|asm-tree-9|asm-commons-9|hamcrest-core).*\\.jar")) {
+                corpus.addAll(classesOf(new File(jar)));
+            }
+        }
+        int lines = 0;
+        final List<String> diffs = new ArrayList<String>();
+        for (final byte[] b : corpus) {
+            final CoverageBuilder builder = new CoverageBuilder();
+            new Analyzer(new ExecutionDataStore(), builder).analyzeClass(b, "x");
+            final Instrumenter.Analysis a = Instrumenter.analyze(b, true);
+            if (builder.getClasses().isEmpty() || a == null) {
+                continue;
+            }
+            final java.util.Map<Integer, Integer> ours = new java.util.HashMap<Integer, Integer>();
+            for (int i = 0; i < a.info.probeCount(); i++) {
+                if (a.info.probeKinds[i] == jflp.data.RawFormat.KIND_BRANCH) {
+                    final Integer l = Integer.valueOf(a.info.probeLines[i]);
+                    ours.put(l, Integer.valueOf(ours.containsKey(l) ? ours.get(l).intValue() + 1 : 1));
+                }
+            }
+            final IClassCoverage cc = builder.getClasses().iterator().next();
+            for (int l = cc.getFirstLine(); l >= 0 && l <= cc.getLastLine(); l++) {
+                final int expected = cc.getLine(l).getBranchCounter().getTotalCount();
+                final Integer actual = ours.get(Integer.valueOf(l));
+                if (expected > 0 || actual != null) {
+                    lines++;
+                    if (expected != (actual == null ? 0 : actual.intValue())) {
+                        diffs.add(cc.getName() + ":" + l + " jacoco=" + expected + " jflp=" + actual);
+                    }
+                }
+            }
+        }
+        assertTrue("no branches compared", lines > 1000);
+        assertEquals(diffs.size() + " of " + lines + " lines with branches differ, e.g. "
+                + diffs.subList(0, Math.min(8, diffs.size())), 0, diffs.size());
+    }
+
     private static List<String> compare(final List<byte[]> classes) throws IOException {
         final List<String> diffs = new ArrayList<String>();
         for (final byte[] b : classes) {
@@ -100,7 +143,7 @@ public class LineSetVsJaCoCoTest {
         return l;
     }
 
-    private static List<byte[]> classesOf(final File jar) throws IOException {
+    static List<byte[]> classesOf(final File jar) throws IOException {
         final List<byte[]> l = new ArrayList<byte[]>();
         final JarFile jf = new JarFile(jar);
         try {

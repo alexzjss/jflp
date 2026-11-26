@@ -10,8 +10,8 @@ import java.io.IOException;
 public final class RawReader {
 
     public interface Visitor {
-        void classRecord(int base, String name, String source, long crc, int[] lines, byte[] kinds)
-                throws IOException;
+        void classRecord(int base, String name, String source, long crc, int[] lines, byte[] kinds,
+                int[] args) throws IOException;
 
         void testRecord(boolean failed, String name, int[] ids) throws IOException;
 
@@ -34,7 +34,7 @@ public final class RawReader {
                 throw new IOException(file + " is not a jflp coverage file");
             }
             final int version = in.readInt();
-            if (version != RawFormat.VERSION) {
+            if (version != 1 && version != RawFormat.VERSION) {
                 throw new IOException(file + " has format version " + version + ", expected " + RawFormat.VERSION);
             }
             while (true) {
@@ -52,11 +52,15 @@ public final class RawReader {
                         final int n = in.readInt();
                         final int[] lines = new int[n];
                         final byte[] kinds = new byte[n];
+                        final int[] args = new int[n];
                         for (int i = 0; i < n; i++) {
                             lines[i] = in.readInt();
                             kinds[i] = in.readByte();
+                            if (kinds[i] == RawFormat.KIND_BRANCH) {
+                                args[i] = in.readInt();
+                            }
                         }
-                        v.classRecord(base, name, source.length() == 0 ? null : source, crc, lines, kinds);
+                        v.classRecord(base, name, source.length() == 0 ? null : source, crc, lines, kinds, args);
                         break;
                     }
                     case RawFormat.TEST: {

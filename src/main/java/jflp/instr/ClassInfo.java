@@ -20,13 +20,28 @@ public final class ClassInfo {
 
     public final byte[] probeKinds;
 
+    /**
+     * Per probe, what within its line it stands for: 0 for line probes; for
+     * branch probes {@code (jump << 16) | edge}, where jump is the 1-based index of
+     * the conditional jump or switch on the line and edge is
+     * {@link jflp.data.RawFormat#EDGE_TAKEN}, {@link jflp.data.RawFormat#EDGE_NOT_TAKEN}
+     * or, for a switch, {@code EDGE_TARGET + n} for its n-th distinct target.
+     */
+    public final int[] probeArgs;
+
     public ClassInfo(final String name, final String source, final long crc,
             final int[] probeLines, final byte[] probeKinds) {
+        this(name, source, crc, probeLines, probeKinds, new int[probeLines.length]);
+    }
+
+    public ClassInfo(final String name, final String source, final long crc,
+            final int[] probeLines, final byte[] probeKinds, final int[] probeArgs) {
         this.name = name;
         this.source = source;
         this.crc = crc;
         this.probeLines = probeLines;
         this.probeKinds = probeKinds;
+        this.probeArgs = probeArgs;
     }
 
     public int probeCount() {

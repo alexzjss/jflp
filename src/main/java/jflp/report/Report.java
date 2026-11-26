@@ -50,6 +50,8 @@ public final class Report {
         public int failed;
         public int classes;
         public int lines;
+        /** Branch edges measured, or -1 when the agent ran without branches=true. */
+        public int branches = -1;
         public final List<String> warnings = new ArrayList<String>();
     }
 
@@ -59,11 +61,14 @@ public final class Report {
     private final List<FileClasses> perFile = new ArrayList<FileClasses>();
     private final JacocoLines jacoco;
     private boolean jacocoMode;
+    private final BranchModel branches = new BranchModel();
+    private boolean branchMode;
 
     /** Class records of one coverage file, kept for mapping its probe ids in pass 2. */
     private static final class FileClasses {
         final File file;
-        final List<Object[]> records = new ArrayList<Object[]>(); // {base, name, int[][] lines of each probe}
+        // {base, name, int[][] lines of each probe, int[] probe lines, byte[] kinds, int[] args}
+        final List<Object[]> records = new ArrayList<Object[]>();
         int maxId;
 
         FileClasses(final File file) {
@@ -101,8 +106,10 @@ public final class Report {
         readClasses(data);
         addUnloadedClasses();
         model.seal();
+        branches.seal();
         summary.classes = model.classes.size();
         summary.lines = model.columns;
+        summary.branches = branchMode ? branches.columns : -1;
 
         if (!o.outDir.isDirectory() && !o.outDir.mkdirs()) {
             throw new IOException("cannot create " + o.outDir);
@@ -117,6 +124,9 @@ public final class Report {
         }
         writeCsv(counts);
         writeXml(counts);
+        if (branchMode) {
+            writeBranchCsv(counts);
+        }
         writeSummary();
         return summary;
     }
@@ -129,7 +139,7 @@ public final class Report {
             perFile.add(fc);
             final boolean complete = RawReader.read(f, new RawReader.Visitor() {
                 public void classRecord(final int base, final String name, final String source,
-                        final long crc, final int[] lines, final byte[] kinds) throws IOException {
+                        final long crc, final int[] lines, final byte[] kinds, final int[] args) throws IOException {
                     final boolean jacocoProbes = lines.length > 0 && kinds[0] == RawFormat.KIND_JACOCO;
                     final JacocoLines.Mapping m = jacocoProbes ? jacoco.get(name, crc, lines.length) : null;
                     if (m != null && m.excluded) {
@@ -165,11 +175,17 @@ public final class Report {
                             c.source = source;
                         }
                         for (int i = 0; i < lines.length; i++) {
-                            c.lineSet.add(Integer.valueOf(lines[i]));
-                            linesOfProbe[i] = new int[] { lines[i] };
+                            if (kinds[i] == RawFormat.KIND_BRANCH) {
+                                branchMode = true;
+                                branches.add(name, lines[i], args[i]);
+                                linesOfProbe[i] = new int[0];
+                            } else {
+                                c.lineSet.add(Integer.valueOf(lines[i]));
+                                linesOfProbe[i] = new int[] { lines[i] };
+                            }
                         }
                     }
-                    fc.records.add(new Object[] { Integer.valueOf(base), name, linesOfProbe });
+                    fc.records.add(new Object[] { Integer.valueOf(base), name, linesOfProbe, lines, kinds, args });
                     fc.maxId = Math.max(fc.maxId, base + lines.length);
                 }
 
@@ -216,7 +232,7 @@ public final class Report {
             } else if (f.getName().endsWith(".class")) {
                 final Instrumenter.Analysis a;
                 try {
-                    a = Instrumenter.analyze(readAll(f));
+                    a = Instrumenter.analyze(readAll(f), branchMode);
                 } catch (final RuntimeException e) {
                     summary.warnings.add("cannot analyze " + f + ": " + e);
                     continue;
@@ -230,8 +246,12 @@ public final class Report {
                 }
                 final Model.Clazz c = model.clazz(a.info.name);
                 c.source = a.info.source;
-                for (final int line : a.info.probeLines) {
-                    c.lineSet.add(Integer.valueOf(line));
+                for (int i = 0; i < a.info.probeCount(); i++) {
+                    if (a.info.probeKinds[i] == RawFormat.KIND_BRANCH) {
+                        branches.add(a.info.name, a.info.probeLines[i], a.info.probeArgs[i]);
+                    } else {
+                        c.lineSet.add(Integer.valueOf(a.info.probeLines[i]));
+                    }
                 }
             }
         }
@@ -242,6 +262,8 @@ public final class Report {
     static final class Counts {
         int[] cef;
         int[] cep;
+        int[] bcef;
+        int[] bcep;
         /** Per source file and line, counting each test once even if several classes cover the line. */
         final Map<String, TreeMap<Integer, int[]>> bySource = new TreeMap<String, TreeMap<Integer, int[]>>();
     }
@@ -250,6 +272,8 @@ public final class Report {
         final Counts counts = new Counts();
         counts.cef = new int[model.columns];
         counts.cep = new int[model.columns];
+        counts.bcef = new int[branches.columns];
+        counts.bcep = new int[branches.columns];
 
         // Column -> slot in the per-source-file counts.
         final int[][] sourceSlot = new int[model.columns][];
@@ -275,13 +299,28 @@ public final class Report {
         }
 
         final Matrix matrix = o.matrix ? new Matrix(model, o.outDir) : null;
+        final BranchModel.MatrixWriter branchMatrix = o.matrix && branchMode
+                ? new BranchModel.MatrixWriter(branches, o.outDir) : null;
+        final int[] branchSeen = new int[branches.columns];
+        Arrays.fill(branchSeen, -1);
         final int[] seen = new int[model.columns];
         Arrays.fill(seen, -1);
         final int[] testIndex = { 0 };
         try {
             for (final FileClasses fc : perFile) {
                 final int[][] idToCols = new int[fc.maxId][];
+                final int[] idToBranch = new int[fc.maxId];
+                Arrays.fill(idToBranch, -1);
                 for (final Object[] r : fc.records) {
+                    final int[] probeLines = (int[]) r[3];
+                    final byte[] probeKinds = (byte[]) r[4];
+                    final int[] probeArgs = (int[]) r[5];
+                    for (int i = 0; i < probeLines.length; i++) {
+                        if (probeKinds[i] == RawFormat.KIND_BRANCH) {
+                            idToBranch[((Integer) r[0]).intValue() + i] = branches.col((String) r[1], probeLines[i],
+                                    probeArgs[i]);
+                        }
+                    }
                     final int base = ((Integer) r[0]).intValue();
                     final Model.Clazz c = model.classes.get(r[1]);
                     final int[][] lines = (int[][]) r[2];
@@ -295,7 +334,7 @@ public final class Report {
                 }
                 RawReader.read(fc.file, new RawReader.Visitor() {
                     public void classRecord(final int base, final String name, final String source,
-                            final long crc, final int[] lines, final byte[] kinds) {
+                            final long crc, final int[] lines, final byte[] kinds, final int[] args) {
                     }
 
                     public void testRecord(final boolean failed, final String name, final int[] ids)
@@ -303,7 +342,19 @@ public final class Report {
                         final int t = testIndex[0]++;
                         int[] cols = new int[ids.length];
                         int n = 0;
+                        final int[] bcols = new int[ids.length];
+                        int bn = 0;
                         for (final int id : ids) {
+                            final int b = id < idToBranch.length ? idToBranch[id] : -1;
+                            if (b >= 0 && branchSeen[b] != t) {
+                                branchSeen[b] = t;
+                                bcols[bn++] = b;
+                                if (failed) {
+                                    counts.bcef[b]++;
+                                } else {
+                                    counts.bcep[b]++;
+                                }
+                            }
                             final int[] mapped = id < idToCols.length ? idToCols[id] : null;
                             if (mapped == null) {
                                 continue;
@@ -339,6 +390,9 @@ public final class Report {
                         if (matrix != null) {
                             matrix.row(name, failed, cols, n);
                         }
+                        if (branchMatrix != null) {
+                            branchMatrix.row(name, failed, bcols, bn);
+                        }
                     }
 
                     public void warning(final String message) {
@@ -348,6 +402,9 @@ public final class Report {
         } finally {
             if (matrix != null) {
                 matrix.close();
+            }
+            if (branchMatrix != null) {
+                branchMatrix.close();
             }
         }
         return counts;
@@ -377,6 +434,25 @@ public final class Report {
                         w.write(clazz.name + "," + clazz.lines[p] + "," + cef + "," + (summary.failed - cef)
                                 + "," + cep + "," + (summary.passed - cep) + "," + fmt(s) + "\n");
                     }
+                }
+            }
+        } finally {
+            w.close();
+        }
+    }
+
+    /** {@code branches.csv}: jaguar2.csv's columns plus the branch ({@link BranchModel#describe}). */
+    private void writeBranchCsv(final Counts c) throws IOException {
+        final Writer w = writer(new File(o.outDir, "branches.csv"));
+        try {
+            for (int col = 0; col < branches.columns; col++) {
+                final int cef = c.bcef[col];
+                final int cep = c.bcep[col];
+                final double s = susp(cef, cep);
+                if (s > 0) {
+                    w.write(branches.classOfCol[col] + "," + branches.lineOfCol[col] + ","
+                            + BranchModel.describe(branches.argOfCol[col]) + "," + cef + "," + (summary.failed - cef)
+                            + "," + cep + "," + (summary.passed - cep) + "," + fmt(s) + "\n");
                 }
             }
         } finally {
@@ -440,6 +516,9 @@ public final class Report {
                     + summary.passed + " passed)\n");
             w.write("classes: " + summary.classes + "\n");
             w.write("lines: " + summary.lines + "\n");
+            if (summary.branches >= 0) {
+                w.write("branches: " + summary.branches + "\n");
+            }
             w.write("heuristic: " + o.heuristic.name().toLowerCase() + "\n");
             w.write("line semantics: " + (jacocoMode ? "jacoco (as Jaguar2)" : "entry") + "\n");
             w.write("warnings: " + summary.warnings.size() + "\n");

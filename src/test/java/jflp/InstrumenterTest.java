@@ -76,6 +76,33 @@ public class InstrumenterTest {
     }
 
     @Test
+    public void branchEdgesFollowExecution() throws Exception {
+        final Loaded t = loadWithBranches("jflp.fixture.Branchy");
+        final Object o = t.instance();
+        final java.lang.reflect.Method both = t.cls.getMethod("both", boolean.class, boolean.class);
+        Probes.reset();
+        both.invoke(o, true, true);
+        // `a && b` compiles to two IFEQs on line 7; both fall through to `return 1`.
+        assertEquals(new TreeSet<String>(Arrays.asList("7 1:not-taken", "7 2:not-taken")), t.coveredBranches());
+        both.invoke(o, true, false);
+        assertEquals(new TreeSet<String>(Arrays.asList("7 1:not-taken", "7 2:taken")), t.coveredBranches());
+        both.invoke(o, false, true);
+        assertEquals(new TreeSet<String>(Arrays.asList("7 1:taken")), t.coveredBranches());
+
+        final java.lang.reflect.Method pick = t.cls.getMethod("pick", int.class);
+        pick.invoke(o, 3);
+        // Distinct targets in case order, then default: case 1, cases 2-3, default.
+        assertEquals(new TreeSet<String>(Arrays.asList("14 1:target-2")), t.coveredBranches());
+        pick.invoke(o, 9);
+        assertEquals(new TreeSet<String>(Arrays.asList("14 1:target-3")), t.coveredBranches());
+
+        assertEquals(Long.valueOf(4L), t.cls.getMethod("wide", long.class, double.class, Object.class)
+                .invoke(o, 4L, 2.0, null));
+        // javac compiles `o == null ? x : y` to IFNONNULL (jump to y): with o null it falls through.
+        assertEquals(new TreeSet<String>(Arrays.asList("26 1:not-taken")), t.coveredBranches());
+    }
+
+    @Test
     public void lineSetMatchesJaCoCo() throws Exception {
         // Same code lines JaCoCo reports for these classes; a different line set
         // would shift every column of the coverage matrix against Jaguar2's.
@@ -118,16 +145,40 @@ public class InstrumenterTest {
         TreeSet<Integer> coveredLines() {
             final TreeSet<Integer> lines = new TreeSet<Integer>();
             for (final int id : Probes.collect()) {
-                if (id >= base && id < base + info.probeCount()) {
+                if (id >= base && id < base + info.probeCount()
+                        && info.probeKinds[id - base] == jflp.data.RawFormat.KIND_LINE) {
                     lines.add(info.probeLines[id - base]);
                 }
             }
             return lines;
         }
+
+        /** Covered branch edges as "line jump:edge", and resets the probes. */
+        TreeSet<String> coveredBranches() {
+            final TreeSet<String> out = new TreeSet<String>();
+            for (final int id : Probes.collect()) {
+                if (id >= base && id < base + info.probeCount()
+                        && info.probeKinds[id - base] == jflp.data.RawFormat.KIND_BRANCH) {
+                    final int arg = info.probeArgs[id - base];
+                    final int edge = arg & 0xFFFF;
+                    out.add(info.probeLines[id - base] + " " + (arg >>> 16) + ":"
+                            + (edge == 0 ? "taken" : edge == 1 ? "not-taken" : "target-" + (edge - 1)));
+                }
+            }
+            return out;
+        }
     }
 
     static Loaded load(final String name) throws Exception {
-        final Instrumenter.Analysis a = Instrumenter.analyze(bytes(name));
+        return load(name, false);
+    }
+
+    static Loaded loadWithBranches(final String name) throws Exception {
+        return load(name, true);
+    }
+
+    static Loaded load(final String name, final boolean branches) throws Exception {
+        final Instrumenter.Analysis a = Instrumenter.analyze(bytes(name), branches);
         final int base = Probes.allocate(a.info.probeCount());
         final byte[] instrumented = Instrumenter.instrument(a, base);
         final ClassLoader loader = new ClassLoader(InstrumenterTest.class.getClassLoader()) {
