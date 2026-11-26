@@ -96,8 +96,10 @@ Problemas do Jaguar2/fork que o JFLP não tem:
   já com `cnf * cep > 214748`); o JFLP usa `double`;
 - só funciona com JUnit 4 via listener no POM; o JFLP pega os testes pelo
   próprio framework (JUnit 3, JUnit 4 e, por consequência, a engine vintage do
-  JUnit 5), o que independe do launcher. Testado até aqui: Surefire 2.22 e 3.2 e
-  `JUnitCore`. Ant, Gradle e o runner do Defects4J ainda não foram testados;
+  JUnit 5), o que independe do launcher. Testado: Surefire 2.7, 2.22 e 3.2,
+  `JUnitCore` e o runner do Defects4J (Ant, inclusive com o `AntClassLoader`
+  isolado). Gradle ainda não foi testado. JUnit 5 Jupiter e TestNG ainda não
+  são detectados;
 - com `forkCount > 1` cada JVM sobrescreve `target/jaguar2.csv`; o JFLP grava um
   arquivo por JVM e o `report` junta tudo (testado com `forkCount=2`);
 - um JVM morto no meio (timeout, `System.exit`) perde tudo; o JFLP grava cada
@@ -115,33 +117,72 @@ mesmo JVM não podem ser separados, e isso vira aviso em vez de dado misturado.
 `bench/` tem os harnesses (veja o cabeçalho de cada script):
 `build-jaguar2.sh` constrói o fork; `d4j.py` (Defects4J) e `bugsjar.py`
 (Bugs.jar) rodam por bug o baseline sem ferramenta, o Jaguar2 e o JFLP nos dois
-modos, e comparam tempo, testes falhos, CSV, matriz e o rank médio da linha
-defeituosa (tirada do patch do benchmark) pelo Ochiai.
+modos; `summarize.py` recalcula a tabela a partir dos arquivos que eles deixam.
+Os três modos de um mesmo benchmark usam o mesmo runner (Defects4J: `JUnitCore`
+com a lista `tests.all`; Bugs.jar: `surefire:test`, testes no JDK 11, que o fork
+exige). "rank" é a posição média, com empates, da linha defeituosa mais bem
+colocada pelo Ochiai, com as linhas tiradas do patch de cada benchmark. Os
+tempos são só da execução dos testes, sem o `report`.
 
-| bug | testes | sem ferramenta | Jaguar2 | JFLP | JFLP `lines=jacoco` | rank Jaguar2 | rank JFLP |
-|---|---|---|---|---|---|---|---|
-| Defects4J Lang-1 | 2.291 | 30,2 s | 143,4 s | 32,5 s | 45,3 s | 60 | 3,5 |
-| Bugs.jar MATH-1005 | 4.986 | 61,1 s | 1.051,6 s | 69,8 s | 82,3 s | 8,5 | 9,5 |
+| bug | testes | falhos (esperado / Jaguar2 / JFLP) | sem ferramenta | Jaguar2 | JFLP | JFLP `jacoco` | rank Jaguar2 | rank JFLP | `lines=jacoco` vs Jaguar2: CSV / matriz |
+|---|---|---|---|---|---|---|---|---|---|
+| Chart-1 | 2.193 | 1 / 1 / 1 | 2,3 s | 354,5 s | 2,8 s | 2,8 s | 35 | 35 | idêntico / idêntica |
+| Cli-1 | 94 | 1 / 1 / 1 | 0 s | 0,8 s | 0,1 s | 0,1 s | 7 | 7 | idêntico / idêntica |
+| Codec-1 | 206 | 5 / 5 / 5 | 0,4 s | 2 s | 0,3 s | 0,3 s | 1,5 | 1,5 | idêntico / idêntica |
+| Compress-1 | 73 | 1 / 1 / 1 | 0,1 s | 2,1 s | 0,2 s | 0,2 s | 125 | 125 | idêntico / mesmas linhas, outra ordem |
+| Csv-1 | 54 | 1 / 1 / 1 | 0,3 s | 1,1 s | 0,4 s | 0,4 s | 105 | 105 | 114/125 / 50/54 ¹ |
+| Gson-1 | 720 | 1 / 9 / 9 ² | 0,3 s | 10 s | 0,3 s | 0,3 s | — | — | 553/571 / 625/720 ¹ |
+| Jsoup-1 | 139 | 1 / 1 / 1 | 0,6 s | 1,7 s | 0,3 s | 0,3 s | 3 | 3 | idêntico / 137/139 ¹ |
+| JxPath-1 | 308 | 2 / 2 / 2 | 1,3 s | 11,9 s | 1,9 s | 1,9 s | 261 | 261 | 1.060/1.621 / 269/308 ³ |
+| Lang-1 | 2.291 | 1 / **31** / 1 | 29,8 s | 137,9 s | 31,2 s | 31,3 s | 60 ⁴ | 3,5 | — ⁴ |
+| Lang-3 | 2.286 | 1 / **31** / 1 | 28,5 s | 136,6 s | 27,5 s | 28,1 s | 60 ⁴ | 8,5 | — ⁴ |
+| Lang-10 | 2.198 | 2 / **30** / 2 | 26,7 s | 108,6 s | 26,3 s | 25,8 s | 102,5 ⁴ | 55,5 | — ⁴ |
+| Lang-33 | 1.670 | 1 / 1 / 1 | 11,4 s | 65,4 s | 11,9 s | 11,2 s | 4,5 | 4,5 | idêntico / 1.652/1.670 ¹ |
+| Math-5 | 4.181 | 1 / 1 / 1 | 59,2 s | 900,2 s | 225,1 s ⁵ | 207,8 s | 1,5 | 1,5 | idêntico / 4.163/4.181 |
+| Time-1 | 4.041 | 1 / 1 / 1 | 1,7 s | 226,8 s | 2,4 s | 2,6 s | 3,5 | 3,5 | 117/128 / 3.924/4.041 ¹ |
+| MATH-1005 | 4.986 | 1 / 2 / 2 ⁶ | 59,7 s | 1.050 s | 67 s | 64 s | 8,5 | 9,5 | 230/231 / 4.885/4.986 ¹ |
+| MATH-555 | 2.371 | 1 / 2 / 2 ⁶ | 12,8 s | 223 s | 16 s | 14,3 s | — ⁷ | 4 | — ⁷ / 2.316/2.371 ¹ |
+| MATH-639 | 2.887 | 1 / 2 / 2 ⁶ | 17,1 s | 351 s | 22,4 s | 20,5 s | — ⁷ | 26,5 | — ⁷ / 2.838/2.887 ¹ |
+| MATH-695 | 3.069 | 1 / 2 / 2 ⁶ | 20,3 s | 424 s | 25,5 s | 23,6 s | — ⁷ | 7,5 | — ⁷ / 3.009/3.069 ¹ |
+| MATH-704 | 3.144 | 1 / 2 / 2 ⁶ | 20,6 s | 407 s | 26,9 s | 23 s | — ⁷ | 14,5 | — ⁷ / 3.086/3.144 ¹ |
+| MATH-713 | 3.123 | 1 / 2 / 2 ⁶ | 20,4 s | 430 s | 26,6 s | 23 s | — ⁷ | 32,5 | — ⁷ / 3.059/3.123 ¹ |
 
-Tempos com duas execuções em paralelo numa máquina de 4 núcleos. O que cada
-número quer dizer:
+Os 14 primeiros são do Defects4J, os 6 últimos do Bugs.jar. Pelo runner do
+próprio Defects4J (Ant), com o agente em `JAVA_TOOL_OPTIONS`, o JFLP registra
+exatamente os testes falhos que o Defects4J aponta nos 14 bugs.
 
-- **Lang-1:** o Jaguar2 registra 31 testes falhos, contra o 1 que o Defects4J
-  aponta. O Lang tem um ASM antigo no classpath de teste (cglib/EasyMock), e o
-  ASM 9.1 sem realocar do Jaguar2 conflita com ele em qualquer ordem: com o
-  projeto na frente, o JaCoCo do Jaguar2 quebra; com o Jaguar2 na frente, o
-  cglib quebra. Mais 2 falhas vêm do `$jacocoData` que o JaCoCo injeta nas
-  classes de teste e que aparece nos testes de reflexão. O rank 60 do Jaguar2
-  reflete esse espectro corrompido. O JFLP registra exatamente o teste do
-  Defects4J, também quando roda dentro do runner do próprio Defects4J.
-- **MATH-1005:** o commons-math usa JUnit 4.10, que ordena os métodos de teste
-  pela reflexão do JVM, e a ordem muda a cada execução. Como a matriz do fork não
-  nomeia os testes, as linhas só podem ser comparadas como conjunto. O modo
-  `lines=jacoco` bate com o Jaguar2 em 230 de 231 linhas do CSV e 4.896 de 4.986
-  linhas da matriz, a mesma variação que o próprio JFLP tem entre duas execuções
-  seguidas (4.902 de 4.986, por cobertura que depende da ordem). O segundo teste
-  falho, `FastMathTest.checkMissingFastMathClasses`, também falha sem ferramenta
-  nenhuma: ele compara com o `StrictMath` do JVM, e o fork exige Java 11.
+1. A ordem dos testes muda de uma execução para outra (JUnit 3, ou JUnit < 4.11,
+   ordenam métodos por reflexão), e a matriz do fork não nomeia os testes, então
+   só dá para comparar como conjunto de linhas. O resto da diferença é código
+   que roda uma vez e conta para o teste que estiver rodando no momento
+   (inicializadores estáticos, caches); o próprio JFLP, rodado duas vezes, varia
+   na mesma medida (MATH-1005: 4.902/4.986 linhas entre duas execuções dele).
+2. Pelo `JUnitCore`, 8 testes do Gson falham nas duas ferramentas e sem
+   ferramenta também; pelo runner do Defects4J, só o esperado.
+3. JxPath guarda expressões compiladas num cache de `SoftReference`. A memória
+   que o Jaguar2 aloca ao reanalisar tudo a cada teste faz o GC esvaziar o
+   cache, e mais testes passam pelo parser: o Jaguar2 muda o comportamento do
+   programa que mede. JFLP contra ele mesmo: 1.603/1.621 linhas do CSV.
+4. O Jaguar2 quebra 30 testes do Lang. O ASM 9.1 que ele traz sem realocar
+   conflita com o ASM antigo do cglib/EasyMock em qualquer ordem de classpath
+   (com o projeto na frente, quebra o JaCoCo; com o Jaguar2 na frente, o
+   cglib), e o `$jacocoData` que o JaCoCo injeta nas classes de teste aparece
+   nos testes de reflexão. O espectro do Jaguar2 fica corrompido.
+5. Os testes do BOBYQAOptimizer: o método `bobyqb` passa de 5.770 para 12.111
+   bytes com os probes, acima do limite de 8.000 do JIT do HotSpot, e roda
+   interpretado (9 s → 93 s; 28 s com `-XX:-DontCompileHugeMethods`). Os
+   probes do JaCoCo, e portanto o Jaguar2, têm o mesmo problema. O agente avisa
+   quando isso acontece.
+6. O segundo teste falho, `FastMathTest.checkMissingFastMathClasses`, falha sem
+   ferramenta nenhuma: ele compara com o `StrictMath` do JVM, e o fork exige
+   Java 11 (o Bugs.jar registrou os resultados com Java 7).
+7. Com o Surefire 2.7.2 desses bugs, o Jaguar2 grava a matriz mas nunca o
+   `jaguar2.csv`, que só é escrito no `testRunFinished` do listener.
+
+Outros problemas do fork encontrados nos benchmarks: em projetos sem `target/`
+(Chart, layout Ant) todo teste falha dentro do listener, porque o fork grava em
+`target/` sem criá-lo (o harness cria o diretório para poder comparar);
+projetos com JUnit 3.8 no classpath não têm `JUnitCore` para o runner dele.
 
 ## Compatibilidade
 
