@@ -91,6 +91,40 @@ public final class T {
         finished(name);
     }
 
+    public static void ngStarted(final Object result) {
+        started(testngName(result));
+    }
+
+    public static void ngSuccess(final Object result) {
+        ngFinished(result, "SUCCESS");
+    }
+
+    public static void ngFailure(final Object result) {
+        ngFinished(result, "FAILED");
+    }
+
+    public static void ngSkipped(final Object result) {
+        ngFinished(result, "ABORTED");
+    }
+
+    /** TestNG calls every listener in turn; the first call, while the test is active, counts. */
+    static void ngFinished(final Object result, final String status) {
+        platformFinished(testngName(result), status);
+    }
+
+    /** {@code method(class)}, with the parameters of data-provider invocations: {@code method[[1, a]](class)}. */
+    static String testngName(final Object result) {
+        final Object method = call(result, "getName");
+        final Object cls = call(call(result, "getTestClass"), "getName");
+        if (method == null || cls == null) {
+            return null;
+        }
+        final Object params = call(result, "getParameters");
+        final String p = params instanceof Object[] && ((Object[]) params).length > 0
+                ? "[" + java.util.Arrays.asList((Object[]) params) + "]" : "";
+        return method + p + "(" + cls + ")";
+    }
+
     /**
      * {@code method(class)} like JUnit 4's display name, so that a JUnit 4 test run
      * by the vintage engine, reported both by RunNotifier and by the platform, is

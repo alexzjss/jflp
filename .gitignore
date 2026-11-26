@@ -3,3 +3,4 @@ src/it/sample/target/
 src/it/sample/target-jaguar2/
 __pycache__/
 src/it/sample-junit5/target/
+src/it/sample-testng/target/

@@ -110,7 +110,7 @@ public final class Report {
         final Counts counts = accumulate();
         if (summary.passed + summary.failed == 0) {
             summary.warnings.add("no test was recorded: the test framework is not hooked"
-                    + " (supported: JUnit 3, JUnit 4, JUnit 5 vintage engine)");
+                    + " (supported: JUnit 3, JUnit 4, JUnit 5 Platform, TestNG)");
         }
         if (summary.failed == 0) {
             summary.warnings.add("no failing test: every suspiciousness score is 0");

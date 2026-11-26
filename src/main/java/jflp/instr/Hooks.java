@@ -18,6 +18,8 @@ import org.objectweb.asm.tree.MethodNode;
  * <li>JUnit 5 (Jupiter and any other engine of the JUnit Platform): every class
  * implementing the platform's public {@code EngineExecutionListener}, which all
  * engines report through.</li>
+ * <li>TestNG: every class implementing {@code ITestListener}, and the interface's
+ * own default methods (TestNG 7), in case no listener overrides them.</li>
  * </ul>
  *
  * Adapters between the two report the same test twice, nested; the runtime
@@ -46,8 +48,19 @@ public final class Hooks {
                 { "addFailure", "(Ljunit/framework/Test;Ljunit/framework/AssertionFailedError;)V", "j3Failure" },
             });
         }
+        if ("org/testng/ITestListener".equals(name) || !name.startsWith("java/") && !name.startsWith("sun/")
+                && !name.startsWith("jdk/") && implementsInterface(classFile, "org/testng/ITestListener")) {
+            return rewrite(classFile, new String[][] {
+                { "onTestStart", "(Lorg/testng/ITestResult;)V", "ngStarted" },
+                { "onTestSuccess", "(Lorg/testng/ITestResult;)V", "ngSuccess" },
+                { "onTestFailure", "(Lorg/testng/ITestResult;)V", "ngFailure" },
+                { "onTestFailedButWithinSuccessPercentage", "(Lorg/testng/ITestResult;)V", "ngFailure" },
+                { "onTestFailedWithTimeout", "(Lorg/testng/ITestResult;)V", "ngFailure" },
+                { "onTestSkipped", "(Lorg/testng/ITestResult;)V", "ngSkipped" },
+            });
+        }
         if (!name.startsWith("java/") && !name.startsWith("sun/") && !name.startsWith("jdk/")
-                && implementsPlatformListener(classFile)) {
+                && implementsInterface(classFile, "org/junit/platform/engine/EngineExecutionListener")) {
             return rewrite(classFile, new String[][] {
                 { "executionStarted", "(Lorg/junit/platform/engine/TestDescriptor;)V", "j5Started" },
                 { "executionFinished", "(Lorg/junit/platform/engine/TestDescriptor;"
@@ -57,10 +70,11 @@ public final class Hooks {
         return null;
     }
 
-    private static boolean implementsPlatformListener(final byte[] classFile) {
+    /** True for a class (not an interface) that declares {@code iface} among its interfaces. */
+    private static boolean implementsInterface(final byte[] classFile, final String iface) {
         final ClassReader r = new ClassReader(classFile);
         for (final String i : r.getInterfaces()) {
-            if ("org/junit/platform/engine/EngineExecutionListener".equals(i)) {
+            if (iface.equals(i)) {
                 return (r.getAccess() & org.objectweb.asm.Opcodes.ACC_INTERFACE) == 0;
             }
         }

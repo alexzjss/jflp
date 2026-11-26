@@ -30,6 +30,14 @@ final class Events {
             T.j5Started(arg);
         } else if ("j5Finished".equals(event)) {
             T.j5Finished(arg);
+        } else if ("ngStarted".equals(event)) {
+            T.ngStarted(arg);
+        } else if ("ngSuccess".equals(event)) {
+            T.ngFinished(arg, "SUCCESS");
+        } else if ("ngFailure".equals(event)) {
+            T.ngFinished(arg, "FAILED");
+        } else if ("ngSkipped".equals(event)) {
+            T.ngFinished(arg, "ABORTED");
         }
         return false;
     }
