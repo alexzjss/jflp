@@ -184,10 +184,14 @@ final class Pipeline {
         if ("defects4j".equals(build)) {
             env.putAll(Sources.d4jEnv()); // Defects4J insists on Java 11
         }
-        final List<String> buildCmd = buildCommand(build, opt, module, root);
+        // A module listed by the root POM builds in the reactor (-pl -am); any other
+        // subfolder is a project of its own and builds where it is.
+        final boolean reactor = "maven".equals(build) && !module.isEmpty() && reactorModule(root, module);
+        final List<String> buildCmd = buildCommand(build, opt, reactor ? module : "", root);
+        final File buildCwd = reactor || module.isEmpty() ? root : moduleDir;
         if (buildCmd != null) {
-            out.accept("$ " + String.join(" ", buildCmd));
-            final int code = Exec.run(buildCmd, root, env, timeout(opt), out, h);
+            out.accept("$ " + String.join(" ", buildCmd) + (buildCwd.equals(root) ? "" : "   (in " + module + ")"));
+            final int code = Exec.run(buildCmd, buildCwd, env, timeout(opt), out, h);
             cancelled(h);
             if (code != 0) {
                 throw new IOException("build failed (exit " + code + "); see the log");
@@ -239,7 +243,7 @@ final class Pipeline {
         final List<String> testCmd = testCommand(build, opt, module, root);
         out.accept("$ " + String.join(" ", testCmd));
         out.accept("(agent: " + agent + ": " + opts.toString().replace('\n', ',') + ")");
-        final File testCwd = "maven".equals(build) && !module.isEmpty() ? moduleDir : root;
+        final File testCwd = ("maven".equals(build) || "gradle".equals(build)) && !module.isEmpty() ? moduleDir : root;
         final int code = Exec.run(testCmd, testCwd, env, timeout(opt), out, h);
         cancelled(h);
         final File[] files = data.listFiles();
@@ -268,6 +272,16 @@ final class Pipeline {
         final Map<String, Object> summary = new Results(ws, project, run).summary();
         run.put("summary", summary);
         end(run, "analyze", "ok");
+    }
+
+    private static boolean reactorModule(final File root, final String module) {
+        try {
+            final String pom = new String(java.nio.file.Files.readAllBytes(new File(root, "pom.xml").toPath()),
+                    StandardCharsets.UTF_8);
+            return pom.contains("<module>" + module + "</module>") || pom.contains("<module>" + module + "/</module>");
+        } catch (final IOException e) {
+            return false;
+        }
     }
 
     private String jdk(final Map<String, Object> opt, final String build) {
@@ -360,8 +374,11 @@ final class Pipeline {
         if ("defects4j".equals(build)) {
             final String rel = Exec.output(Arrays.asList(Env.defects4jPath(), "export", "-p", "dir.bin.classes"), root,
                     env, 300);
-            if (rel != null && !rel.trim().isEmpty()) {
-                out.add(new File(root, rel.trim()));
+            // defects4j prints its progress ("Running ant ...") too; the value is the last line.
+            final String[] lines = rel == null ? new String[0] : rel.trim().split("\\r?\\n");
+            final String last = lines.length == 0 ? "" : lines[lines.length - 1].trim();
+            if (!last.isEmpty() && !last.startsWith("Running ")) {
+                out.add(new File(root, last));
             }
             return out;
         }

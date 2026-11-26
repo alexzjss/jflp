@@ -75,7 +75,8 @@ code, .mono { font-family: var(--mono); font-size: 12.5px; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .recent a:hover { background: var(--panel-2); text-decoration: none; }
 .side .foot { margin-top: auto; color: var(--text-3); font-size: 11px; padding: 8px 10px; word-break: break-all; }
-.main { padding: 28px 36px 60px; max-width: 1480px; width: 100%; }
+.main { padding: 28px 36px 60px; max-width: 1480px; width: 100%; min-width: 0; }
+.grid > *, .codewrap > * { min-width: 0; }
 .top { display: flex; align-items: center; gap: 16px; margin-bottom: 22px; }
 .top h1 { font-size: 24px; margin: 0; letter-spacing: -.2px; }
 .top .sub { color: var(--text-2); margin-top: 2px; }
@@ -197,7 +198,7 @@ tr.buggy td { background: rgba(239, 68, 68, .07); }
 .tabs a .badge { margin-left: 6px; padding: 0 7px; }
 
 /* ---- steps ---- */
-.steps { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+.steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .step { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; background: var(--panel-2); }
 .step .n { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: .6px; }
 .step b { display: block; font-size: 13px; margin-top: 2px; }
@@ -213,6 +214,7 @@ tr.buggy td { background: rgba(239, 68, 68, .07); }
 pre.log {
   background: var(--code-bg); border: 1px solid var(--line); border-radius: 12px; padding: 14px;
   height: 420px; overflow: auto; margin: 0; font: 12px/1.55 var(--mono); color: var(--text-2); white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 pre.log .e { color: #fca5a5; }
 pre.log .w { color: #fcd34d; }
