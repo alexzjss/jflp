@@ -8,7 +8,8 @@ import jflp.report.Report;
 /** {@code java -jar jflp.jar report [options]}. */
 public final class Main {
 
-    private static final String USAGE = "usage: java -jar jflp.jar report [options]\n"
+    private static final String USAGE = "usage: java -jar jflp.jar ui [--port N] [--workspace DIR] [--no-browser]\n"
+            + "       java -jar jflp.jar report [options]\n"
             + "  --data DIR        agent coverage files (default target/jflp)\n"
             + "  --classes DIRS    measured class directories, separated by '" + File.pathSeparator
             + "' (default target/classes)\n"
@@ -16,6 +17,7 @@ public final class Main {
             + "  --heuristic NAME  for jaguar2.csv/xml (default ochiai; also tarantula, jaccard,\n"
             + "                    zoltar, op, minus, mccon, drt, kulczynski2, wong3)\n"
             + "  --no-matrix       skip coverageMatrix.txt\n"
+            + "  --all-lines       also write spectra.csv with every code line (susp 0 included)\n"
             + "  --strict          exit with status 3 when there is any warning\n"
             + "\n"
             + "agent: -javaagent:/path/to/jflp.jar[=destdir=DIR,classdirs=DIRS]\n";
@@ -24,10 +26,16 @@ public final class Main {
     }
 
     public static void main(final String[] args) {
-        System.exit(run(args));
+        final int code = run(args);
+        if (code >= 0) {
+            System.exit(code);
+        }
     }
 
     static int run(final String[] args) {
+        if (args.length > 0 && "ui".equals(args[0])) {
+            return ui(args);
+        }
         if (args.length == 0 || !"report".equals(args[0])) {
             System.err.print(USAGE);
             return 2;
@@ -50,6 +58,8 @@ public final class Main {
                     o.heuristic = Heuristic.byName(arg(args, ++i, a));
                 } else if ("--no-matrix".equals(a)) {
                     o.matrix = false;
+                } else if ("--all-lines".equals(a)) {
+                    o.allLines = true;
                 } else if ("--strict".equals(a)) {
                     strict = true;
                 } else {
@@ -81,6 +91,25 @@ public final class Main {
             System.err.println("jflp: WARNING: " + w);
         }
         return strict && !s.warnings.isEmpty() ? 3 : 0;
+    }
+
+    /** {@code ui}: the web UI, which needs Java 8; loaded by name so the rest stays Java 5. */
+    private static int ui(final String[] args) {
+        final String[] rest = new String[args.length - 1];
+        System.arraycopy(args, 1, rest, 0, rest.length);
+        try {
+            Class.forName("jflp.ui.UiServer").getMethod("main", String[].class).invoke(null, (Object) rest);
+            return -1; // keeps running: the server threads hold the JVM
+        } catch (final UnsupportedClassVersionError e) {
+            System.err.println("jflp: the UI needs Java 8 or newer (running " + System.getProperty("java.version") + ")");
+            return 1;
+        } catch (final java.lang.reflect.InvocationTargetException e) {
+            System.err.println("jflp: " + e.getCause());
+            return 1;
+        } catch (final Exception e) {
+            System.err.println("jflp: cannot start the UI: " + e);
+            return 1;
+        }
     }
 
     private static String arg(final String[] args, final int i, final String option) {

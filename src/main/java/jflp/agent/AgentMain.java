@@ -31,6 +31,10 @@ import jflp.rt.Session;
  * the DUA reports; default {@code false}.</li>
  * </ul>
  * Relative paths are resolved against the JVM's working directory.
+ *
+ * {@code -javaagent:jflp.jar=@FILE} reads the options from FILE (same syntax,
+ * commas or line breaks between them). JDK 8 and older silently ignore a
+ * JAVA_TOOL_OPTIONS longer than 1024 characters, which long paths reach quickly.
  */
 public final class AgentMain implements ClassFileTransformer {
 
@@ -154,10 +158,13 @@ public final class AgentMain implements ClassFileTransformer {
         return false;
     }
 
-    private static Map<String, String> parse(final String args) {
+    private static Map<String, String> parse(String args) {
         final Map<String, String> m = new HashMap<String, String>();
         if (args == null) {
             return m;
+        }
+        if (args.startsWith("@")) {
+            args = read(args.substring(1)).replace('\r', ',').replace('\n', ',');
         }
         for (final String kv : args.split(",")) {
             final int eq = kv.indexOf('=');
@@ -182,6 +189,24 @@ public final class AgentMain implements ClassFileTransformer {
             throw new IllegalArgumentException("[jflp] " + k + " must be true or false, not '" + v + "'");
         }
         return "true".equals(v);
+    }
+
+    private static String read(final String file) {
+        try {
+            final java.io.InputStream in = new java.io.FileInputStream(file);
+            try {
+                final java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                final byte[] b = new byte[4096];
+                for (int n; (n = in.read(b)) > 0;) {
+                    out.write(b, 0, n);
+                }
+                return new String(out.toByteArray(), "UTF-8");
+            } finally {
+                in.close();
+            }
+        } catch (final java.io.IOException e) {
+            throw new IllegalArgumentException("[jflp] cannot read agent options file " + file + ": " + e);
+        }
     }
 
     private static String value(final Map<String, String> m, final String k, final String dflt) {

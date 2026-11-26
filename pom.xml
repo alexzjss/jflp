@@ -63,6 +63,11 @@
 
   <build>
     <finalName>jflp</finalName>
+    <resources>
+      <resource>
+        <directory>src/ui/resources</directory>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -71,6 +76,23 @@
         <configuration>
           <showWarnings>false</showWarnings>
         </configuration>
+        <executions>
+          <execution>
+            <!-- The web UI (java -jar jflp.jar ui) needs Java 8; the agent and the
+                 report stay Java 5 and never load these classes. -->
+            <id>compile-ui</id>
+            <!-- After animal-sniffer (bound to compile) has checked the Java 5 classes. -->
+            <phase>process-classes</phase>
+            <goals><goal>compile</goal></goals>
+            <configuration>
+              <compileSourceRoots>
+                <compileSourceRoot>${project.basedir}/src/ui/java</compileSourceRoot>
+              </compileSourceRoots>
+              <source>1.8</source>
+              <target>1.8</target>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
       <plugin>
         <!-- Fails the build if main code calls any API newer than Java 5. -->
@@ -86,7 +108,7 @@
         </configuration>
         <executions>
           <execution>
-            <phase>process-classes</phase>
+            <phase>compile</phase>
             <goals><goal>check</goal></goals>
           </execution>
         </executions>
