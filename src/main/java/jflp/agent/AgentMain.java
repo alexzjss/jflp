@@ -97,7 +97,28 @@ public final class AgentMain implements ClassFileTransformer {
                 bases.put(key, base);
             }
         }
-        return Instrumenter.instrument(a, base.intValue());
+        final byte[] out = Instrumenter.instrument(a, base.intValue());
+        for (final String m : a.grownHuge) {
+            hugeWarning(m);
+        }
+        return out;
+    }
+
+    private boolean hugeWarned;
+
+    /**
+     * A method the probes push over HotSpot's JIT limit runs interpreted, often
+     * several times slower (Defects4J Math: BOBYQAOptimizer, 9 s -> 93 s).
+     */
+    private synchronized void hugeWarning(final String method) {
+        Session.warn("method " + method + " exceeds " + Instrumenter.HUGE_METHOD_LIMIT
+                + " bytes of bytecode once instrumented and will not be JIT-compiled;"
+                + " add -XX:-DontCompileHugeMethods to the test JVM if tests are slow");
+        if (!hugeWarned) {
+            hugeWarned = true;
+            System.err.println("[jflp] WARNING: instrumentation pushed " + method + " (and maybe others, see"
+                    + " jflp-summary.txt) over the JIT size limit; -XX:-DontCompileHugeMethods avoids the slowdown");
+        }
     }
 
     private boolean measured(final String name) {

@@ -14,6 +14,7 @@ import jflp.data.RawFormat;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.commons.CodeSizeEvaluator;
 import org.objectweb.asm.commons.JSRInlinerAdapter;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
@@ -46,6 +47,9 @@ public final class Instrumenter {
 
     public static final String RUNTIME = "jflp/rt/R";
 
+    /** HotSpot does not JIT-compile methods with more bytecode than this (-XX:HugeMethodLimit). */
+    public static final int HUGE_METHOD_LIMIT = 8000;
+
     private Instrumenter() {
     }
 
@@ -54,6 +58,8 @@ public final class Instrumenter {
         public final ClassInfo info;
         final ClassNode node;
         final List<Insertion> insertions;
+        /** Methods that the probes pushed over {@link #HUGE_METHOD_LIMIT}; filled by {@link #instrument}. */
+        public final List<String> grownHuge = new ArrayList<String>();
 
         Analysis(final ClassInfo info, final ClassNode node, final List<Insertion> insertions) {
             this.info = info;
@@ -139,18 +145,32 @@ public final class Instrumenter {
     /** Emits the instrumented class with probe ids {@code base .. base + probeCount - 1}. */
     public static byte[] instrument(final Analysis a, final int base) {
         final Map<MethodNode, Integer> touched = new HashMap<MethodNode, Integer>();
+        final Map<MethodNode, Integer> sizeBefore = new HashMap<MethodNode, Integer>();
         for (final Insertion ins : a.insertions) {
+            if (!sizeBefore.containsKey(ins.method)) {
+                sizeBefore.put(ins.method, Integer.valueOf(codeSize(ins.method)));
+            }
             final InsnList probe = new InsnList();
             final int stack = Access.probe(probe, base + ins.probe);
             ins.method.instructions.insertBefore(ins.before, probe);
             touched.put(ins.method, Integer.valueOf(stack));
         }
         for (final Map.Entry<MethodNode, Integer> e : touched.entrySet()) {
-            e.getKey().maxStack += e.getValue().intValue();
+            final MethodNode m = e.getKey();
+            m.maxStack += e.getValue().intValue();
+            if (sizeBefore.get(m).intValue() <= HUGE_METHOD_LIMIT && codeSize(m) > HUGE_METHOD_LIMIT) {
+                a.grownHuge.add(a.info.name.replace('/', '.') + "." + m.name);
+            }
         }
         final ClassWriter cw = new ClassWriter(0);
         a.node.accept(cw);
         return cw.toByteArray();
+    }
+
+    private static int codeSize(final MethodNode m) {
+        final CodeSizeEvaluator e = new CodeSizeEvaluator(null);
+        m.accept(e);
+        return e.getMaxSize();
     }
 
     /**
