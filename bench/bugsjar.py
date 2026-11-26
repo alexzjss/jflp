@@ -104,6 +104,26 @@ def bugsjar_failing(results_txt):
     return out
 
 
+def argline_properties(src, mod_dir):
+    """-Dname= for each ${name} in a POM's <argLine>.
+
+    Such properties are usually set by a plugin of the test lifecycle (a coverage
+    agent's prepare goal); calling surefire:test alone leaves them undefined and
+    the test JVM is started with a literal '${name}' argument (HikariCP).
+    """
+    names = set()
+    d = mod_dir
+    while True:
+        pom = os.path.join(d, "pom.xml")
+        if os.path.exists(pom):
+            for arg in re.findall(r"<argLine>(.*?)</argLine>", open(pom, errors="replace").read(), re.S):
+                names.update(re.findall(r"[$@]\{([\w.-]+)\}", arg))
+        if os.path.abspath(d) == os.path.abspath(src):
+            break
+        d = os.path.dirname(d)
+    return ["-D%s=" % n for n in sorted(names) if n != "argLine"]
+
+
 def module_of(patch):
     for line in open(patch, errors="replace"):
         if line.startswith("--- a/") and "/src/main/java/" in "/" + line[6:]:
@@ -143,7 +163,7 @@ def measure(args, row, out, src, module, patch):
     if code != 0:
         raise RuntimeError("build failed, see %s" % os.path.join(out, "build.log"))
     test = ["mvn", *common, "surefire:test", "-Djvm=" + os.path.join(args.test_jdk, "bin", "java"),
-            "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false"]
+            "-Dmaven.test.failure.ignore=true", "-DfailIfNoTests=false"] + argline_properties(src, mod_dir)
 
     _, t = run(test, cwd=mod_dir, env=mvn_env, timeout=args.timeout, log=os.path.join(out, "plain.log"))
     row["time_plain_s"] = round(t, 1)
