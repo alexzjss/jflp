@@ -2,7 +2,8 @@
 """Compares JFLP with the Jaguar2 fork on Bears bugs (Maven projects, 2017-2019).
 
 Each Bears bug is a branch of bears-bugs/bears-benchmark; its buggy version is
-the commit "Changes in the tests" (buggy code plus the tests that expose it), and
+the commit "Changes in the tests" (buggy code plus the tests that expose it), or
+the "Bug commit" when the failing tests already existed, and
 bears.json on the branch holds the fix (patchDiff, buggy -> fixed), the failing
 tests and the failing module. The bug's module is then measured exactly as in
 bench/bugsjar.py (plain, Jaguar2, JFLP, JFLP lines=jacoco).
@@ -39,10 +40,14 @@ def one_bug(args, bug_id, branch):
         meta = git(args.repo, "show", "FETCH_HEAD:bears.json")
         open(meta_path, "w").write(meta)
         log = git(args.repo, "log", "--format=%H %s", "FETCH_HEAD").splitlines()
-        buggy = [l.split()[0] for l in log if " Changes in the tests" in l]
+        # Bugs whose failing tests came with the fix have a "Changes in the tests"
+        # commit (buggy code + new tests); bugs already failing in the bug commit don't.
+        buggy = [l.split()[0] for l in log if " Changes in the tests" in l] or \
+            [l.split()[0] for l in log if " Bug commit" in l]
         fixed = [l.split()[0] for l in log if " Human patch" in l]
         if not buggy or not fixed:
-            raise RuntimeError("no 'Changes in the tests'/'Human patch' commits on " + branch)
+            raise RuntimeError("no buggy ('Changes in the tests' or 'Bug commit') or 'Human patch' commit on "
+                               + branch)
         # bears.json's patchDiff only holds counts; the fix is the diff between the two commits.
         open(os.path.join(out, "patch.diff"), "w").write(git(args.repo, "diff", buggy[0], fixed[0], "--", "*.java"))
         git(args.repo, "worktree", "add", "-f", "--detach", src, buggy[0])
