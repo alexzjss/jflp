@@ -223,6 +223,42 @@ exatamente os testes falhos que o Defects4J aponta nos 14 bugs.
 7. Com o Surefire 2.7.2 desses bugs, o Jaguar2 grava a matriz mas nunca o
    `jaguar2.csv`, que só é escrito no `testRunFinished` do listener.
 
+### Bears
+
+`bench/bears.py`, com o mesmo método do Bugs.jar (módulo que falha, Surefire,
+testes no JDK 11):
+
+| bug | testes | falhos (esperado / Jaguar2 / JFLP) | sem ferramenta | Jaguar2 | JFLP | rank Jaguar2 | rank JFLP | `lines=jacoco` vs Jaguar2: CSV / matriz |
+|---|---|---|---|---|---|---|---|---|
+| Bears-1 (jackson-databind) | 1.562 | 1 / 10 / 10 ⁸ | 8,4 s | 189 s | 7,1 s | 406 | 417 | 4.047/4.307 / 561/1.562 ⁹ |
+| Bears-98 (traccar) | 223 | 1 / 81 / 81 ⁸ | 2 s | 17,4 s | 2,4 s | 521,5 | 522,5 | idêntico / idêntica |
+| Bears-99 (traccar) | 225 | 1 / 81 / 81 ⁸ | 2,2 s | 17,2 s | 2,4 s | 9.763 | 9.764 | idêntico / idêntica |
+| Bears-201 (HikariCP) | 144 | 1 / 3 / 4 ¹⁰ | 154,5 s | 180,9 s | 163 s | 1.077 | 1.380,5 | — ¹⁰ |
+| Bears-202 (classgraph) | 116 | 1 / 1 / 1 | 5,6 s | 13,2 s | 7,6 s | 4.824,5 | **4** | idêntico / 104/116 |
+| Bears-227 (feign) | 291 | 2 / **12** / 5 ⁸ | 15,3 s | 20,5 s | 15,2 s | — | — | — ¹¹ |
+| Bears-232 (foundation) | 80 | 3 / 3 / 3 | 1,2 s | 1,4 s | 0,8 s | 5 | 5 | idêntico / idêntica |
+| Bears-238 (jsonignore) | 9 | 2 / 2 / 2 | 1,1 s | 1,5 s | 0,9 s | 20 | 20 | idêntico / idêntica |
+| Bears-245 (javapoet) | 334 | 1 / 4 / 4 ⁸ | 11,7 s | 15,8 s | 8 s | 1,5 | 1,5 | idêntico / idêntica |
+
+8. Testes que falham também sem ferramenta nenhuma, por causa do JDK 11 que o
+   fork exige (Mockito antigo, protocolos SSL desativados) ou do ambiente; as
+   duas ferramentas os registram igualmente.
+9. Concentrado no `TypeFactory` do Jackson, que resolve tipos por reflexão.
+   Hipótese, não confirmada: o mesmo mecanismo do Bears-227.
+10. O teste a mais do JFLP é o `ConnectionRaceConditionTest.testRaceCondition`,
+    instável por natureza: sem ferramenta, falhou em 2 de 3 execuções isoladas;
+    com o JFLP, passou nas 3. Com conjuntos de falhos diferentes, CSV e matriz
+    não são comparáveis.
+11. O Jaguar2 quebra 7 testes que passam sem ferramenta: o agente JaCoCo
+    instrumenta também as classes de teste, e o campo `$jacocoData` que ele
+    injeta aparece na serialização por reflexão (`expected:<{bar=barz, foo=fooz,
+    baz=bazz}> but was:<{bar=barz, foo=fooz, $jacocoData=[Z@435b636b, baz=bazz}>`).
+    O JFLP instrumenta só as classes do projeto e, no modo padrão, não acrescenta
+    campos.
+
+O Bears-222 (jgrapht) ficou de fora: só a execução sem ferramenta passou de 25
+minutos neste ambiente, e com o Jaguar2 levaria horas.
+
 Outros problemas do fork encontrados nos benchmarks: em projetos sem `target/`
 (Chart, layout Ant) todo teste falha dentro do listener, porque o fork grava em
 `target/` sem criá-lo (o harness cria o diretório para poder comparar);
