@@ -56,15 +56,19 @@ public final class Access {
         return 3;
     }
 
-    /** Code that reports test event {@code event} with local variable {@code var}; returns the stack it needs. */
-    static int event(final InsnList out, final String event, final int var) {
+    /**
+     * Code that reports test event {@code event} with the given local variables
+     * as arguments; returns the stack it needs. The runtime receives one argument
+     * as itself and several as an {@code Object[]}.
+     */
+    static int event(final InsnList out, final String event, final int... vars) {
         final String h = holder;
         if (h == null) {
-            out.add(new VarInsnNode(Opcodes.ALOAD, var));
+            pushArgument(out, vars);
             out.add(new MethodInsnNode(Opcodes.INVOKESTATIC, "jflp/rt/T", event, "(Ljava/lang/Object;)V", false));
-            return 1;
+            return vars.length == 1 ? 1 : 4;
         }
-        // $jflpEvents.equals(new Object[] { event, arg }) — Object.equals is the only
+        // $jflpEvents.equals(new Object[] { event, argument }) — Object.equals is the only
         // call every loader can link; the runtime's object dispatches on it.
         out.add(new FieldInsnNode(Opcodes.GETSTATIC, h, EVENTS, "Ljava/lang/Object;"));
         out.add(new InsnNode(Opcodes.ICONST_2));
@@ -75,12 +79,28 @@ public final class Access {
         out.add(new InsnNode(Opcodes.AASTORE));
         out.add(new InsnNode(Opcodes.DUP));
         out.add(new InsnNode(Opcodes.ICONST_1));
-        out.add(new VarInsnNode(Opcodes.ALOAD, var));
+        pushArgument(out, vars);
         out.add(new InsnNode(Opcodes.AASTORE));
         out.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, "java/lang/Object", "equals", "(Ljava/lang/Object;)Z",
                 false));
         out.add(new InsnNode(Opcodes.POP));
-        return 5;
+        return vars.length == 1 ? 5 : 8;
+    }
+
+    /** One variable as is, several as {@code new Object[] {a, b, ...}}. */
+    private static void pushArgument(final InsnList out, final int[] vars) {
+        if (vars.length == 1) {
+            out.add(new VarInsnNode(Opcodes.ALOAD, vars[0]));
+            return;
+        }
+        out.add(Instrumenter.push(vars.length));
+        out.add(new TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
+        for (int i = 0; i < vars.length; i++) {
+            out.add(new InsnNode(Opcodes.DUP));
+            out.add(Instrumenter.push(i));
+            out.add(new VarInsnNode(Opcodes.ALOAD, vars[i]));
+            out.add(new InsnNode(Opcodes.AASTORE));
+        }
     }
 
     /** Pushes JaCoCo probe array {@code index} ({@code lines=jacoco}); returns the stack it needs. */

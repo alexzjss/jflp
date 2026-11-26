@@ -15,6 +15,9 @@ import org.objectweb.asm.tree.MethodNode;
  * <li>JUnit 4 (and JUnit 3 run by a JUnit 4 runner, and the JUnit 5 vintage
  * engine): {@code RunNotifier}.</li>
  * <li>JUnit 3 run directly (Ant, Surefire's junit3 provider): {@code TestResult}.</li>
+ * <li>JUnit 5 (Jupiter and any other engine of the JUnit Platform): every class
+ * implementing the platform's public {@code EngineExecutionListener}, which all
+ * engines report through.</li>
  * </ul>
  *
  * Adapters between the two report the same test twice, nested; the runtime
@@ -43,9 +46,28 @@ public final class Hooks {
                 { "addFailure", "(Ljunit/framework/Test;Ljunit/framework/AssertionFailedError;)V", "j3Failure" },
             });
         }
+        if (!name.startsWith("java/") && !name.startsWith("sun/") && !name.startsWith("jdk/")
+                && implementsPlatformListener(classFile)) {
+            return rewrite(classFile, new String[][] {
+                { "executionStarted", "(Lorg/junit/platform/engine/TestDescriptor;)V", "j5Started" },
+                { "executionFinished", "(Lorg/junit/platform/engine/TestDescriptor;"
+                        + "Lorg/junit/platform/engine/TestExecutionResult;)V", "j5Finished", "2" },
+            });
+        }
         return null;
     }
 
+    private static boolean implementsPlatformListener(final byte[] classFile) {
+        final ClassReader r = new ClassReader(classFile);
+        for (final String i : r.getInterfaces()) {
+            if ("org/junit/platform/engine/EngineExecutionListener".equals(i)) {
+                return (r.getAccess() & org.objectweb.asm.Opcodes.ACC_INTERFACE) == 0;
+            }
+        }
+        return false;
+    }
+
+    /** points: {method, descriptor, event[, "2" when the event also takes argument 2]}. */
     private static byte[] rewrite(final byte[] classFile, final String[][] points) {
         final ClassNode cn = new ClassNode();
         new ClassReader(classFile).accept(cn, 0);
@@ -54,7 +76,7 @@ public final class Hooks {
             for (final String[] p : points) {
                 if (p[0].equals(m.name) && p[1].equals(m.desc) && m.instructions.size() > 0) {
                     final InsnList call = new InsnList();
-                    m.maxStack += Access.event(call, p[2], 1);
+                    m.maxStack += p.length > 3 ? Access.event(call, p[2], 1, 2) : Access.event(call, p[2], 1);
                     m.instructions.insert(call);
                 }
             }

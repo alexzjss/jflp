@@ -26,6 +26,10 @@ final class Events {
             T.j3Finished(arg);
         } else if ("j3Failure".equals(event)) {
             T.j3Failure(arg);
+        } else if ("j5Started".equals(event)) {
+            T.j5Started(arg);
+        } else if ("j5Finished".equals(event)) {
+            T.j5Finished(arg);
         }
         return false;
     }

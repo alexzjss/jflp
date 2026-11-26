@@ -57,6 +57,60 @@ public final class T {
         failed(String.valueOf(test));
     }
 
+    /** JUnit Platform: {@code executionStarted(TestDescriptor)}. Containers are ignored. */
+    public static void j5Started(final Object descriptor) {
+        if (Boolean.TRUE.equals(call(descriptor, "isTest"))) {
+            started(platformName(descriptor));
+        }
+    }
+
+    /** JUnit Platform: {@code executionFinished(TestDescriptor, TestExecutionResult)}, as {@code Object[]}. */
+    public static void j5Finished(final Object descriptorAndResult) {
+        final Object[] a = (Object[]) descriptorAndResult;
+        if (!Boolean.TRUE.equals(call(a[0], "isTest"))) {
+            return;
+        }
+        final Object status = call(a[1], "getStatus");
+        platformFinished(platformName(a[0]), status == null ? "" : status.toString());
+    }
+
+    /**
+     * Outcome and end in one step: the platform's listeners wrap one another, so the
+     * same executionFinished arrives several times; only the first, while the test is
+     * still active, counts.
+     */
+    private static synchronized void platformFinished(final String name, final String status) {
+        if (name == null || !name.equals(active)) {
+            return;
+        }
+        if ("FAILED".equals(status)) {
+            failed = true;
+        } else if ("ABORTED".equals(status)) {
+            skipped = true; // a failed assumption, as in JUnit 4
+        }
+        finished(name);
+    }
+
+    /**
+     * {@code method(class)} like JUnit 4's display name, so that a JUnit 4 test run
+     * by the vintage engine, reported both by RunNotifier and by the platform, is
+     * recognised as one test. Parameterized and repeated invocations share their
+     * method and get the invocation's display name appended: {@code method[[1] 5](class)}.
+     */
+    static String platformName(final Object descriptor) {
+        final Object source = call(call(descriptor, "getSource"), "orElse", null);
+        final Object cls = call(source, "getClassName");
+        final Object method = call(source, "getMethodName");
+        if (cls == null || method == null) {
+            final Object id = call(descriptor, "getUniqueId");
+            return id == null ? null : id.toString();
+        }
+        final Object display = call(descriptor, "getDisplayName");
+        final String d = display == null ? "" : display.toString();
+        final boolean plain = d.equals(method) || d.equals(method + "()") || d.startsWith(method + "(");
+        return method + (plain ? "" : "[" + d + "]") + "(" + cls + ")";
+    }
+
     static synchronized void started(final String name) {
         if (output == null || name == null) {
             return;
@@ -111,6 +165,28 @@ public final class T {
         output = null;
     }
 
+    /** {@code target.method(arg)} for a one-argument method found by name (Optional.orElse). */
+    private static Object call(final Object target, final String method, final Object arg) {
+        if (target == null) {
+            return null;
+        }
+        try {
+            for (final Method m : target.getClass().getMethods()) {
+                if (m.getName().equals(method) && m.getParameterTypes().length == 1) {
+                    m.setAccessible(true);
+                    return m.invoke(target, arg);
+                }
+            }
+            return null;
+        } catch (final Throwable e) {
+            final Output o = output;
+            if (o != null) {
+                o.warn("cannot call " + target.getClass().getName() + "." + method + ": " + e);
+            }
+            return null;
+        }
+    }
+
     private static String name(final Object description) {
         final Object n = call(description, "getDisplayName");
         return n == null ? null : n.toString();
@@ -122,6 +198,7 @@ public final class T {
         }
         try {
             final Method m = target.getClass().getMethod(method);
+            m.setAccessible(true); // public method of a non-public class (JUnit's descriptors)
             return m.invoke(target);
         } catch (final Throwable e) {
             final Output o = output;
