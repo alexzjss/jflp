@@ -40,6 +40,8 @@ public final class Report {
         public File outDir;
         public Heuristic heuristic = Heuristic.OCHIAI;
         public boolean matrix = true;
+        /** Also write spectra.csv: every code line, susp 0 included (the UI's heat map needs them). */
+        public boolean allLines;
     }
 
     /** What happened, for the caller to print and to decide the exit status. */
@@ -129,6 +131,9 @@ public final class Report {
             summary.warnings.add("no failing test: every suspiciousness score is 0");
         }
         writeCsv(counts);
+        if (o.allLines) {
+            writeSpectra(counts);
+        }
         writeXml(counts);
         if (branchMode) {
             writeBranchCsv(counts);
@@ -543,6 +548,27 @@ public final class Report {
                     w.write(duas.classOfCol[col] + "," + Csv.quote(d[0]) + "," + d[1] + "," + d[2] + ","
                             + duas.lineOfCol[col] + "," + d[3] + "," + cef + "," + (summary.failed - cef) + "," + cep
                             + "," + (summary.passed - cep) + "," + fmt(s) + "\n");
+                }
+            }
+        } finally {
+            w.close();
+        }
+    }
+
+    /** {@code spectra.csv}: header, then every code line as in jaguar2.csv, susp 0 included. */
+    private void writeSpectra(final Counts c) throws IOException {
+        final Writer w = writer(new File(o.outDir, "spectra.csv"));
+        try {
+            w.write("class,line,cef,cnf,cep,cnp,susp,source\n");
+            for (final Model.Clazz clazz : model.classes.values()) {
+                final String source = clazz.source == null ? "" : clazz.packageName() + (clazz.packageName().length() == 0
+                        ? "" : "/") + clazz.source;
+                for (int p = 0; p < clazz.lines.length; p++) {
+                    final int col = clazz.colBase + p;
+                    final int cef = c.cef[col];
+                    final int cep = c.cep[col];
+                    w.write(clazz.name + "," + clazz.lines[p] + "," + cef + "," + (summary.failed - cef) + "," + cep
+                            + "," + (summary.passed - cep) + "," + fmt(susp(cef, cep)) + "," + source + "\n");
                 }
             }
         } finally {
